@@ -38,7 +38,43 @@ private:
     bool _deviceConnected;
     BLEServer* _pServer;
     BLECharacteristic* _pCharacteristic;
+    bool _loading;
+    uint8_t _loadingFrame;
+    unsigned long _lastLoadingAnimMs;
 
+    uint16_t rgbTo565(uint8_t r, uint8_t g, uint8_t b) {
+        return ((r & 0xF8) << 8) | ((g & 0xFC) << 3) | (b >> 3);
+    }
+
+    void drawLoadingSpinner(bool force = false) {
+        if (!_loading) return;
+        const unsigned long now = millis();
+        if (!force && now - _lastLoadingAnimMs < 90) return;
+        _lastLoadingAnimMs = now;
+
+        static const int8_t dx[8] = {0, 5, 8, 5, 0, -5, -8, -5};
+        static const int8_t dy[8] = {-8, -5, 0, 5, 8, 5, 0, -5};
+        const int cx = 32;
+        const int cy = 32;
+        const uint16_t dim = rgbTo565(20, 28, 40);
+        const uint16_t mid = rgbTo565(0, 110, 180);
+        const uint16_t bright = rgbTo565(0, 220, 255);
+
+        _display->fillScreen(0);
+        for (int i = 0; i < 8; i++) {
+            const int x = cx + dx[i];
+            const int y = cy + dy[i];
+            uint16_t color = dim;
+            if (i == _loadingFrame) color = bright;
+            else if (i == ((_loadingFrame + 7) % 8)) color = mid;
+            _display->drawPixel(x, y, color);
+            _display->drawPixel(x + 1, y, color);
+            _display->drawPixel(x, y + 1, color);
+            _display->drawPixel(x + 1, y + 1, color);
+        }
+        _loadingFrame = (_loadingFrame + 1) % 8;
+    }
+    
 public:
     BLEImageReceiver(MatrixPanel_I2S_DMA* display) : _display(display) {
         _hasImage = false;
@@ -46,12 +82,16 @@ public:
         _highlightMode = false;
         _recvIndex = 0;
         _deviceConnected = false;
+        _loading = false;
+        _loadingFrame = 0;
+        _lastLoadingAnimMs = 0;
         memset(_imageBuffer, 0, IMAGE_SIZE);
         memset(_highlightColors, 0, sizeof(_highlightColors));
     }
 
-    void begin() {
-        BLEDevice::init("BeadCraft-ESP32");
+    void begin(const String& deviceCode) {
+        String bleName = "BeadCraft-" + deviceCode;
+        BLEDevice::init(bleName.c_str());
         _pServer = BLEDevice::createServer();
         _pServer->setCallbacks(this);
         
@@ -97,6 +137,10 @@ public:
         switch (packetType) {
             case PKT_START_IMAGE:
                 _recvIndex = 0;
+                _loading = true;
+                _loadingFrame = 0;
+                _lastLoadingAnimMs = 0;
+                drawLoadingSpinner(true);
                 Serial.println("BLE: Start image");
                 break;
                 
@@ -106,16 +150,19 @@ public:
                     memcpy(_imageBuffer + _recvIndex, data + 1, len - 1);
                     _recvIndex += len - 1;
                 }
+                drawLoadingSpinner();
                 break;
                 
             case PKT_END_IMAGE:
                 Serial.printf("BLE: Image done, %d bytes\n", _recvIndex);
+                _loading = false;
                 if (_recvIndex == IMAGE_SIZE) {
                     _hasImage = true;
                     _highlightMode = false;
                     displayStoredImage();
                     sendAck(true);
                 } else {
+                    _display->fillScreen(0);
                     sendAck(false);
                 }
                 break;
@@ -179,7 +226,7 @@ public:
     }
 
     void sendAck(bool success) {
-        uint8_t ack[] = {success ? 0x06 : 0x15};  // ACK or NAK
+        uint8_t ack[] = {static_cast<uint8_t>(success ? 0x06 : 0x15)};  // ACK or NAK
         _pCharacteristic->setValue(ack, 1);
         _pCharacteristic->notify();
     }
@@ -188,6 +235,8 @@ public:
     bool hasImage() { return _hasImage; }
     
     void update() {
-        // BLE handles data via callbacks
+        if (_loading) {
+            drawLoadingSpinner();
+        }
     }
 };

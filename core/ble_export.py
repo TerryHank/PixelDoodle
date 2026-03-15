@@ -68,10 +68,12 @@ async def scan_ble_devices() -> List[dict]:
     devices = await BleakScanner.discover()
     result = []
     for d in devices:
-        if d.name and "BeadCraft" in d.name:
+        if d.name and d.name.startswith("BeadCraft-"):
+            device_uuid = d.name.split("BeadCraft-", 1)[1].strip().upper()
             result.append({
                 'address': d.address,
                 'name': d.name,
+                'device_uuid': device_uuid,
             })
     return result
 

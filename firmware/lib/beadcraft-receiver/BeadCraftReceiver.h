@@ -12,11 +12,12 @@
 
 #include <Arduino.h>
 #include <ESP32-HUB75-MatrixPanel-I2S-DMA.h>
+#include <qrcode.h>
 #include "ChinesePixels.h"
 
 const uint8_t BEADCRAFT_MAGIC[] = {0xBC, 0xD1, 0x32, 0x57};
-const uint16_t IMAGE_SIZE = 8192;  // 64x64 * 2 bytes
-const uint8_t MAX_HIGHLIGHT_COLORS = 16;
+const uint16_t SERIAL_IMAGE_SIZE = 8192;  // 64x64 * 2 bytes
+const uint8_t SERIAL_MAX_HIGHLIGHT_COLORS = 16;
 
 // Packet types
 const uint8_t PKT_IMAGE_START = 0xBC;  // First byte of image header
@@ -26,13 +27,14 @@ const uint8_t PKT_SHOW_ALL = 0x05;
 class BeadCraftReceiver {
 private:
     MatrixPanel_I2S_DMA* _display;
+    static MatrixPanel_I2S_DMA* _qrDisplay;
     
     // Image storage (persistent)
-    uint8_t _buffer[IMAGE_SIZE];
+    uint8_t _buffer[SERIAL_IMAGE_SIZE];
     bool _hasImage;
     
     // Highlight state
-    uint16_t _highlightColors[MAX_HIGHLIGHT_COLORS];
+    uint16_t _highlightColors[SERIAL_MAX_HIGHLIGHT_COLORS];
     uint8_t _highlightCount;
     bool _highlightMode;
     
@@ -67,6 +69,89 @@ private:
     void drawText(const uint16_t text[][CHAR_H], uint8_t numChars, int startX, int startY, uint16_t color) {
         for (int i = 0; i < numChars; i++) {
             drawChar(startX + i * CHAR_W, startY, text[i], color);
+        }
+    }
+
+    void drawTinyHexChar(int x, int y, char ch, uint16_t color) {
+        static const uint8_t glyphs[16][7] = {
+            {0b01110, 0b10001, 0b10011, 0b10101, 0b11001, 0b10001, 0b01110}, // 0
+            {0b00100, 0b01100, 0b00100, 0b00100, 0b00100, 0b00100, 0b01110}, // 1
+            {0b01110, 0b10001, 0b00001, 0b00010, 0b00100, 0b01000, 0b11111}, // 2
+            {0b11110, 0b00001, 0b00001, 0b01110, 0b00001, 0b00001, 0b11110}, // 3
+            {0b00010, 0b00110, 0b01010, 0b10010, 0b11111, 0b00010, 0b00010}, // 4
+            {0b11111, 0b10000, 0b10000, 0b11110, 0b00001, 0b00001, 0b11110}, // 5
+            {0b01110, 0b10000, 0b10000, 0b11110, 0b10001, 0b10001, 0b01110}, // 6
+            {0b11111, 0b00001, 0b00010, 0b00100, 0b01000, 0b01000, 0b01000}, // 7
+            {0b01110, 0b10001, 0b10001, 0b01110, 0b10001, 0b10001, 0b01110}, // 8
+            {0b01110, 0b10001, 0b10001, 0b01111, 0b00001, 0b00001, 0b01110}, // 9
+            {0b01110, 0b10001, 0b10001, 0b11111, 0b10001, 0b10001, 0b10001}, // A
+            {0b11110, 0b10001, 0b10001, 0b11110, 0b10001, 0b10001, 0b11110}, // B
+            {0b01110, 0b10001, 0b10000, 0b10000, 0b10000, 0b10001, 0b01110}, // C
+            {0b11110, 0b10001, 0b10001, 0b10001, 0b10001, 0b10001, 0b11110}, // D
+            {0b11111, 0b10000, 0b10000, 0b11110, 0b10000, 0b10000, 0b11111}, // E
+            {0b11111, 0b10000, 0b10000, 0b11110, 0b10000, 0b10000, 0b10000}, // F
+        };
+
+        int index = -1;
+        if (ch >= '0' && ch <= '9') index = ch - '0';
+        if (ch >= 'A' && ch <= 'F') index = 10 + (ch - 'A');
+        if (index < 0) return;
+
+        for (int row = 0; row < 7; row++) {
+            for (int col = 0; col < 5; col++) {
+                if (glyphs[index][row] & (1 << (4 - col))) {
+                    _display->drawPixel(x + col, y + row, color);
+                }
+            }
+        }
+    }
+
+    void drawTinyHexTextCentered(const String& text, int y, uint16_t color) {
+        const int glyphW = 5;
+        const int spacing = 1;
+        const int textWidth = text.length() * glyphW + max(0, (int)text.length() - 1) * spacing;
+        int x = (64 - textWidth) / 2;
+        for (int i = 0; i < text.length(); i++) {
+            drawTinyHexChar(x, y, text.charAt(i), color);
+            x += glyphW + spacing;
+        }
+    }
+
+    void drawQrCode(const String& payload) {
+        _qrDisplay = _display;
+        esp_qrcode_config_t cfg = ESP_QRCODE_CONFIG_DEFAULT();
+        cfg.display_func = displayQrCode;
+        cfg.max_qrcode_version = 6;
+        cfg.qrcode_ecc_level = ESP_QRCODE_ECC_LOW;
+        esp_qrcode_generate(&cfg, payload.c_str());
+    }
+
+    static void displayQrCode(esp_qrcode_handle_t qrcode) {
+        if (_qrDisplay == nullptr) {
+            return;
+        }
+
+        const int size = esp_qrcode_get_size(qrcode);
+        const int qrTop = 2;
+        const int textTop = 47;
+        const int textGap = 3;
+        const int targetSize = min(42, textTop - textGap - qrTop);
+        const int startX = (64 - targetSize) / 2;
+        const int startY = qrTop;
+        const uint16_t dark = ((255 & 0xF8) << 8) | ((255 & 0xFC) << 3) | (255 >> 3);
+
+        for (int y = 0; y < size; y++) {
+            for (int x = 0; x < size; x++) {
+                if (esp_qrcode_get_module(qrcode, x, y)) {
+                    const int x0 = startX + (x * targetSize) / size;
+                    const int y0 = startY + (y * targetSize) / size;
+                    const int x1 = startX + ((x + 1) * targetSize) / size;
+                    const int y1 = startY + ((y + 1) * targetSize) / size;
+                    const int moduleW = max(1, x1 - x0);
+                    const int moduleH = max(1, y1 - y0);
+                    _qrDisplay->fillRect(x0, y0, moduleW, moduleH, dark);
+                }
+            }
         }
     }
     
@@ -174,6 +259,15 @@ public:
             drawChar(i * CHAR_W, textY, UPLOAD[i], cyan);
         }
     }
+
+    void displayPairingScreen(const String& deviceCode, const String& pairingUrl) {
+        _display->fillScreen(0);
+        drawQrCode(pairingUrl);
+
+        const uint16_t cyan = rgbTo565(0, 200, 255);
+        drawTinyHexTextCentered(deviceCode.substring(0, 6), 47, cyan);
+        drawTinyHexTextCentered(deviceCode.substring(6), 57, cyan);
+    }
     
     bool hasImage() const { return _hasImage; }
     
@@ -211,11 +305,11 @@ public:
             }
             
             // Receive image data
-            if (_index < IMAGE_SIZE) {
+            if (_index < SERIAL_IMAGE_SIZE) {
                 _buffer[_index++] = b;
                 _checksum += b;
                 
-                if (_index == IMAGE_SIZE) {
+                if (_index == SERIAL_IMAGE_SIZE) {
                     Serial.println("DATA_OK");
                 }
                 continue;
@@ -246,7 +340,7 @@ public:
         while (Serial.available() == 0) delay(1);
         uint8_t count = Serial.read();
         
-        _highlightCount = min(count, (uint8_t)MAX_HIGHLIGHT_COLORS);
+        _highlightCount = min(count, (uint8_t)SERIAL_MAX_HIGHLIGHT_COLORS);
         
         // Read RGB565 colors
         for (int i = 0; i < _highlightCount; i++) {
@@ -292,3 +386,5 @@ public:
         Serial.println(_highlightMode ? "OK_HL" : "OK");
     }
 };
+
+MatrixPanel_I2S_DMA* BeadCraftReceiver::_qrDisplay = nullptr;

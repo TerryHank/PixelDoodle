@@ -1,0 +1,23 @@
+[req]
+default_bits = 2048
+prompt = no
+default_md = sha256
+x509_extensions = v3_req
+distinguished_name = dn
+
+[dn]
+C = CN
+ST = Shanghai
+L = Shanghai
+O = PixelDoodle
+OU = Local Dev
+CN = 10.39.251.173
+
+[v3_req]
+subjectAltName = @alt_names
+extendedKeyUsage = serverAuth
+
+[alt_names]
+IP.1 = 10.39.251.173
+IP.2 = 127.0.0.1
+DNS.1 = localhost

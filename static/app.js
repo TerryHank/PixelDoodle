@@ -15,6 +15,24 @@ window.appState = {
   editMode: false,
   sessionId: null,
   totalBeads: 0,
+  targetDeviceUuid: null,
+  bleDevice: null,
+  bleServer: null,
+  bleCharacteristic: null,
+};
+
+const BLE_SERVICE_UUID = '4fafc201-1fb5-459e-8fcc-c5c9c331914b';
+const BLE_CHARACTERISTIC_UUID = 'beb5483e-36e1-4688-b7f5-ea0734b3e6c1';
+const BLE_IMAGE_SIZE = 8192;
+const BLE_CHUNK_SIZE = 19;
+
+let qrScannerState = {
+  stream: null,
+  detector: null,
+  intervalId: null,
+  active: false,
+  canvas: null,
+  context: null,
 };
 
 // === Clear Canvas ===
@@ -43,12 +61,22 @@ function clearCanvas() {
 
 // === Initialization ===
 document.addEventListener('DOMContentLoaded', () => {
+  const params = new URLSearchParams(window.location.search);
+  const targetDeviceUuid = (params.get('device_uuid') || params.get('u') || '').trim().toUpperCase();
+  window.appState.targetDeviceUuid = targetDeviceUuid || null;
+
   loadFullPalette();
   initUpload();
   applyTranslations();
+  renderBleStatus();
+  if (targetDeviceUuid) {
+    setConnectionMode('ble');
+  }
   
   // Auto-scan and select serial port (ESP32/CH340/CP210x)
-  refreshSerialPorts(true);
+  if (!targetDeviceUuid) {
+    refreshSerialPorts(true);
+  }
   
   // Auto-generate pattern when LED size changes
   const ledSizeSelect = document.getElementById('led-matrix-size');
@@ -58,6 +86,11 @@ document.addEventListener('DOMContentLoaded', () => {
         generatePattern();
       }
     });
+  }
+
+  const qrImageInput = document.getElementById('qr-image-input');
+  if (qrImageInput) {
+    qrImageInput.addEventListener('change', handleQrImageSelection);
   }
 });
 
@@ -116,6 +149,629 @@ function showToast(message, isError = false) {
     toast.style.transition = 'opacity 0.3s';
     setTimeout(() => toast.remove(), 300);
   }, 3000);
+}
+
+function setQrScannerStatus(message, isError = false) {
+  const status = document.getElementById('qr-scanner-status');
+  if (!status) return;
+  status.textContent = message;
+  status.style.color = isError ? 'var(--danger)' : 'var(--text-secondary)';
+}
+
+function stopQrScannerLoop() {
+  if (qrScannerState.intervalId) {
+    clearInterval(qrScannerState.intervalId);
+    qrScannerState.intervalId = null;
+  }
+}
+
+function stopQrScannerStream() {
+  if (qrScannerState.stream) {
+    qrScannerState.stream.getTracks().forEach(track => track.stop());
+    qrScannerState.stream = null;
+  }
+
+  const video = document.getElementById('qr-scanner-video');
+  if (video) {
+    video.srcObject = null;
+  }
+}
+
+function closeQrScanner() {
+  qrScannerState.active = false;
+  stopQrScannerLoop();
+  stopQrScannerStream();
+  const dialog = document.getElementById('qr-scanner-dialog');
+  if (dialog) {
+    dialog.style.display = 'none';
+  }
+
+  const qrImageInput = document.getElementById('qr-image-input');
+  if (qrImageInput) {
+    qrImageInput.value = '';
+  }
+
+  const manualUuidInput = document.getElementById('manual-uuid-input');
+  if (manualUuidInput) {
+    manualUuidInput.value = '';
+  }
+}
+
+function showBleQuickConnect(uuid) {
+  const container = document.getElementById('ble-quick-connect');
+  const text = document.getElementById('ble-quick-connect-text');
+  if (!container || !text) return;
+
+  text.textContent = `目标设备 ${uuid} 已锁定。点一下即可连接这台 ESP32。`;
+  container.style.display = 'block';
+}
+
+function hideBleQuickConnect() {
+  const container = document.getElementById('ble-quick-connect');
+  if (container) {
+    container.style.display = 'none';
+  }
+}
+
+async function confirmBleQuickConnect() {
+  hideBleQuickConnect();
+  if (!window.appState.targetDeviceUuid) return;
+
+  showToast(`正在连接 ${window.appState.targetDeviceUuid}`);
+  try {
+    await connectBLEDevice();
+  } catch (err) {
+    const message = err?.name === 'NotFoundError'
+      ? '未选择蓝牙设备'
+      : (err?.message || '蓝牙连接失败');
+    showToast(message, true);
+  }
+}
+
+function handleQrScanResult(rawValue) {
+  if (!rawValue) return;
+
+  closeQrScanner();
+
+  try {
+    const normalizedValue = /^[a-zA-Z][a-zA-Z\d+\-.]*:\/\//.test(rawValue)
+      ? rawValue
+      : `https://${rawValue}`;
+    const scannedUrl = new URL(normalizedValue, window.location.origin);
+    window.location.href = scannedUrl.toString();
+  } catch (err) {
+    const manualUuid = rawValue.trim().toUpperCase();
+    if (/^[0-9A-F]{12}$/.test(manualUuid)) {
+      applyManualUuid(manualUuid);
+      return;
+    }
+    showToast('二维码内容不是有效链接或 UUID', true);
+  }
+}
+
+function applyManualUuid(uuid) {
+  const normalized = (uuid || '').trim().toUpperCase();
+  if (!/^[0-9A-F]{12}$/.test(normalized)) {
+    showToast('UUID 格式应为 12 位十六进制字符', true);
+    return;
+  }
+
+  const targetUrl = new URL(window.location.href);
+  targetUrl.searchParams.set('u', normalized);
+  targetUrl.searchParams.delete('device_uuid');
+  window.location.href = targetUrl.toString();
+}
+
+function connectByManualUuid() {
+  const input = document.getElementById('manual-uuid-input');
+  if (!input) return;
+  applyManualUuid(input.value);
+}
+
+function syncTargetUuidToUrl(uuid) {
+  const targetUrl = new URL(window.location.href);
+  targetUrl.searchParams.set('u', uuid);
+  targetUrl.searchParams.delete('device_uuid');
+  window.history.replaceState({}, '', targetUrl.toString());
+}
+
+async function beginUuidPairing(uuid, tryImmediateConnect = false) {
+  const normalized = (uuid || '').trim().toUpperCase();
+  if (!/^[0-9A-F]{12}$/.test(normalized)) {
+    throw new Error('UUID 格式应为 12 位十六进制字符');
+  }
+
+  window.appState.targetDeviceUuid = normalized;
+  syncTargetUuidToUrl(normalized);
+  setConnectionMode('ble');
+  renderBleStatus();
+
+  if (!tryImmediateConnect) {
+    return;
+  }
+
+  try {
+    await connectBLEDevice();
+  } catch (err) {
+    const message = err?.name === 'SecurityError'
+      ? '浏览器限制了自动蓝牙连接，请点“连接设备”完成匹配'
+      : (err?.name === 'NotFoundError'
+          ? '未选择蓝牙设备'
+          : (err?.message || '蓝牙连接失败'));
+    showToast(message, true);
+  }
+}
+
+async function handleQrScanResult(rawValue) {
+  if (!rawValue) return;
+
+  closeQrScanner();
+
+  try {
+    const normalizedValue = /^[a-zA-Z][a-zA-Z\d+\-.]*:\/\//.test(rawValue)
+      ? rawValue
+      : `https://${rawValue}`;
+    const scannedUrl = new URL(normalizedValue, window.location.origin);
+    const scannedUuid = (scannedUrl.searchParams.get('u') || scannedUrl.searchParams.get('device_uuid') || '').trim().toUpperCase();
+    if (scannedUuid) {
+      await beginUuidPairing(scannedUuid, true);
+      return;
+    }
+    window.location.href = scannedUrl.toString();
+  } catch (err) {
+    const manualUuid = rawValue.trim().toUpperCase();
+    if (/^[0-9A-F]{12}$/.test(manualUuid)) {
+      await beginUuidPairing(manualUuid, true);
+      return;
+    }
+    showToast('二维码内容不是有效链接或 UUID', true);
+  }
+}
+
+async function applyManualUuid(uuid, tryImmediateConnect = false) {
+  try {
+    await beginUuidPairing(uuid, tryImmediateConnect);
+  } catch (err) {
+    showToast(err.message || 'UUID 无效', true);
+  }
+}
+
+async function connectByManualUuid() {
+  const input = document.getElementById('manual-uuid-input');
+  if (!input) return;
+  await applyManualUuid(input.value, true);
+}
+
+async function beginUuidPairing(uuid, tryImmediateConnect = false) {
+  const normalized = (uuid || '').trim().toUpperCase();
+  if (!/^[0-9A-F]{12}$/.test(normalized)) {
+    throw new Error('UUID 格式应为 12 位十六进制字符');
+  }
+
+  window.appState.targetDeviceUuid = normalized;
+  syncTargetUuidToUrl(normalized);
+  setConnectionMode('ble');
+  renderBleStatus();
+  hideBleQuickConnect();
+
+  if (!tryImmediateConnect) {
+    return;
+  }
+
+  showToast(`正在连接 ${normalized}`);
+  try {
+    await connectBLEDevice();
+  } catch (err) {
+    if (err?.name === 'SecurityError') {
+      showBleQuickConnect(normalized);
+      return;
+    }
+
+    const message = err?.name === 'NotFoundError'
+      ? '未选择蓝牙设备'
+      : (err?.message || '蓝牙连接失败');
+    showToast(message, true);
+  }
+}
+
+async function handleQrScanResult(rawValue) {
+  if (!rawValue) return;
+
+  closeQrScanner();
+
+  try {
+    const normalizedValue = /^[a-zA-Z][a-zA-Z\d+\-.]*:\/\//.test(rawValue)
+      ? rawValue
+      : `https://${rawValue}`;
+    const scannedUrl = new URL(normalizedValue, window.location.origin);
+    const scannedUuid = (scannedUrl.searchParams.get('u') || scannedUrl.searchParams.get('device_uuid') || '').trim().toUpperCase();
+    if (scannedUuid) {
+      await beginUuidPairing(scannedUuid, true);
+      return;
+    }
+    window.location.href = scannedUrl.toString();
+  } catch (err) {
+    const manualUuid = rawValue.trim().toUpperCase();
+    if (/^[0-9A-F]{12}$/.test(manualUuid)) {
+      await beginUuidPairing(manualUuid, true);
+      return;
+    }
+    showToast('二维码内容不是有效链接或 UUID', true);
+  }
+}
+
+async function applyManualUuid(uuid, tryImmediateConnect = false) {
+  try {
+    await beginUuidPairing(uuid, tryImmediateConnect);
+  } catch (err) {
+    showToast(err.message || 'UUID 无效', true);
+  }
+}
+
+async function connectByManualUuid() {
+  const input = document.getElementById('manual-uuid-input');
+  if (!input) return;
+  await applyManualUuid(input.value, true);
+}
+
+async function scanCurrentQrFrame() {
+  if (!qrScannerState.active) return;
+
+  const video = document.getElementById('qr-scanner-video');
+  if (!video || video.readyState < 2) return;
+
+  try {
+    if (qrScannerState.detector) {
+      const barcodes = await qrScannerState.detector.detect(video);
+      if (barcodes && barcodes.length > 0) {
+        handleQrScanResult(barcodes[0].rawValue);
+        return;
+      }
+    }
+
+    if (typeof window.jsQR === 'function') {
+      const width = video.videoWidth;
+      const height = video.videoHeight;
+      if (!width || !height) return;
+
+      if (!qrScannerState.canvas) {
+        qrScannerState.canvas = document.createElement('canvas');
+        qrScannerState.context = qrScannerState.canvas.getContext('2d', { willReadFrequently: true });
+      }
+
+      qrScannerState.canvas.width = width;
+      qrScannerState.canvas.height = height;
+      qrScannerState.context.drawImage(video, 0, 0, width, height);
+      const imageData = qrScannerState.context.getImageData(0, 0, width, height);
+      const code = window.jsQR(imageData.data, width, height);
+      if (code?.data) {
+        handleQrScanResult(code.data);
+      }
+    }
+  } catch (err) {
+    setQrScannerStatus('二维码识别失败', true);
+    stopQrScannerLoop();
+  }
+}
+
+async function openQrScanner() {
+  if (typeof BarcodeDetector === 'undefined' && typeof window.jsQR !== 'function') {
+    showToast('当前浏览器不支持二维码识别', true);
+    return;
+  }
+
+  const dialog = document.getElementById('qr-scanner-dialog');
+  const video = document.getElementById('qr-scanner-video');
+  if (!dialog || !video) return;
+
+  qrScannerState.detector = typeof BarcodeDetector !== 'undefined'
+    ? new BarcodeDetector({ formats: ['qr_code'] })
+    : null;
+  qrScannerState.active = true;
+  dialog.style.display = 'flex';
+  setQrScannerStatus('请将二维码放入取景框内，若手机无法打开摄像头，请使用下方拍照识别');
+
+  if (!navigator.mediaDevices?.getUserMedia) {
+    setQrScannerStatus('当前浏览器无法直接调用摄像头，请使用下方拍照识别', true);
+    return;
+  }
+
+  try {
+    qrScannerState.stream = await navigator.mediaDevices.getUserMedia({
+      video: { facingMode: 'environment' },
+      audio: false,
+    });
+    video.srcObject = qrScannerState.stream;
+    await video.play();
+    stopQrScannerLoop();
+    qrScannerState.intervalId = setInterval(() => {
+      scanCurrentQrFrame();
+    }, 300);
+  } catch (err) {
+    stopQrScannerStream();
+    stopQrScannerLoop();
+    if (!window.isSecureContext) {
+      setQrScannerStatus('手机浏览器在 HTTP 下通常禁止摄像头实时扫码，请点“拍照/选图识别”', true);
+    } else {
+      setQrScannerStatus('无法访问摄像头，请检查权限，或改用拍照识别', true);
+    }
+  }
+}
+
+function triggerQrImagePicker() {
+  const input = document.getElementById('qr-image-input');
+  if (input) {
+    input.click();
+  }
+}
+
+async function handleQrImageSelection(event) {
+  const file = event.target.files?.[0];
+  if (!file) return;
+
+  if (typeof window.jsQR !== 'function') {
+    showToast('当前环境缺少二维码识别组件', true);
+    return;
+  }
+
+  try {
+    setQrScannerStatus('正在识别图片中的二维码...');
+    const imageBitmap = await createImageBitmap(file);
+    const canvas = document.createElement('canvas');
+    canvas.width = imageBitmap.width;
+    canvas.height = imageBitmap.height;
+    const context = canvas.getContext('2d', { willReadFrequently: true });
+    context.drawImage(imageBitmap, 0, 0);
+    const imageData = context.getImageData(0, 0, canvas.width, canvas.height);
+    const code = window.jsQR(imageData.data, canvas.width, canvas.height);
+
+    if (code?.data) {
+      handleQrScanResult(code.data);
+      return;
+    }
+
+    setQrScannerStatus('未识别到二维码，请重拍并确保二维码清晰完整', true);
+  } catch (err) {
+    setQrScannerStatus('图片识别失败，请重试', true);
+  }
+}
+
+function isWebBluetoothAvailable() {
+  return typeof navigator !== 'undefined' && !!navigator.bluetooth;
+}
+
+function normalizeBleDeviceUuid(name) {
+  if (!name || !name.startsWith('BeadCraft-')) return '';
+  return name.slice('BeadCraft-'.length).trim().toUpperCase();
+}
+
+function updateBLEDeviceSelect(label, value = '') {
+  const select = document.getElementById('ble-device-select');
+  if (!select) return;
+
+  select.innerHTML = '';
+  const opt = document.createElement('option');
+  opt.value = value;
+  opt.textContent = label;
+  select.appendChild(opt);
+  select.value = value;
+}
+
+function renderBleStatus() {
+  const chip = document.getElementById('ble-target-chip');
+  const card = document.getElementById('ble-status-card');
+  const connectBtn = document.getElementById('ble-connect-btn');
+  const targetUuid = window.appState.targetDeviceUuid;
+  const connectedUuid = normalizeBleDeviceUuid(window.appState.bleDevice?.name);
+  const isConnected = !!window.appState.bleDevice?.gatt?.connected;
+
+  if (chip) {
+    if (isConnected && connectedUuid) {
+      chip.style.display = 'inline-flex';
+      chip.textContent = `已连接 ${connectedUuid}`;
+    } else if (targetUuid) {
+      chip.style.display = 'inline-flex';
+      chip.textContent = `目标 ${targetUuid}`;
+    } else {
+      chip.style.display = 'none';
+      chip.textContent = '';
+    }
+  }
+
+  if (card) {
+    if (isConnected && connectedUuid) {
+      card.style.display = 'block';
+      card.className = 'ble-status-card connected';
+      card.textContent = `已连接设备：${connectedUuid}`;
+    } else if (targetUuid) {
+      card.style.display = 'block';
+      card.className = 'ble-status-card ready';
+      card.textContent = `当前页面已锁定目标设备：${targetUuid}。点击“连接设备”后，浏览器会只显示这台 ESP32。`;
+    } else {
+      card.style.display = 'block';
+      card.className = 'ble-status-card';
+      card.textContent = '当前未锁定设备。点击“连接设备”后，从浏览器蓝牙列表中选择一台 ESP32。';
+    }
+  }
+
+  if (connectBtn) {
+    connectBtn.textContent = isConnected ? '重新连接设备' : (targetUuid ? `连接 ${targetUuid}` : '连接设备');
+  }
+}
+
+function onBLEDisconnected() {
+  window.appState.bleServer = null;
+  window.appState.bleCharacteristic = null;
+  const uuid = window.appState.bleDevice
+    ? normalizeBleDeviceUuid(window.appState.bleDevice.name)
+    : window.appState.targetDeviceUuid;
+  updateBLEDeviceSelect(uuid ? `${uuid} (disconnected)` : 'Bluetooth disconnected');
+  renderBleStatus();
+  showToast('Bluetooth disconnected', true);
+}
+
+async function requestBLEDevice() {
+  if (!isWebBluetoothAvailable()) {
+    throw new Error('This browser does not support Web Bluetooth');
+  }
+
+  const targetUuid = window.appState.targetDeviceUuid;
+  const exactFilters = targetUuid
+    ? [{ name: `BeadCraft-${targetUuid}` }]
+    : [{ namePrefix: 'BeadCraft-' }];
+
+  let device;
+  try {
+    device = await navigator.bluetooth.requestDevice({
+      filters: exactFilters,
+      optionalServices: [BLE_SERVICE_UUID],
+    });
+  } catch (err) {
+    // Some browsers/devices fail to match exact-name filters reliably.
+    // Fall back to namePrefix so users can still pick the device manually.
+    if (err?.name !== 'NotFoundError' || !targetUuid) {
+      throw err;
+    }
+    device = await navigator.bluetooth.requestDevice({
+      filters: [{ namePrefix: 'BeadCraft-' }],
+      optionalServices: [BLE_SERVICE_UUID],
+    });
+  }
+
+  if (window.appState.bleDevice) {
+    window.appState.bleDevice.removeEventListener('gattserverdisconnected', onBLEDisconnected);
+  }
+
+  window.appState.bleDevice = device;
+  device.addEventListener('gattserverdisconnected', onBLEDisconnected);
+
+  const deviceUuid = normalizeBleDeviceUuid(device.name);
+  updateBLEDeviceSelect(deviceUuid ? `${deviceUuid} (${device.name})` : device.name || 'Bluetooth device', device.id || device.name || '');
+  renderBleStatus();
+}
+
+async function ensureBLECharacteristic(requestIfNeeded = false) {
+  if (!window.appState.bleDevice) {
+    if (!requestIfNeeded) {
+      throw new Error('No Bluetooth device selected');
+    }
+    await requestBLEDevice();
+  }
+
+  if (!window.appState.bleDevice?.gatt) {
+    throw new Error('Selected Bluetooth device does not expose GATT');
+  }
+
+  if (window.appState.bleCharacteristic && window.appState.bleDevice.gatt.connected) {
+    return window.appState.bleCharacteristic;
+  }
+
+  const server = await window.appState.bleDevice.gatt.connect();
+  const service = await server.getPrimaryService(BLE_SERVICE_UUID);
+  const characteristic = await service.getCharacteristic(BLE_CHARACTERISTIC_UUID);
+
+  window.appState.bleServer = server;
+  window.appState.bleCharacteristic = characteristic;
+
+  const deviceUuid = normalizeBleDeviceUuid(window.appState.bleDevice.name);
+  updateBLEDeviceSelect(deviceUuid ? `${deviceUuid} (connected)` : 'Bluetooth connected', window.appState.bleDevice.id || window.appState.bleDevice.name || '');
+  renderBleStatus();
+
+  return characteristic;
+}
+
+async function writeBLEPacket(characteristic, bytes) {
+  if (characteristic.writeValueWithoutResponse) {
+    await characteristic.writeValueWithoutResponse(bytes);
+    return;
+  }
+  await characteristic.writeValue(bytes);
+}
+
+function rgbToRgb565(r, g, b) {
+  const r5 = (r >> 3) & 0x1f;
+  const g6 = (g >> 2) & 0x3f;
+  const b5 = (b >> 3) & 0x1f;
+  return (r5 << 11) | (g6 << 5) | b5;
+}
+
+function pixelMatrixToRgb565Bytes(pixelMatrix, backgroundColor) {
+  const data = new Uint8Array(BLE_IMAGE_SIZE);
+  let offset = 0;
+
+  for (const row of pixelMatrix) {
+    for (const code of row) {
+      let rgb = backgroundColor;
+      if (code) {
+        const colorInfo = window.appState.fullPalette[code] || window.appState.colorData[code];
+        if (colorInfo && colorInfo.rgb) {
+          rgb = colorInfo.rgb;
+        } else {
+          rgb = [255, 255, 255];
+        }
+      }
+
+      const rgb565 = rgbToRgb565(rgb[0], rgb[1], rgb[2]);
+      data[offset++] = rgb565 & 0xff;
+      data[offset++] = (rgb565 >> 8) & 0xff;
+      if (offset >= BLE_IMAGE_SIZE) {
+        return data;
+      }
+    }
+  }
+
+  return data;
+}
+
+async function sendImageViaWebBluetooth(pixelMatrix, backgroundColor, requestIfNeeded = false) {
+  const characteristic = await ensureBLECharacteristic(requestIfNeeded);
+  const rgb565Data = pixelMatrixToRgb565Bytes(pixelMatrix, backgroundColor);
+  const start = performance.now();
+
+  await writeBLEPacket(characteristic, new Uint8Array([0x01]));
+
+  let bytesSent = 0;
+  for (let i = 0; i < rgb565Data.length; i += BLE_CHUNK_SIZE) {
+    const chunk = rgb565Data.slice(i, i + BLE_CHUNK_SIZE);
+    const packet = new Uint8Array(chunk.length + 1);
+    packet[0] = 0x02;
+    packet.set(chunk, 1);
+    await writeBLEPacket(characteristic, packet);
+    bytesSent += chunk.length;
+  }
+
+  await writeBLEPacket(characteristic, new Uint8Array([0x03]));
+
+  return {
+    success: true,
+    bytes_sent: bytesSent,
+    duration_ms: Math.round(performance.now() - start),
+  };
+}
+
+async function sendHighlightViaWebBluetooth(highlightRGB) {
+  if (!window.appState.bleDevice) {
+    return;
+  }
+
+  const characteristic = await ensureBLECharacteristic(false);
+  if (highlightRGB.length === 0) {
+    await writeBLEPacket(characteristic, new Uint8Array([0x05]));
+    return;
+  }
+
+  const packet = new Uint8Array(2 + highlightRGB.length * 2);
+  packet[0] = 0x04;
+  packet[1] = highlightRGB.length;
+
+  highlightRGB.forEach((rgb, index) => {
+    const rgb565 = rgbToRgb565(rgb[0], rgb[1], rgb[2]);
+    const base = 2 + index * 2;
+    packet[base] = rgb565 & 0xff;
+    packet[base + 1] = (rgb565 >> 8) & 0xff;
+  });
+
+  await writeBLEPacket(characteristic, packet);
 }
 
 // === File Upload ===
@@ -489,24 +1145,7 @@ async function autoSendToESP32() {
     let result;
     
     if (connectionMode === 'ble') {
-      // BLE mode
-      const deviceAddress = document.getElementById('ble-device-select')?.value;
-      if (!deviceAddress) {
-        showToast('Please select a BLE device in settings', true);
-        if (toast) toast.style.display = 'none';
-        return;
-      }
-      
-      const response = await fetch('/api/ble/send', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          pixel_matrix: pixelMatrix,
-          device_address: deviceAddress,
-          background_color: bgRgb,
-        }),
-      });
-      result = await response.json();
+      result = await sendImageViaWebBluetooth(pixelMatrix, bgRgb, true);
     } else {
       // Serial mode (default)
       const port = document.getElementById('serial-port-select')?.value;
@@ -875,17 +1514,7 @@ async function sendHighlightToESP32() {
   
   try {
     if (connectionMode === 'ble') {
-      const deviceAddress = document.getElementById('ble-device-select')?.value;
-      if (!deviceAddress) return;
-      
-      await fetch('/api/ble/highlight', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          highlight_colors: highlightRGB,
-          device_address: deviceAddress,
-        }),
-      });
+      await sendHighlightViaWebBluetooth(highlightRGB);
     } else {
       // Serial mode - send highlight command
       const port = document.getElementById('serial-port-select')?.value;
@@ -1062,6 +1691,7 @@ function setConnectionMode(mode) {
   
   // Auto-scan
   if (mode === 'ble') {
+    renderBleStatus();
     refreshBLEDevices();
   } else {
     refreshSerialPorts(true);
@@ -1091,35 +1721,49 @@ function hideSerialSettings() {
 
 // === BLE Device Scanning ===
 async function refreshBLEDevices() {
-  const select = document.getElementById('ble-device-select');
-  select.innerHTML = '<option value="">Scanning...</option>';
+  if (navigator.userActivation?.isActive) {
+    await connectBLEDevice();
+    return;
+  }
 
+  if (!isWebBluetoothAvailable()) {
+    updateBLEDeviceSelect('Web Bluetooth unavailable');
+    renderBleStatus();
+    return;
+  }
+
+  if (window.appState.bleDevice) {
+    const uuid = normalizeBleDeviceUuid(window.appState.bleDevice.name);
+    const status = window.appState.bleDevice.gatt?.connected ? 'connected' : 'selected';
+    updateBLEDeviceSelect(uuid ? `${uuid} (${status})` : `Bluetooth ${status}`, window.appState.bleDevice.id || window.appState.bleDevice.name || '');
+    renderBleStatus();
+    return;
+  }
+
+  if (window.appState.targetDeviceUuid) {
+    updateBLEDeviceSelect(`Click connect for ${window.appState.targetDeviceUuid}`);
+  } else {
+    updateBLEDeviceSelect('Click connect to choose device');
+  }
+  renderBleStatus();
+}
+
+async function connectBLEDevice() {
   try {
-    const response = await fetch('/api/ble/devices');
-    if (!response.ok) throw new Error('Failed to scan BLE');
-    
-    const data = await response.json();
-    const devices = data.devices || [];
-    
-    if (devices.length === 0) {
-      select.innerHTML = '<option value="">No devices found</option>';
-      return;
-    }
-    
-    select.innerHTML = '<option value="">Select device</option>';
-    devices.forEach(device => {
-      const opt = document.createElement('option');
-      opt.value = device.address;
-      opt.textContent = device.name || device.address;
-      select.appendChild(opt);
-    });
-    
-    // Auto-select first device
-    if (devices.length > 0) {
-      select.value = devices[0].address;
+    updateBLEDeviceSelect('Connecting...');
+    await requestBLEDevice();
+    await ensureBLECharacteristic(false);
+    const uuid = normalizeBleDeviceUuid(window.appState.bleDevice?.name);
+    if (uuid && window.appState.targetDeviceUuid && uuid !== window.appState.targetDeviceUuid) {
+      showToast(`Selected ${uuid}, expected ${window.appState.targetDeviceUuid}`, true);
+    } else {
+      showToast(uuid ? `Bluetooth connected: ${uuid}` : 'Bluetooth connected');
     }
   } catch (err) {
-    select.innerHTML = '<option value="">Scan failed</option>';
+    refreshBLEDevices();
+    if (err?.name !== 'NotFoundError') {
+      showToast(err.message || 'Bluetooth connection failed', true);
+    }
   }
 }
 
@@ -1148,25 +1792,7 @@ async function sendToESP32Direct() {
     let result;
     
     if (connectionMode === 'ble') {
-      // BLE mode
-      const deviceAddress = document.getElementById('ble-device-select').value;
-      if (!deviceAddress) {
-        showToast('Please select a BLE device', true);
-        showSerialSettings();
-        toast.style.display = 'none';
-        return;
-      }
-      
-      const response = await fetch('/api/ble/send', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          pixel_matrix: pixelMatrix,
-          device_address: deviceAddress,
-          background_color: bgRgb,
-        }),
-      });
-      result = await response.json();
+      result = await sendImageViaWebBluetooth(pixelMatrix, bgRgb, true);
     } else {
       // Serial mode
       const port = document.getElementById('serial-port-select').value;
@@ -1207,8 +1833,12 @@ async function sendToESP32Direct() {
     }, 3000);
 
   } catch (err) {
-    toast.textContent = err.message;
+    const message = err?.name === 'NotFoundError'
+      ? '未选择蓝牙设备'
+      : (err.message || '蓝牙发送失败');
+    toast.textContent = message;
     toast.className = 'serial-toast error';
+    showToast(message, true);
     setTimeout(() => {
       toast.style.display = 'none';
     }, 3000);

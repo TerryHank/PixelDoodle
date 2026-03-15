@@ -1,108 +1,190 @@
-<p align="center">
-  <img src="docs/logo.png" width="200" alt="Pixel Doodle Logo">
-</p>
+# PixelDoodle
 
-<h1 align="center">Pixel Doodle</h1>
+PixelDoodle（像素豆绘）是一个“图片转拼豆图 + ESP32 点阵显示”的完整项目，包含：
 
-<p align="center">
-  像素豆绘 - Perler Bead Pattern Generator<br>
-  Convert any image into a Perler/Artkal bead pattern with 64x64 LED Matrix display support.
-</p>
+**Version: 2.26.316**
 
-<p align="center">
-  <strong>Version: 1.26.316</strong>
-</p>
+- Web 前端（上传、裁剪、生成、导出、扫码）
+- Python/FastAPI 后端（调色、量化、导出、串口接口）
+- ESP32 固件（BLE 接收图像、设备 UUID、二维码配对页）
 
-## Features
+---
 
-- 🎨 **Image to Bead Pattern**: Convert any photo/illustration to pixel-perfect bead layout
-- 📱 **Mobile Friendly**: Responsive UI with touch support
-- 🔌 **Hardware Support**: ESP32 LED Matrix (64x64) display via Serial/Bluetooth
-- 🌐 **Multi-language**: Chinese and English UI
-- 📤 **Export**: PNG and PDF export with color codes and coordinates
+## 1. 当前能力概览
 
-## Project Structure
+- 图片生成拼豆图（颜色统计、坐标、导出 PNG/PDF/JSON）
+- ESP32 64x64 点阵 BLE 显示
+- 每台 ESP32 有唯一设备码（UUID，12 位 HEX）
+- 启动页后显示二维码，二维码参数为 `?u=<UUID>`
+- 前端支持：
+  - 扫码识别二维码
+  - 手动输入 UUID
+  - 自动锁定目标设备并尝试 BLE 连接
+  - 浏览器拦截自动连接时弹出“点一下连接这台设备”
 
-```
+---
+
+## 2. 目录结构
+
+```text
 PixelDoodle/
-├── main.py                 # FastAPI backend entry
-├── core/                   # Backend logic
-│   ├── color_match.py      # Color matching (CIE Lab)
-│   ├── quantizer.py        # Image quantization
-│   ├── serial_export.py    # Serial communication
-│   └── ble_export.py       # BLE communication
-├── firmware/               # ESP32 firmware
-│   ├── src/main.cpp        # Firmware entry
-│   ├── lib/beadcraft-receiver/  # Serial receiver library
-│   └── tools/              # Chinese pixel generator
-├── static/                 # Frontend JS/CSS
-├── templates/              # HTML templates
-└── data/                   # Color palette data
+├─ main.py                    # FastAPI 入口
+├─ requirements.txt
+├─ core/                      # 图像处理、串口/BLE 后端能力
+├─ static/                    # 前端 JS/CSS
+├─ templates/                 # HTML 模板
+├─ data/                      # 颜色数据
+├─ certs/                     # 本地 HTTPS 证书（可选）
+├─ docs/
+└─ firmware/                  # ESP32 固件（PlatformIO）
+   ├─ src/main.cpp
+   ├─ lib/beadcraft-receiver/
+   ├─ lib/ble-receiver/
+   └─ platformio.ini
 ```
 
-## Tech Stack
+---
 
-- **Backend**: Python 3.8+ / FastAPI / Uvicorn
-- **Image Processing**: Pillow / NumPy
-- **Color Matching**: CIE Lab color space (Euclidean distance)
-- **Export**: Pillow (PNG) / ReportLab (PDF)
-- **Frontend**: Vanilla JS + Jinja2 templates
-- **ESP32 Firmware**: PlatformIO / Arduino framework
+## 3. 环境要求
 
-## Quick Start
+### 后端
 
-### Backend (Web Application)
+- Python 3.8+
+- Windows/macOS/Linux
+
+### 固件
+
+- PlatformIO（CLI）
+- ESP32 开发板（当前配置：`esp32doit-devkit-v1`）
+- HUB75 64x64 LED 点阵
+
+### 浏览器（Web Bluetooth）
+
+- 推荐：Chrome / Edge（桌面）
+- 需 `HTTPS` 或 `localhost`
+- Safari/iOS 对 Web Bluetooth 支持受限
+
+---
+
+## 4. 本地启动（Web）
+
+在项目根目录执行：
 
 ```bash
-cd PixelDoodle
 pip install -r requirements.txt
 python main.py
-# Server runs at http://localhost:8000
 ```
 
-### ESP32 Firmware
+默认监听：
 
-Requirements:
-- [PlatformIO](https://platformio.org/) installed
-- ESP32 development board
-- 64x64 HUB75 LED Matrix
+- `https://0.0.0.0:8765`（如果检测到 `certs/localhost-cert.pem` 和 `certs/localhost-key.pem`）
+- 否则回退为 HTTP
+
+可选环境变量：
+
+- `PORT`（默认 `8765`）
+- `HOST`（默认 `0.0.0.0`）
+- `SSL_CERTFILE`
+- `SSL_KEYFILE`
+
+---
+
+## 5. 固件编译与烧录
+
+进入固件目录：
 
 ```bash
-cd PixelDoodle/firmware
-pio run -t upload
+cd firmware
+pio run -t upload --upload-port COM4
 ```
 
-**Dependencies** (auto-downloaded by PlatformIO):
-- [ESP32-HUB75-MatrixPanel-I2S-DMA](https://github.com/mrfaptastic/ESP32-HUB75-MatrixPanel-I2S-DMA) - LED Matrix driver
-- [Adafruit GFX Library](https://github.com/adafruit/Adafruit-GFX-Library) - Graphics primitives
+串口查看日志：
 
-## Examples
+```bash
+pio device monitor -b 115200 -p COM4
+```
 
-### Cartoon / Illustration (96x96 grid, background removed)
+当前固件内关键配置在 [platformio.ini](./firmware/platformio.ini)：
 
-| Original | Mosaic Preview | Bead Pattern |
-|:--------:|:--------------:|:------------:|
-| <img src="docs/examples/luoxiaohei_thumb.png" width="200"> | <img src="docs/examples/luoxiaohei_mosaic.png" width="200"> | <img src="docs/examples/luoxiaohei_pattern.png" width="200"> |
-| <img src="docs/examples/pony_thumb.png" width="200"> | <img src="docs/examples/pony_mosaic.png" width="200"> | <img src="docs/examples/pony_pattern.png" width="200"> |
+- `PAIRING_BASE_URL` 已配置为：
+  - `https://10.39.251.173:8765/`
 
-### Photography (72x96 grid)
+设备二维码最终形如：
 
-| Original | Mosaic Preview | Bead Pattern |
-|:--------:|:--------------:|:------------:|
-| <img src="docs/examples/meili_thumb.png" width="200"> | <img src="docs/examples/meili_mosaic.png" width="200"> | <img src="docs/examples/meili_pattern.png" width="200"> |
+```text
+https://10.39.251.173:8765/?u=F42DC97179B4
+```
 
-## API Endpoints
+---
 
-| Method | Path | Description |
-|--------|------|-------------|
-| GET | `/` | Main web UI |
-| GET | `/api/palette` | Full palette data + presets |
-| POST | `/api/generate` | Upload image, return bead pattern |
-| POST | `/api/export/png` | Export pattern as PNG |
-| POST | `/api/export/pdf` | Export pattern as PDF |
+## 6. 配对与发送流程（推荐）
 
-Interactive API docs at `/docs`.
+1. ESP32 上电，显示二维码和设备 UUID。
+2. 前端点击扫码，或手动输入 UUID。
+3. 页面锁定目标设备（`?u=...`）。
+4. 前端立即尝试 BLE 连接该设备。
+5. 连接成功后，生成图案并发送到 ESP32。
 
-## License
+说明：
 
-MIT License
+- 浏览器安全策略下，`requestDevice()` 可能需要用户手势。
+- 若自动连接被拦截，前端会弹出简化确认层，让用户“一键连接当前设备”。
+
+---
+
+## 7. API 速览
+
+核心接口在 [main.py](./main.py)：
+
+- `GET /`：主页
+- `GET /api/palette`：调色板与预设
+- `POST /api/generate`：图像转拼豆图
+- `POST /api/export/png`
+- `POST /api/export/pdf`
+- `POST /api/export/json`
+- `GET /api/serial/ports`
+- `POST /api/serial/send`
+- `POST /api/serial/highlight`
+- `GET /api/ble/devices`（旧后端 BLE 扫描）
+- `POST /api/ble/send`（旧后端 BLE 发送）
+
+备注：当前主流程已改为浏览器 Web Bluetooth 直连，`/api/ble/*` 主要用于兼容旧方案。
+
+---
+
+## 8. 常见问题
+
+### Q1：浏览器提示“找不到兼容设备”
+
+排查顺序：
+
+1. ESP32 是否已上电并停留在 BLE 等待页
+2. 设备名是否为 `BeadCraft-<UUID>`
+3. 浏览器蓝牙是否开启、系统权限是否允许
+4. 页面是否使用 `HTTPS`
+
+前端已做回退策略：精确设备名匹配失败时，会回退到 `BeadCraft-` 前缀匹配。
+
+### Q2：手机能打开网页但不能实时扫码
+
+- 手机浏览器对摄像头权限要求更严格，优先使用 HTTPS。
+- 已支持“拍照/选图识别”兜底。
+
+### Q3：扫码后为什么还要点一次连接
+
+- 受 Web Bluetooth 规范限制，部分浏览器必须用户手势触发配对。
+- 项目已将这一步最小化为单次确认按钮。
+
+---
+
+## 9. 开发建议
+
+- 前端调试：优先桌面 Chrome/Edge
+- BLE 联调：先确认设备名、再确认 GATT UUID
+- 固件改动后：务必重新烧录并观察串口日志
+
+---
+
+## 10. License
+
+MIT
