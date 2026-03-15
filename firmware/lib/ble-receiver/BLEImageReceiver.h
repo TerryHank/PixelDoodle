@@ -35,6 +35,7 @@ private:
     
     // BLE state
     size_t _recvIndex;
+    uint16_t _recvChecksum;
     bool _deviceConnected;
     BLEServer* _pServer;
     BLECharacteristic* _pCharacteristic;
@@ -81,6 +82,7 @@ public:
         _highlightCount = 0;
         _highlightMode = false;
         _recvIndex = 0;
+        _recvChecksum = 0;
         _deviceConnected = false;
         _loading = false;
         _loadingFrame = 0;
@@ -137,6 +139,7 @@ public:
         switch (packetType) {
             case PKT_START_IMAGE:
                 _recvIndex = 0;
+                _recvChecksum = 0;
                 _loading = true;
                 _loadingFrame = 0;
                 _lastLoadingAnimMs = 0;
@@ -148,24 +151,33 @@ public:
                 // Data chunk: [0x02][data...]
                 if (len > 1 && _recvIndex + len - 1 <= IMAGE_SIZE) {
                     memcpy(_imageBuffer + _recvIndex, data + 1, len - 1);
+                    for (size_t i = 1; i < len; i++) {
+                        _recvChecksum = (_recvChecksum + data[i]) & 0xFFFF;
+                    }
                     _recvIndex += len - 1;
                 }
                 drawLoadingSpinner();
                 break;
                 
-            case PKT_END_IMAGE:
+            case PKT_END_IMAGE: {
                 Serial.printf("BLE: Image done, %d bytes\n", _recvIndex);
                 _loading = false;
-                if (_recvIndex == IMAGE_SIZE) {
+                uint16_t expectedChecksum = _recvChecksum;
+                if (len >= 3) {
+                    expectedChecksum = data[1] | (data[2] << 8);
+                }
+                if (_recvIndex == IMAGE_SIZE && _recvChecksum == expectedChecksum) {
                     _hasImage = true;
                     _highlightMode = false;
                     displayStoredImage();
                     sendAck(true);
                 } else {
+                    Serial.printf("BLE: CS_ERR %04X != %04X\n", _recvChecksum, expectedChecksum);
                     _display->fillScreen(0);
                     sendAck(false);
                 }
                 break;
+            }
                 
             case PKT_HIGHLIGHT:
                 // Highlight: [0x04][count][RGB565...]

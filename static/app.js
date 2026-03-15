@@ -19,12 +19,17 @@ window.appState = {
   bleDevice: null,
   bleServer: null,
   bleCharacteristic: null,
+  bleNotifyReady: false,
 };
 
 const BLE_SERVICE_UUID = '4fafc201-1fb5-459e-8fcc-c5c9c331914b';
 const BLE_CHARACTERISTIC_UUID = 'beb5483e-36e1-4688-b7f5-ea0734b3e6c1';
 const BLE_IMAGE_SIZE = 8192;
 const BLE_CHUNK_SIZE = 19;
+const BLE_ACK_TIMEOUT_MS = 3000;
+const BLE_SEND_MAX_RETRIES = 3;
+
+let bleAckWaiters = [];
 
 let qrScannerState = {
   stream: null,
@@ -600,14 +605,56 @@ function renderBleStatus() {
 }
 
 function onBLEDisconnected() {
+  if (window.appState.bleCharacteristic) {
+    window.appState.bleCharacteristic.removeEventListener('characteristicvaluechanged', handleBLENotification);
+  }
   window.appState.bleServer = null;
   window.appState.bleCharacteristic = null;
+  window.appState.bleNotifyReady = false;
+  bleAckWaiters = [];
   const uuid = window.appState.bleDevice
     ? normalizeBleDeviceUuid(window.appState.bleDevice.name)
     : window.appState.targetDeviceUuid;
   updateBLEDeviceSelect(uuid ? `${uuid} (disconnected)` : 'Bluetooth disconnected');
   renderBleStatus();
   showToast('Bluetooth disconnected', true);
+}
+
+function handleBLENotification(event) {
+  const dataView = event.target?.value;
+  if (!dataView || dataView.byteLength < 1) return;
+  const code = dataView.getUint8(0);
+  if (code !== 0x06 && code !== 0x15) return;
+
+  const waiter = bleAckWaiters.shift();
+  if (waiter) {
+    waiter.resolve(code);
+  }
+}
+
+function waitForBLEAck(timeoutMs = BLE_ACK_TIMEOUT_MS) {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      const idx = bleAckWaiters.findIndex(item => item.resolve === resolve);
+      if (idx >= 0) bleAckWaiters.splice(idx, 1);
+      reject(new Error('BLE ACK timeout'));
+    }, timeoutMs);
+
+    bleAckWaiters.push({
+      resolve: (code) => {
+        clearTimeout(timer);
+        resolve(code);
+      },
+    });
+  });
+}
+
+function checksum16(bytes) {
+  let sum = 0;
+  for (let i = 0; i < bytes.length; i++) {
+    sum = (sum + bytes[i]) & 0xffff;
+  }
+  return sum;
 }
 
 async function requestBLEDevice() {
@@ -669,6 +716,11 @@ async function ensureBLECharacteristic(requestIfNeeded = false) {
   const server = await window.appState.bleDevice.gatt.connect();
   const service = await server.getPrimaryService(BLE_SERVICE_UUID);
   const characteristic = await service.getCharacteristic(BLE_CHARACTERISTIC_UUID);
+  if (!window.appState.bleNotifyReady) {
+    await characteristic.startNotifications();
+    characteristic.addEventListener('characteristicvaluechanged', handleBLENotification);
+    window.appState.bleNotifyReady = true;
+  }
 
   window.appState.bleServer = server;
   window.appState.bleCharacteristic = characteristic;
@@ -727,26 +779,43 @@ async function sendImageViaWebBluetooth(pixelMatrix, backgroundColor, requestIfN
   const characteristic = await ensureBLECharacteristic(requestIfNeeded);
   const rgb565Data = pixelMatrixToRgb565Bytes(pixelMatrix, backgroundColor);
   const start = performance.now();
-
-  await writeBLEPacket(characteristic, new Uint8Array([0x01]));
-
+  const frameChecksum = checksum16(rgb565Data);
   let bytesSent = 0;
-  for (let i = 0; i < rgb565Data.length; i += BLE_CHUNK_SIZE) {
-    const chunk = rgb565Data.slice(i, i + BLE_CHUNK_SIZE);
-    const packet = new Uint8Array(chunk.length + 1);
-    packet[0] = 0x02;
-    packet.set(chunk, 1);
-    await writeBLEPacket(characteristic, packet);
-    bytesSent += chunk.length;
+  let lastError = null;
+
+  for (let attempt = 1; attempt <= BLE_SEND_MAX_RETRIES; attempt++) {
+    bleAckWaiters = [];
+    bytesSent = 0;
+    try {
+      await writeBLEPacket(characteristic, new Uint8Array([0x01]));
+
+      for (let i = 0; i < rgb565Data.length; i += BLE_CHUNK_SIZE) {
+        const chunk = rgb565Data.slice(i, i + BLE_CHUNK_SIZE);
+        const packet = new Uint8Array(chunk.length + 1);
+        packet[0] = 0x02;
+        packet.set(chunk, 1);
+        await writeBLEPacket(characteristic, packet);
+        bytesSent += chunk.length;
+      }
+
+      const endPacket = new Uint8Array([0x03, frameChecksum & 0xff, (frameChecksum >> 8) & 0xff]);
+      await writeBLEPacket(characteristic, endPacket);
+      const ack = await waitForBLEAck();
+      if (ack === 0x06) {
+        return {
+          success: true,
+          bytes_sent: bytesSent,
+          duration_ms: Math.round(performance.now() - start),
+          retries: attempt - 1,
+        };
+      }
+      lastError = new Error('BLE NAK');
+    } catch (err) {
+      lastError = err;
+    }
   }
 
-  await writeBLEPacket(characteristic, new Uint8Array([0x03]));
-
-  return {
-    success: true,
-    bytes_sent: bytesSent,
-    duration_ms: Math.round(performance.now() - start),
-  };
+  throw new Error(`BLE send failed after retries: ${lastError?.message || 'unknown error'}`);
 }
 
 async function sendHighlightViaWebBluetooth(highlightRGB) {

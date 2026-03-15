@@ -407,7 +407,7 @@ async def send_to_ble(data: dict):
 
 if __name__ == "__main__":
     import uvicorn
-    port = int(os.getenv("PORT", "8765"))
+    port = int(os.getenv("PORT", "8000"))
     host = os.getenv("HOST", "0.0.0.0")
     cert_file = Path(os.getenv("SSL_CERTFILE", "certs/localhost-cert.pem"))
     key_file = Path(os.getenv("SSL_KEYFILE", "certs/localhost-key.pem"))
@@ -419,8 +419,8 @@ if __name__ == "__main__":
         "reload": True,
     }
 
-    if cert_file.exists() and key_file.exists():
-        uvicorn_kwargs["ssl_certfile"] = str(cert_file)
-        uvicorn_kwargs["ssl_keyfile"] = str(key_file)
+    # if cert_file.exists() and key_file.exists():
+    #     uvicorn_kwargs["ssl_certfile"] = str(cert_file)
+    #     uvicorn_kwargs["ssl_keyfile"] = str(key_file)
 
     uvicorn.run(**uvicorn_kwargs)
