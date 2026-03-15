@@ -284,77 +284,6 @@ async def export_pattern_json(data: dict):
     )
 
 
-@app.post("/api/update_cell")
-async def update_cell(data: dict):
-    """Update a single cell in the pattern.
-
-    Expected JSON body:
-        session_id: str
-        row: int
-        col: int
-        new_code: str
-    """
-    session_id = data.get('session_id')
-    row = data.get('row')
-    col = data.get('col')
-    new_code = data.get('new_code')
-
-    if not session_id or session_id not in sessions:
-        raise HTTPException(status_code=404, detail="Session not found")
-
-    session = sessions[session_id]
-    pixel_matrix = session['pixel_matrix']
-
-    if row is None or col is None or row < 0 or col < 0:
-        raise HTTPException(status_code=400, detail="Invalid row/col")
-
-    if row >= len(pixel_matrix) or col >= len(pixel_matrix[0]):
-        raise HTTPException(status_code=400, detail="Row/col out of range")
-
-    # Verify new_code exists in palette
-    if not palette.get_by_code(new_code):
-        raise HTTPException(status_code=400, detail=f"Invalid color code: {new_code}")
-
-    # Update
-    old_code = pixel_matrix[row][col]
-    pixel_matrix[row][col] = new_code
-
-    # Recompute color summary (skip None/transparent cells)
-    counter = Counter()
-    for r in pixel_matrix:
-        for c in r:
-            if c is not None:
-                counter[c] += 1
-
-    color_summary = []
-    for code, count in counter.most_common():
-        color_info = palette.get_by_code(code)
-        if color_info:
-            hex_c = color_info['hex']
-            r = int(hex_c[1:3], 16)
-            g = int(hex_c[3:5], 16)
-            b = int(hex_c[5:7], 16)
-            color_summary.append({
-                'code': color_info['code'],
-                'name': color_info['name'],
-                'name_zh': color_info['name_zh'],
-                'hex': hex_c,
-                'rgb': [r, g, b],
-                'count': count,
-            })
-
-    session['color_summary'] = color_summary
-    session['total_beads'] = sum(c['count'] for c in color_summary)
-
-    return {
-        'success': True,
-        'old_code': old_code,
-        'new_code': new_code,
-        'color_summary': color_summary,
-        'total_beads': session['total_beads'],
-    }
-
-
 @app.get("/api/serial/ports")
 async def get_serial_ports():
     """List available serial ports."""
@@ -436,62 +365,6 @@ async def highlight_serial(data: dict):
         raise HTTPException(status_code=500, detail=f"Serial highlight failed: {str(e)}")
 
 
-@app.get("/api/serial/stream")
-async def stream_serial_log(
-    port: str = Query(..., description="Serial port device"),
-    baud_rate: int = Query(115200, description="Baud rate"),
-    duration_ms: int = Query(10000, description="Stream duration in ms"),
-):
-    """Stream serial log in real-time using Server-Sent Events."""
-    from fastapi.responses import StreamingResponse
-    from core.serial_export import stream_serial_log
-    
-    async def event_generator():
-        loop = asyncio.get_event_loop()
-        for line in stream_serial_log(port, baud_rate, duration_ms):
-            # Run in thread pool to avoid blocking
-            yield f"data: {line}\n\n"
-            await asyncio.sleep(0)  # Yield control
-    
-    return StreamingResponse(
-        event_generator(),
-        media_type="text/event-stream",
-        headers={
-            "Cache-Control": "no-cache",
-            "Connection": "keep-alive",
-            "X-Accel-Buffering": "no",
-        }
-    )
-
-
-@app.post("/api/serial/rgb565")
-async def get_rgb565_data(data: dict):
-    """Get RGB565 binary data for pixel matrix (for debugging/preview).
-
-    Expected JSON body:
-        pixel_matrix: List[List[str|None]]
-        background_color: List[int] (optional, default [0,0,0])
-    """
-    pixel_matrix = data.get('pixel_matrix')
-    if not pixel_matrix:
-        raise HTTPException(status_code=400, detail="pixel_matrix is required")
-
-    bg_color = data.get('background_color', [0, 0, 0])
-
-    try:
-        rgb565_bytes = pixel_matrix_to_rgb565(
-            pixel_matrix, palette, tuple(bg_color)
-        )
-        # Return as hex string for JSON compatibility
-        return {
-            'size': len(rgb565_bytes),
-            'hex': rgb565_bytes.hex(),
-            'grid_size': [len(pixel_matrix[0]), len(pixel_matrix)],
-        }
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"RGB565 conversion failed: {str(e)}")
-
-
 @app.get("/api/ble/devices")
 async def get_ble_devices():
     """Scan for available BLE devices."""
@@ -528,30 +401,6 @@ async def send_to_ble(data: dict):
         return result
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"BLE send failed: {str(e)}")
-
-
-@app.post("/api/ble/highlight")
-async def highlight_ble(data: dict):
-    """Send highlight command to ESP32 via BLE.
-
-    Expected JSON body:
-        highlight_colors: List[List[int]] (RGB colors to highlight)
-        device_address: str (optional, auto-detect if not provided)
-    """
-    highlight_colors = data.get('highlight_colors', [])
-    device_address = data.get('device_address')
-
-    # Convert to list of tuples
-    color_tuples = [tuple(c) for c in highlight_colors if len(c) == 3]
-
-    try:
-        result = send_highlight_ble_sync(
-            highlight_colors=color_tuples,
-            device_address=device_address,
-        )
-        return result
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"BLE highlight failed: {str(e)}")
 
 
 if __name__ == "__main__":

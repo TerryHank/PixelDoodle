@@ -4,21 +4,9 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>BeadCraft - Perler Bead Pattern Generator</title>
-  <link rel="stylesheet" href="/static/style.css?v=14">
+  <link rel="stylesheet" href="/static/style.css?v=18">
 </head>
 <body>
-
-  <!-- Header -->
-  <header class="header" style="display: none;">
-    <a class="header-logo" href="/">BeadCraft</a>
-    <div class="header-right">
-      <div class="lang-switcher">
-        <button class="lang-btn active" data-lang="zh" onclick="setLanguage('zh')">CN</button>
-        <button class="lang-btn" data-lang="en" onclick="setLanguage('en')">EN</button>
-      </div>
-      <a class="header-link" href="/docs" target="_blank" data-i18n="header.api_docs">API Docs</a>
-    </div>
-  </header>
 
   <!-- Toast Container -->
   <div id="toast-container" class="toast-container"></div>
@@ -26,101 +14,15 @@
   <!-- Main Layout -->
   <div class="main-container">
 
-    <!-- Left Panel -->
-    <div class="left-panel">
+    <!-- Result Area -->
+    <div id="result-area" style="width: 100%; max-width: 640px; margin: 0 auto;">
 
-      <!-- Example Images Gallery -->
-      <div class="section examples-section">
-        <div class="section-title" data-i18n="examples.title">Example Images</div>
-        <div class="examples-gallery">
-          <div class="example-item" onclick="loadExampleImage('luoxiaohei')">
-            <img src="/examples/luoxiaohei_thumb.png" alt="Luo Xiaohei" class="example-thumb">
-            <div class="example-name">Luo Xiaohei</div>
-          </div>
-          <div class="example-item" onclick="loadExampleImage('meili')">
-            <img src="/examples/meili_thumb.png" alt="Meili" class="example-thumb">
-            <div class="example-name">Meili</div>
-          </div>
-          <div class="example-item" onclick="loadExampleImage('pony')">
-            <img src="/examples/pony_thumb.png" alt="Pony" class="example-thumb">
-            <div class="example-name">Pony</div>
-          </div>
-          <div class="example-item" onclick="loadExampleImage('usachi')">
-            <img src="/examples/usachi_thumb.png" alt="Usachi" class="example-thumb">
-            <div class="example-name">Usachi</div>
-          </div>
-        </div>
-      </div>
-
-      <!-- Settings Panel -->
-      <div id="settings-panel" style="display: none;">
-
-        <!-- Palette Preset -->
-        <div class="section" style="border-top: none; padding-top: 12px;">
-          <div class="section-title" data-i18n="settings.palette_preset">Palette Preset</div>
-          <div class="preset-group">
-            <button class="preset-btn" data-preset="96" onclick="setPreset('96')">96</button>
-            <button class="preset-btn" data-preset="120" onclick="setPreset('120')">120</button>
-            <button class="preset-btn" data-preset="144" onclick="setPreset('144')">144</button>
-            <button class="preset-btn" data-preset="168" onclick="setPreset('168')">168</button>
-            <button class="preset-btn active" data-preset="221" onclick="setPreset('221')">221</button>
-          </div>
-        </div>
-
-        <!-- Grid Size -->
-        <div class="section">
-          <div class="section-title" data-i18n="settings.board_size">Bead Board Size</div>
-
-          <div class="radio-group" style="margin-bottom: 12px;">
-            <label class="radio-item">
-              <input type="radio" name="grid-mode" value="fixed" checked onchange="setGridMode('fixed')">
-              <span>难度</span>
-            </label>
-            <label class="radio-item">
-              <input type="radio" name="grid-mode" value="pixel" onchange="setGridMode('pixel')">
-              <span data-i18n="settings.pixel_block">Pixel Block Size</span>
-            </label>
-          </div>
-
-          <div id="grid-fixed-options">
-            <select id="grid-size-select">
-              <option value="simple">简单 (1/4)</option>
-              <option value="normal" selected>普通 (1/2)</option>
-              <option value="hard">困难 (原始)</option>
-            </select>
-          </div>
-
-          <div id="grid-pixel-options" style="display: none;">
-            <label class="form-label">
-              <span data-i18n="settings.pixel_block_label">Pixel block size:</span> <span id="pixel-size-value">8px</span>
-            </label>
-            <input type="range" id="pixel-size-slider" min="4" max="32" value="8" step="1">
-          </div>
-        </div>
-
-        <!-- Background Removal -->
-        <div class="section">
-          <div class="section-title" data-i18n="settings.bg_removal">Background Removal</div>
-          <label class="checkbox-item">
-            <input type="checkbox" id="remove-bg-checkbox">
-            <span data-i18n="settings.auto_remove_bg">Auto remove background</span>
-          </label>
-          <div class="form-hint" data-i18n="settings.bg_hint">Detects the dominant border color and flood-fills it as transparent.</div>
-        </div>
-
-      </div>
-    </div>
-
-    <!-- Right Panel -->
-    <div class="right-panel">
-
-      <!-- Result Area -->
-      <div id="result-area" style="width: 100%; max-width: 640px;">
-
-        <!-- Canvas Toolbar -->
+      <!-- Canvas Toolbar -->
         <div class="canvas-toolbar">
-          <button id="edit-toggle" class="toggle-btn" onclick="toggleEditMode()" data-i18n="btn.edit">Edit</button>
           <div style="flex: 1;"></div>
+          <button id="bg-toggle" class="toolbar-btn" onclick="toggleBackground()" title="自动去除背景">
+            背
+          </button>
           <button id="clear-btn" class="toolbar-btn" onclick="clearCanvas()" title="清除">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
               <polyline points="3 6 5 6 21 6"></polyline>
@@ -131,6 +33,13 @@
             <span class="toolbar-btn-icon">+</span>
           </button>
           <input type="file" id="file-input" class="hidden-input" accept="image/jpeg,image/png,image/gif,image/webp">
+          <select id="difficulty-select" class="led-size-btn" title="难度" onchange="onDifficultyChange()">
+            <option value="1.0">原</option>
+            <option value="0.25">难</option>
+            <option value="0.125" selected>中</option>
+            <option value="0.0625">易</option>
+            <option value="custom">自</option>
+          </select>
           <select id="led-matrix-size" class="led-size-btn" onchange="updateLedSizeDisplay()">
             <option value="16">16</option>
             <option value="32">32</option>
@@ -145,30 +54,59 @@
           </button>
         </div>
 
-        <!-- Canvas Container with Empty State -->
-        <div class="canvas-container" style="margin: 0 auto;">
-          <!-- Empty State (default) -->
-          <div id="empty-state" class="empty-state">
-            <div class="empty-state-icon">&#9638;</div>
-            <div class="empty-state-text" data-i18n="result.empty">Upload an image and generate a pattern</div>
+        <!-- Canvas Container with Upload Area -->
+        <div class="canvas-container" style="margin: 0 auto; position: relative;">
+          <!-- Upload Area (default) -->
+          <div id="upload-area" class="upload-area" onclick="document.getElementById('file-input').click()">
+            <div class="upload-area-icon">+</div>
+            <div class="upload-area-text" data-i18n="upload.drop_hint">拖放图片或点击上传</div>
+            <div class="upload-area-hint" data-i18n="upload.format_hint">JPG, PNG, GIF, WEBP (最大 20MB)</div>
           </div>
           <!-- Pattern Canvas (after generate) -->
           <canvas id="pattern-canvas" style="display: none;"></canvas>
         </div>
 
-        <!-- Color Panel -->
-        <div class="color-panel" id="color-panel" style="display: none;">
-          <div class="color-panel-title" data-i18n="result.colors_used">Colors Used</div>
-          <div id="color-list" class="color-list"></div>
-          <div id="color-total" class="color-total"></div>
+        <!-- Example Images Gallery (shown when no image) -->
+        <div id="examples-container" class="section examples-section" style="margin-top: 12px;">
+          <div class="section-title" data-i18n="examples.title">示例图片</div>
+          <div class="examples-gallery">
+            <div class="example-item" onclick="loadExampleImage('luoxiaohei')">
+              <img src="/examples/luoxiaohei_thumb.png" alt="Luo Xiaohei" class="example-thumb">
+              <div class="example-name">Luo Xiaohei</div>
+            </div>
+            <div class="example-item" onclick="loadExampleImage('meili')">
+              <img src="/examples/meili_thumb.png" alt="Meili" class="example-thumb">
+              <div class="example-name">Meili</div>
+            </div>
+            <div class="example-item" onclick="loadExampleImage('pony')">
+              <img src="/examples/pony_thumb.png" alt="Pony" class="example-thumb">
+              <div class="example-name">Pony</div>
+            </div>
+            <div class="example-item" onclick="loadExampleImage('usachi')">
+              <img src="/examples/usachi_thumb.png" alt="Usachi" class="example-thumb">
+              <div class="example-name">Usachi</div>
+            </div>
+          </div>
         </div>
 
-      </div>
+        <!-- Color Panel -->
+        <div class="color-panel" id="color-panel" style="display: none; flex-direction: column; align-items: flex-start;">
+          <!-- Custom Size Slider (horizontal, above color list) -->
+          <div id="custom-slider-container" style="display: none; position: relative; width: 640px; margin-bottom: 8px;">
+            <input type="range" id="custom-pixel-slider" min="4" max="32" value="8" style="width: 100%; height: 4px;" oninput="updateCustomPixelValue()" onchange="onCustomSliderRelease()">
+            <span id="custom-pixel-value" style="position: absolute; top: -18px; font-size: 12px; transform: translateX(-50%); pointer-events: none;"></span>
+          </div>
+          <div style="display: flex; flex-direction: column; flex: 1; width: 100%;">
+            <div id="color-list" class="color-list"></div>
+            <div id="color-total" class="color-total"></div>
+          </div>
+        </div>
+
     </div>
   </div>
 
-  <script src="/static/i18n.js?v=41"></script>
-  <script src="/static/app.js?v=41"></script>
+  <script src="/static/i18n.js?v=66"></script>
+  <script src="/static/app.js?v=66"></script>
 
   <!-- Serial Port Dialog (Settings) -->
   <div id="serial-settings-dialog" class="modal" style="display: none;">
@@ -257,9 +195,9 @@
           <div id="crop-box" style="position: absolute; border: 2px dashed #fff; box-shadow: 0 0 0 9999px rgba(0,0,0,0.5); cursor: move;"></div>
         </div>
       </div>
-      <div class="modal-footer">
-        <button class="btn btn-secondary" onclick="cancelCrop()">取消</button>
-        <button class="btn btn-primary" onclick="confirmCrop()">确认裁剪</button>
+      <div class="modal-footer" style="display: flex; gap: 0;">
+        <button class="btn btn-secondary" onclick="cancelCrop()" style="flex: 1; border-radius: 0;">取消</button>
+        <button class="btn btn-primary" onclick="confirmCrop()" style="flex: 1; border-radius: 0;">确认裁剪</button>
       </div>
     </div>
   </div>

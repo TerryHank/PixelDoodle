@@ -27,26 +27,24 @@ function clearCanvas() {
   window.appState.gridSize = { width: 0, height: 0 };
   window.appState.activeColors = new Set();
 
-  // Hide canvas, show empty-state
+  // Hide canvas, show upload-area and examples
   document.getElementById('pattern-canvas').style.display = 'none';
   document.getElementById('color-panel').style.display = 'none';
-  document.getElementById('empty-state').classList.remove('hidden');
+  const uploadArea = document.getElementById('upload-area');
+  uploadArea.style.display = '';
+  uploadArea.style.removeProperty('display');
+  document.getElementById('examples-container').style.display = 'block';
 
   // Clear canvas
   const canvas = document.getElementById('pattern-canvas');
   const ctx = canvas.getContext('2d');
   ctx.clearRect(0, 0, canvas.width, canvas.height);
-
-  // Hide settings panel
-  document.getElementById('settings-panel').style.display = 'none';
 }
 
 // === Initialization ===
 document.addEventListener('DOMContentLoaded', () => {
   loadFullPalette();
   initUpload();
-  initTabs();
-  initControls();
   applyTranslations();
   
   // Auto-scan and select serial port (ESP32/CH340/CP210x)
@@ -78,8 +76,8 @@ async function loadExampleImage(name) {
 
     // Set as original image and generate directly
     window.appState.originalImage = file;
-    document.getElementById('empty-state').classList.add('hidden');
-    document.getElementById('settings-panel').style.display = 'block';
+    document.getElementById('upload-area').style.display = 'none';
+    document.getElementById('examples-container').style.display = 'none';
     
     // Generate pattern directly
     await generatePattern();
@@ -104,26 +102,6 @@ async function loadFullPalette() {
   } catch (e) {
     console.error('Failed to load palette', e);
   }
-}
-
-// === Get current preset color list for edit popover ===
-function getPresetColorList() {
-  const { presets, palettePreset, fullPaletteList, fullPalette } = window.appState;
-  const preset = presets[palettePreset];
-  if (!preset || !preset.codes) {
-    return fullPaletteList;
-  }
-  return preset.codes
-    .map(code => fullPalette[code])
-    .filter(c => c != null);
-}
-
-// === Preset Selection ===
-function setPreset(key) {
-  window.appState.palettePreset = key;
-  document.querySelectorAll('.preset-btn').forEach(btn => {
-    btn.classList.toggle('active', btn.dataset.preset === key);
-  });
 }
 
 // === Toast Notifications ===
@@ -234,6 +212,7 @@ function updateCropBox() {
 function setupCropDrag() {
   const box = document.getElementById('crop-box');
   
+  // Mouse events
   box.onmousedown = (e) => {
     e.preventDefault();
     cropState.dragging = true;
@@ -259,6 +238,37 @@ function setupCropDrag() {
   };
   
   document.onmouseup = () => {
+    cropState.dragging = false;
+  };
+  
+  // Touch events for mobile
+  box.ontouchstart = (e) => {
+    e.preventDefault();
+    const touch = e.touches[0];
+    cropState.dragging = true;
+    cropState.startX = touch.clientX - cropState.box.x * cropState.scale;
+    cropState.startY = touch.clientY - cropState.box.y * cropState.scale;
+  };
+  
+  document.ontouchmove = (e) => {
+    if (!cropState.dragging) return;
+    const touch = e.touches[0];
+    
+    let newX = (touch.clientX - cropState.startX) / cropState.scale;
+    let newY = (touch.clientY - cropState.startY) / cropState.scale;
+    
+    // Clamp to image bounds
+    const img = cropState.img;
+    const size = cropState.box.size;
+    newX = Math.max(0, Math.min(newX, img.width - size));
+    newY = Math.max(0, Math.min(newY, img.height - size));
+    
+    cropState.box.x = newX;
+    cropState.box.y = newY;
+    updateCropBox();
+  };
+  
+  document.ontouchend = () => {
     cropState.dragging = false;
   };
 }
@@ -287,111 +297,49 @@ function confirmCrop() {
     // Close dialog
     cancelCrop();
     
-    // Hide empty-state and generate directly
-    document.getElementById('empty-state').classList.add('hidden');
-    document.getElementById('settings-panel').style.display = 'block';
+    // Hide upload-area and examples, generate directly
+    document.getElementById('upload-area').style.display = 'none';
+    document.getElementById('examples-container').style.display = 'none';
     
     // Generate pattern directly
     generatePattern();
   }, 'image/jpeg', 0.95);
 }
 
-// === Tab Switching ===
-function initTabs() {
-  document.querySelectorAll('.tab-group').forEach(group => {
-    group.querySelectorAll('.tab-btn').forEach(btn => {
-      btn.addEventListener('click', () => {
-        const target = btn.dataset.target;
-        const parent = btn.closest('.tab-group');
-
-        // Update tab buttons
-        parent.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
-        btn.classList.add('active');
-
-        // Show/hide content
-        const contents = parent.nextElementSibling?.parentElement?.querySelectorAll('.tab-content');
-        if (contents) {
-          contents.forEach(c => {
-            c.style.display = c.id === target ? 'block' : 'none';
-          });
-        }
-      });
-    });
-  });
-}
-
-// === Controls ===
-function initControls() {
-  // Pixel size slider
-  const pixelSlider = document.getElementById('pixel-size-slider');
-  const pixelValue = document.getElementById('pixel-size-value');
-  if (pixelSlider) {
-    pixelSlider.addEventListener('input', () => {
-      pixelValue.textContent = pixelSlider.value + 'px';
-    });
-  }
-
-  // Max colors slider
-  const maxColorsSlider = document.getElementById('max-colors-slider');
-  const maxColorsValue = document.getElementById('max-colors-value');
-  if (maxColorsSlider) {
-    maxColorsSlider.addEventListener('input', () => {
-      const v = parseInt(maxColorsSlider.value);
-      maxColorsValue.textContent = v === 0 ? t('value.auto') : v;
-    });
-  }
-
-  // Similarity threshold slider
-  const simSlider = document.getElementById('similarity-slider');
-  const simValue = document.getElementById('similarity-value');
-  if (simSlider) {
-    simSlider.addEventListener('input', () => {
-      const v = parseInt(simSlider.value);
-      simValue.textContent = v === 0 ? t('value.off') : v;
-    });
-  }
-
-  // Contrast slider
-  const contrastSlider = document.getElementById('contrast-slider');
-  const contrastValue = document.getElementById('contrast-value');
-  if (contrastSlider) {
-    contrastSlider.addEventListener('input', () => {
-      const v = parseInt(contrastSlider.value);
-      contrastValue.textContent = v === 0 ? t('value.auto') : (v > 0 ? '+' + v : v);
-    });
-  }
-
-  // Saturation slider
-  const satSlider = document.getElementById('saturation-slider');
-  const satValue = document.getElementById('saturation-value');
-  if (satSlider) {
-    satSlider.addEventListener('input', () => {
-      const v = parseInt(satSlider.value);
-      satValue.textContent = v === 0 ? t('value.auto') : (v > 0 ? '+' + v : v);
-    });
-  }
-
-  // Sharpness slider
-  const sharpSlider = document.getElementById('sharpness-slider');
-  const sharpValue = document.getElementById('sharpness-value');
-  if (sharpSlider) {
-    sharpSlider.addEventListener('input', () => {
-      const v = parseInt(sharpSlider.value);
-      sharpValue.textContent = v === 0 ? t('value.auto') : (v > 0 ? '+' + v : v);
-    });
-  }
-
-  // Generate button
-  const genBtn = document.getElementById('generate-btn');
-  if (genBtn) {
-    genBtn.addEventListener('click', generatePattern);
+// === Custom Size Panel ===
+function onDifficultyChange() {
+  const difficultySelect = document.getElementById('difficulty-select');
+  const customSlider = document.getElementById('custom-slider-container');
+  
+  if (difficultySelect.value === 'custom') {
+    customSlider.style.display = 'flex';
+  } else {
+    customSlider.style.display = 'none';
+    // Auto-generate when difficulty changes
+    if (window.appState.originalImage) {
+      generatePattern();
+    }
   }
 }
 
-// === Grid Mode Toggle ===
-function setGridMode(mode) {
-  document.getElementById('grid-fixed-options').style.display = mode === 'fixed' ? 'block' : 'none';
-  document.getElementById('grid-pixel-options').style.display = mode === 'pixel' ? 'block' : 'none';
+function updateCustomPixelValue() {
+  const slider = document.getElementById('custom-pixel-slider');
+  const valueSpan = document.getElementById('custom-pixel-value');
+  if (slider && valueSpan) {
+    const value = slider.value;
+    valueSpan.textContent = value;
+    // Position value above slider thumb
+    const percent = (value - slider.min) / (slider.max - slider.min);
+    const sliderWidth = slider.offsetWidth;
+    const thumbOffset = percent * sliderWidth;
+    valueSpan.style.left = thumbOffset + 'px';
+  }
+}
+
+function onCustomSliderRelease() {
+  if (window.appState.originalImage) {
+    generatePattern();
+  }
 }
 
 // === Generate Pattern ===
@@ -405,35 +353,32 @@ async function generatePattern() {
   const formData = new FormData();
   formData.append('file', window.appState.originalImage);
 
-  // Get difficulty setting
-  const gridSelect = document.getElementById('grid-size-select');
-  const difficulty = gridSelect?.value || 'normal';
-  
-  // Get original image dimensions
-  const img = window.appState.originalImage;
-  const imgWidth = img.width || img.naturalWidth || 512;
-  const imgHeight = img.height || img.naturalHeight || 512;
-  
-  // Calculate scale based on difficulty
-  let scale;
-  if (difficulty === 'simple') {
-    scale = 0.25;  // 1/4 resolution
-  } else if (difficulty === 'normal') {
-    scale = 0.5;   // 1/2 resolution
-  } else { // hard
-    scale = 1.0;   // original resolution
+  // Check if custom size mode
+  const difficultySelect = document.getElementById('difficulty-select');
+  if (difficultySelect.value === 'custom') {
+    const pixelSize = parseInt(document.getElementById('custom-pixel-slider')?.value) || 8;
+    formData.append('mode', 'pixel_size');
+    formData.append('pixel_size', pixelSize);
+  } else {
+    // Get difficulty scale from toolbar button
+    const scale = parseFloat(difficultySelect.value) || 0.125;
+    
+    // Get original image dimensions
+    const img = window.appState.originalImage;
+    const imgWidth = img.width || img.naturalWidth || 512;
+    const imgHeight = img.height || img.naturalHeight || 512;
+    
+    // Calculate grid size based on original image and difficulty
+    const gridWidth = Math.max(16, Math.round(imgWidth * scale));
+    const gridHeight = Math.max(16, Math.round(imgHeight * scale));
+    
+    formData.append('mode', 'fixed_grid');
+    formData.append('grid_width', gridWidth);
+    formData.append('grid_height', gridHeight);
   }
-  
-  // Calculate grid size based on original image and difficulty
-  const gridWidth = Math.max(16, Math.round(imgWidth * scale));
-  const gridHeight = Math.max(16, Math.round(imgHeight * scale));
   
   // LED size for ESP32 display
   const ledSize = parseInt(document.getElementById('led-matrix-size').value) || 64;
-  
-  formData.append('mode', 'fixed_grid');
-  formData.append('grid_width', gridWidth);
-  formData.append('grid_height', gridHeight);
   formData.append('led_size', ledSize);
 
   // Dithering (disabled by default)
@@ -454,8 +399,7 @@ async function generatePattern() {
   formData.append('similarity_threshold', simThreshold);
 
   // Background removal
-  const removeBg = document.getElementById('remove-bg-checkbox')?.checked || false;
-  formData.append('remove_bg', removeBg);
+  formData.append('remove_bg', backgroundRemovalEnabled);
 
   // Image adjustments
   const contrastVal = document.getElementById('contrast-slider')?.value || 0;
@@ -500,8 +444,8 @@ async function generatePattern() {
       window.appState.colorData[c.code] = c;
     });
 
-    // Render result: show canvas, hide empty-state, show color panel
-    document.getElementById('empty-state').classList.add('hidden');
+    // Render result: show canvas, hide upload-area, show color panel
+    document.getElementById('upload-area').style.display = 'none';
     document.getElementById('pattern-canvas').style.display = 'block';
     document.getElementById('color-panel').style.display = 'block';
     renderCanvas();
@@ -627,9 +571,8 @@ function renderCanvas() {
   const { pixelMatrix, gridSize, activeColors, colorData } = window.appState;
   const ctx = canvas.getContext('2d');
 
-  // Calculate cell size to fit in 640x640 (including coord area)
-  const coordSize = 20;
-  const maxPatternDim = 600;
+  // Calculate cell size to fit in 640x640
+  const maxPatternDim = 640;
   const cellSize = Math.min(
     Math.floor(maxPatternDim / gridSize.width),
     Math.floor(maxPatternDim / gridSize.height)
@@ -639,41 +582,22 @@ function renderCanvas() {
   const patternW = gridSize.width * cs;
   const patternH = gridSize.height * cs;
 
-  canvas.width = coordSize + patternW + coordSize;
-  canvas.height = coordSize + patternH + coordSize;
+  canvas.width = patternW;
+  canvas.height = patternH;
 
   // Store layout info for click handling
   canvas._cellSize = cs;
-  canvas._coordSize = coordSize;
+  canvas._coordSize = 0;
 
   // Clear
   ctx.fillStyle = '#FFFFFF';
   ctx.fillRect(0, 0, canvas.width, canvas.height);
 
-  const ox = coordSize;
-  const oy = coordSize;
-
-  // --- Draw coordinate axes ---
-  ctx.font = `${Math.max(7, cs / 3)}px monospace`;
-  ctx.fillStyle = '#888888';
-  ctx.textAlign = 'center';
-  ctx.textBaseline = 'middle';
-
-  for (let x = 0; x < gridSize.width; x++) {
-    // Top (1 -> N)
-    ctx.fillText(String(x + 1), ox + x * cs + cs / 2, oy - 10);
-    // Bottom (N -> 1, reversed)
-    ctx.fillText(String(gridSize.width - x), ox + x * cs + cs / 2, oy + patternH + 10);
-  }
-  for (let y = 0; y < gridSize.height; y++) {
-    // Left
-    ctx.fillText(String(y + 1), ox - 10, oy + y * cs + cs / 2);
-    // Right
-    ctx.fillText(String(y + 1), ox + patternW + 10, oy + y * cs + cs / 2);
-  }
+  const ox = 0;
+  const oy = 0;
 
   // --- Draw cells ---
-  const showCodes = cs >= 16;
+  const showCodes = false;  // Disabled: don't show color codes on canvas
 
   for (let y = 0; y < gridSize.height; y++) {
     for (let x = 0; x < gridSize.width; x++) {
@@ -981,13 +905,25 @@ async function sendHighlightToESP32() {
   }
 }
 
-// === Edit Mode Toggle ===
-function toggleEditMode() {
-  window.appState.editMode = !window.appState.editMode;
-  const btn = document.getElementById('edit-toggle');
+// === Background Removal Toggle ===
+let backgroundRemovalEnabled = true;  // Default ON
+
+function toggleBackground() {
+  backgroundRemovalEnabled = !backgroundRemovalEnabled;
+  const btn = document.getElementById('bg-toggle');
   if (btn) {
-    btn.classList.toggle('active', window.appState.editMode);
-    btn.textContent = window.appState.editMode ? t('btn.exit_edit') : t('btn.edit');
+    // 虚线框 = ON (default), 实线框 = OFF
+    if (backgroundRemovalEnabled) {
+      btn.style.borderStyle = 'dashed';
+      btn.style.borderColor = '#999';
+    } else {
+      btn.style.borderStyle = 'solid';
+      btn.style.borderColor = '#333';
+    }
+  }
+  // Auto-regenerate pattern
+  if (window.appState.originalImage) {
+    generatePattern();
   }
 }
 

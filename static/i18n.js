@@ -6,7 +6,7 @@ const I18N = {
     'header.api_docs': 'API 文档',
 
     // Upload
-    'upload.drop_hint': '拖拽图片到这里，或点击上传',
+    'upload.drop_hint': '拖放图片或点击上传',
     'upload.format_hint': 'JPG, PNG, GIF, WEBP (最大 20MB)',
 
     // Settings - Palette
