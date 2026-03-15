@@ -30,6 +30,22 @@ body {
   -webkit-font-smoothing: antialiased;
 }
 
+.site-version-badge {
+  position: fixed;
+  top: 12px;
+  right: 14px;
+  z-index: 1200;
+  padding: 4px 10px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  color: #1d4ed8;
+  background: rgba(239, 246, 255, 0.96);
+  border: 1px solid rgba(147, 197, 253, 0.9);
+  backdrop-filter: blur(8px);
+}
+
 /* === Main Layout === */
 .main-container {
   flex: 1;
@@ -133,6 +149,19 @@ body {
   font-size: 12px;
   color: #999;
   margin-top: 4px;
+}
+
+.scan-guide {
+  border-style: solid;
+  border-color: #bfdbfe;
+  background: linear-gradient(180deg, #f8fbff, #eef6ff);
+}
+
+.scan-guide .upload-area-icon {
+  font-size: 22px;
+  font-weight: 700;
+  color: #1d4ed8;
+  letter-spacing: 0.08em;
 }
 
 /* === Preview Image === */

@@ -775,9 +775,36 @@ function pixelMatrixToRgb565Bytes(pixelMatrix, backgroundColor) {
   return data;
 }
 
+function resamplePixelMatrix(pixelMatrix, targetSize) {
+  if (!pixelMatrix || !pixelMatrix.length || !pixelMatrix[0]?.length) return pixelMatrix;
+  const srcH = pixelMatrix.length;
+  const srcW = pixelMatrix[0].length;
+  if (srcW === targetSize && srcH === targetSize) return pixelMatrix;
+
+  const out = new Array(targetSize);
+  for (let y = 0; y < targetSize; y++) {
+    const srcY = Math.min(srcH - 1, Math.floor((y * srcH) / targetSize));
+    const row = new Array(targetSize);
+    for (let x = 0; x < targetSize; x++) {
+      const srcX = Math.min(srcW - 1, Math.floor((x * srcW) / targetSize));
+      row[x] = pixelMatrix[srcY][srcX];
+    }
+    out[y] = row;
+  }
+  return out;
+}
+
+function getTargetLedSize() {
+  const value = parseInt(document.getElementById('led-matrix-size')?.value, 10);
+  if (Number.isFinite(value) && value > 0) return value;
+  return 64;
+}
+
 async function sendImageViaWebBluetooth(pixelMatrix, backgroundColor, requestIfNeeded = false) {
   const characteristic = await ensureBLECharacteristic(requestIfNeeded);
-  const rgb565Data = pixelMatrixToRgb565Bytes(pixelMatrix, backgroundColor);
+  const targetSize = getTargetLedSize();
+  const mappedMatrix = resamplePixelMatrix(pixelMatrix, targetSize);
+  const rgb565Data = pixelMatrixToRgb565Bytes(mappedMatrix, backgroundColor);
   const start = performance.now();
   const frameChecksum = checksum16(rgb565Data);
   let bytesSent = 0;
@@ -1205,7 +1232,9 @@ async function autoSendToESP32() {
   // Show toast
   const toast = document.getElementById('serial-toast');
   if (toast) {
-    toast.textContent = connectionMode === 'ble' ? 'Connecting via Bluetooth...' : t('serial.sending');
+    toast.textContent = connectionMode === 'ble'
+      ? 'Connecting via Bluetooth...'
+      : (connectionMode === 'wifi' ? 'Sending via server relay...' : t('serial.sending'));
     toast.className = 'serial-toast';
     toast.style.display = 'block';
   }
@@ -1215,6 +1244,25 @@ async function autoSendToESP32() {
     
     if (connectionMode === 'ble') {
       result = await sendImageViaWebBluetooth(pixelMatrix, bgRgb, true);
+    } else if (connectionMode === 'wifi') {
+      const targetSize = getTargetLedSize();
+      const mappedMatrix = resamplePixelMatrix(pixelMatrix, targetSize);
+      const wifiUuid = (document.getElementById('wifi-device-select')?.value || window.appState.targetDeviceUuid || '').trim().toUpperCase();
+      if (!wifiUuid) {
+        showToast('Please choose a WiFi relay device', true);
+        if (toast) toast.style.display = 'none';
+        return;
+      }
+      const response = await fetch('/api/ble/send', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          pixel_matrix: mappedMatrix,
+          device_uuid: wifiUuid,
+          background_color: bgRgb,
+        }),
+      });
+      result = await response.json();
     } else {
       // Serial mode (default)
       const port = document.getElementById('serial-port-select')?.value;
@@ -1247,7 +1295,10 @@ async function autoSendToESP32() {
         toast.textContent = `Sent ${result.bytes_sent} bytes in ${result.duration_ms}ms`;
         toast.className = 'serial-toast success';
       }
-      showToast(connectionMode === 'ble' ? 'Image sent via Bluetooth!' : t('serial.send_success'));
+      const okMsg = connectionMode === 'ble'
+        ? 'Image sent via Bluetooth!'
+        : (connectionMode === 'wifi' ? 'Image sent via server relay!' : t('serial.send_success'));
+      showToast(okMsg);
     } else {
       if (toast) {
         toast.textContent = result.message;
@@ -1744,24 +1795,28 @@ async function exportJSON() {
 }
 
 // === Serial Port Settings Dialog ===
-window.appState.connectionMode = 'serial';  // 'ble' or 'serial' (default: serial)
+window.appState.connectionMode = 'ble';  // 'ble' | 'wifi' | 'serial'
 
 function setConnectionMode(mode) {
   window.appState.connectionMode = mode;
   
   // Update button states
   document.querySelectorAll('.mode-btn').forEach(btn => {
-    btn.classList.toggle('active', btn.textContent.toLowerCase().includes(mode));
+    btn.classList.toggle('active', btn.dataset.mode === mode);
   });
   
   // Toggle visibility
   document.getElementById('ble-settings').style.display = mode === 'ble' ? 'block' : 'none';
+  const wifiSettings = document.getElementById('wifi-settings');
+  if (wifiSettings) wifiSettings.style.display = mode === 'wifi' ? 'block' : 'none';
   document.getElementById('serial-settings').style.display = mode === 'serial' ? 'block' : 'none';
   
   // Auto-scan
   if (mode === 'ble') {
     renderBleStatus();
     refreshBLEDevices();
+  } else if (mode === 'wifi') {
+    refreshWiFiDevices();
   } else {
     refreshSerialPorts(true);
   }
@@ -1779,8 +1834,46 @@ function showSerialSettings() {
   // Auto-scan based on mode
   if (window.appState.connectionMode === 'ble') {
     refreshBLEDevices();
+  } else if (window.appState.connectionMode === 'wifi') {
+    refreshWiFiDevices();
   } else {
     refreshSerialPorts(true);
+  }
+}
+
+async function refreshWiFiDevices() {
+  const select = document.getElementById('wifi-device-select');
+  if (!select) return;
+
+  select.innerHTML = '<option value="">Loading...</option>';
+  try {
+    const response = await fetch('/api/ble/devices');
+    if (!response.ok) throw new Error('Failed to scan devices');
+    const data = await response.json();
+    const devices = data.devices || [];
+    if (!devices.length) {
+      select.innerHTML = '<option value="">No online devices</option>';
+      return;
+    }
+
+    select.innerHTML = '<option value="">Select device</option>';
+    const preferredUuid = window.appState.targetDeviceUuid;
+    let preferredValue = '';
+    devices.forEach((d) => {
+      const uuid = (d.device_uuid || '').toUpperCase();
+      const opt = document.createElement('option');
+      opt.value = uuid || d.address || '';
+      opt.textContent = uuid ? `${uuid} (${d.name || d.address || 'device'})` : (d.name || d.address || 'device');
+      select.appendChild(opt);
+      if (preferredUuid && uuid === preferredUuid) {
+        preferredValue = opt.value;
+      }
+    });
+    if (preferredValue) {
+      select.value = preferredValue;
+    }
+  } catch (err) {
+    select.innerHTML = '<option value="">Scan failed</option>';
   }
 }
 
@@ -1853,7 +1946,9 @@ async function sendToESP32Direct() {
 
   // Show toast
   const toast = document.getElementById('serial-toast');
-  toast.textContent = connectionMode === 'ble' ? 'Connecting via Bluetooth...' : t('serial.sending');
+  toast.textContent = connectionMode === 'ble'
+    ? 'Connecting via Bluetooth...'
+    : (connectionMode === 'wifi' ? 'Sending via server relay...' : t('serial.sending'));
   toast.className = 'serial-toast';
   toast.style.display = 'block';
 
@@ -1862,6 +1957,25 @@ async function sendToESP32Direct() {
     
     if (connectionMode === 'ble') {
       result = await sendImageViaWebBluetooth(pixelMatrix, bgRgb, true);
+    } else if (connectionMode === 'wifi') {
+      const targetSize = getTargetLedSize();
+      const mappedMatrix = resamplePixelMatrix(pixelMatrix, targetSize);
+      const wifiUuid = (document.getElementById('wifi-device-select')?.value || window.appState.targetDeviceUuid || '').trim().toUpperCase();
+      if (!wifiUuid) {
+        showToast('Please choose a WiFi relay device', true);
+        toast.style.display = 'none';
+        return;
+      }
+      const response = await fetch('/api/ble/send', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          pixel_matrix: mappedMatrix,
+          device_uuid: wifiUuid,
+          background_color: bgRgb,
+        }),
+      });
+      result = await response.json();
     } else {
       // Serial mode
       const port = document.getElementById('serial-port-select').value;
@@ -1890,7 +2004,10 @@ async function sendToESP32Direct() {
     if (result.success) {
       toast.textContent = `Sent ${result.bytes_sent} bytes in ${result.duration_ms}ms`;
       toast.className = 'serial-toast success';
-      showToast(connectionMode === 'ble' ? 'Image sent via Bluetooth!' : t('serial.send_success'));
+      const okMsg = connectionMode === 'ble'
+        ? 'Image sent via Bluetooth!'
+        : (connectionMode === 'wifi' ? 'Image sent via server relay!' : t('serial.send_success'));
+      showToast(okMsg);
     } else {
       toast.textContent = result.message;
       toast.className = 'serial-toast error';

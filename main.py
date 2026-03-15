@@ -391,6 +391,7 @@ async def send_to_ble(data: dict):
         raise HTTPException(status_code=400, detail="pixel_matrix is required")
 
     device_address = data.get('device_address')
+    device_uuid = data.get('device_uuid')
     bg_color = data.get('background_color', [0, 0, 0])
 
     try:
@@ -398,6 +399,7 @@ async def send_to_ble(data: dict):
             pixel_matrix=pixel_matrix,
             palette=palette,
             device_address=device_address,
+            device_uuid=device_uuid,
             background_color=tuple(bg_color),
         )
         return result

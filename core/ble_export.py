@@ -82,6 +82,7 @@ async def send_to_esp32_ble(
     pixel_matrix: List[List[Optional[str]]],
     palette: ArtkalPalette,
     device_address: str = None,
+    device_uuid: str = None,
     background_color: Tuple[int, int, int] = (0, 0, 0),
     timeout: float = 30.0,
 ) -> dict:
@@ -114,7 +115,19 @@ async def send_to_esp32_ble(
                     'bytes_sent': 0,
                     'duration_ms': int((time.time() - start_time) * 1000),
                 }
-            device_address = devices[0]['address']
+            if device_uuid:
+                normalized_uuid = device_uuid.strip().upper()
+                matched = next((d for d in devices if d.get('device_uuid', '').upper() == normalized_uuid), None)
+                if not matched:
+                    return {
+                        'success': False,
+                        'message': f'Device UUID not found: {normalized_uuid}',
+                        'bytes_sent': 0,
+                        'duration_ms': int((time.time() - start_time) * 1000),
+                    }
+                device_address = matched['address']
+            else:
+                device_address = devices[0]['address']
         
         # Connect and send
         async with BleakClient(device_address, timeout=timeout) as client:
@@ -134,8 +147,10 @@ async def send_to_esp32_ble(
                 bytes_sent += len(chunk)
                 await asyncio.sleep(0.01)  # Small delay to avoid overwhelming
             
-            # Send end packet
-            await client.write_gatt_char(CHARACTERISTIC_UUID, bytes([0x03]))
+            # Send end packet with checksum (same protocol as web BLE)
+            checksum = sum(rgb565_data) & 0xFFFF
+            end_packet = bytes([0x03, checksum & 0xFF, (checksum >> 8) & 0xFF])
+            await client.write_gatt_char(CHARACTERISTIC_UUID, end_packet)
             
             print(f"[BLE] Sent {bytes_sent} bytes")
         
@@ -162,12 +177,13 @@ def send_to_esp32_ble_sync(
     pixel_matrix: List[List[Optional[str]]],
     palette: ArtkalPalette,
     device_address: str = None,
+    device_uuid: str = None,
     background_color: Tuple[int, int, int] = (0, 0, 0),
     timeout: float = 30.0,
 ) -> dict:
     """Synchronous wrapper for BLE send."""
     return asyncio.run(send_to_esp32_ble(
-        pixel_matrix, palette, device_address, background_color, timeout
+        pixel_matrix, palette, device_address, device_uuid, background_color, timeout
     ))
 
 

@@ -1,4 +1,4 @@
-<!DOCTYPE html>
+﻿<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
   <meta charset="UTF-8">
@@ -10,6 +10,7 @@
 
   <!-- Toast Container -->
   <div id="toast-container" class="toast-container"></div>
+  <div class="site-version-badge">v4.26.316</div>
 
   <!-- Main Layout -->
   <div class="main-container">
@@ -21,19 +22,18 @@
         <div class="canvas-toolbar">
           <div style="flex: 1;"></div>
           <div id="ble-target-chip" class="toolbar-chip" style="display: none;"></div>
-          <button id="bg-toggle" class="toolbar-btn" onclick="toggleBackground()" title="自动去除背景">
-            背
-          </button>
-          <button id="clear-btn" class="toolbar-btn" onclick="clearCanvas()" title="清除">
+          <button id="bg-toggle" class="toolbar-btn" onclick="toggleBackground()" title="鑷姩鍘婚櫎鑳屾櫙">
+            鑳?          </button>
+          <button id="clear-btn" class="toolbar-btn" onclick="clearCanvas()" title="娓呴櫎">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
               <polyline points="3 6 5 6 21 6"></polyline>
               <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
             </svg>
           </button>
-          <button id="upload-btn" class="toolbar-btn" onclick="document.getElementById('file-input').click()" title="上传">
+          <button id="upload-btn" class="toolbar-btn" onclick="document.getElementById('file-input').click()" title="涓婁紶">
             <span class="toolbar-btn-icon">+</span>
           </button>
-          <button id="scan-btn" class="toolbar-btn" onclick="openQrScanner()" title="扫描二维码">
+          <button id="scan-btn" class="toolbar-btn" onclick="openQrScanner()" title="鎵弿浜岀淮鐮?>
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
               <path d="M4 9V5h4"></path>
               <path d="M20 9V5h-4"></path>
@@ -44,12 +44,12 @@
             </svg>
           </button>
           <input type="file" id="file-input" class="hidden-input" accept="image/jpeg,image/png,image/gif,image/webp">
-          <select id="difficulty-select" class="led-size-btn" title="难度" onchange="onDifficultyChange()">
-            <option value="1.0">原</option>
-            <option value="0.25">难</option>
-            <option value="0.125" selected>中</option>
-            <option value="0.0625">易</option>
-            <option value="custom">自</option>
+          <select id="difficulty-select" class="led-size-btn" title="闅惧害" onchange="onDifficultyChange()">
+            <option value="1.0">鍘?/option>
+            <option value="0.25">闅?/option>
+            <option value="0.125" selected>涓?/option>
+            <option value="0.0625">鏄?/option>
+            <option value="custom">鑷?/option>
           </select>
           <select id="led-matrix-size" class="led-size-btn" onchange="updateLedSizeDisplay()">
             <option value="16">16</option>
@@ -57,7 +57,7 @@
             <option value="52">52</option>
             <option value="64" selected>64</option>
           </select>
-          <button class="toolbar-btn" onclick="showSerialSettings()" title="设置">
+          <button class="toolbar-btn" onclick="showSerialSettings()" title="璁剧疆">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
               <circle cx="12" cy="12" r="3"></circle>
               <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
@@ -68,10 +68,10 @@
         <!-- Canvas Container with Upload Area -->
         <div class="canvas-container" style="margin: 0 auto; position: relative;">
           <!-- Upload Area (default) -->
-          <div id="upload-area" class="upload-area" onclick="document.getElementById('file-input').click()">
-            <div class="upload-area-icon">+</div>
-            <div class="upload-area-text" data-i18n="upload.drop_hint">拖放图片或点击上传</div>
-            <div class="upload-area-hint" data-i18n="upload.format_hint">JPG, PNG, GIF, WEBP (最大 20MB)</div>
+          <div id="upload-area" class="upload-area scan-guide" onclick="openQrScanner()">
+            <div class="upload-area-icon">QR</div>
+            <div class="upload-area-text">先扫描设备二维码进行配对</div>
+            <div class="upload-area-hint">已配对后可继续上传图片，默认优先蓝牙模式</div>
           </div>
           <!-- Pattern Canvas (after generate) -->
           <canvas id="pattern-canvas" style="display: none;"></canvas>
@@ -79,7 +79,7 @@
 
         <!-- Example Images Gallery (shown when no image) -->
         <div id="examples-container" class="section examples-section" style="margin-top: 12px;">
-          <div class="section-title" data-i18n="examples.title">示例图片</div>
+          <div class="section-title" data-i18n="examples.title">绀轰緥鍥剧墖</div>
           <div class="examples-gallery">
             <div class="example-item" onclick="loadExampleImage('luoxiaohei')">
               <img src="/examples/luoxiaohei_thumb.png" alt="Luo Xiaohei" class="example-thumb">
@@ -118,36 +118,47 @@
 
   <script src="/static/vendor/jsQR.js"></script>
   <script src="/static/i18n.js?v=66"></script>
-  <script src="/static/app.js?v=67"></script>
+  <script src="/static/app.js?v=68"></script>
 
   <!-- Serial Port Dialog (Settings) -->
   <div id="serial-settings-dialog" class="modal" style="display: none;">
     <div class="modal-content modal-content-form">
       <div class="modal-header">
-        <h3>设置</h3>
+        <h3>璁剧疆</h3>
         <button class="modal-close" onclick="hideSerialSettings()">&times;</button>
       </div>
       <div class="modal-body">
         <!-- Connection Mode -->
         <div class="form-group">
-          <label class="form-label">连接模式：</label>
+          <label class="form-label">杩炴帴妯″紡锛?/label>
           <div class="mode-toggle">
-            <button class="mode-btn active" onclick="setConnectionMode('serial')">串口</button>
-            <button class="mode-btn" onclick="setConnectionMode('ble')">蓝牙</button>
+            <button class="mode-btn active" data-mode="ble" onclick="setConnectionMode('ble')">蓝牙</button>
+            <button class="mode-btn" data-mode="wifi" onclick="setConnectionMode('wifi')">WiFi</button>
+            <button class="mode-btn" data-mode="serial" onclick="setConnectionMode('serial')">串口</button>
+          </div>
+        </div>
+
+        <div id="wifi-settings" class="connection-settings" style="display: none;">
+          <div class="form-group">
+            <label class="form-label">WiFi relay device:</label>
+            <select id="wifi-device-select">
+              <option value="">Loading...</option>
+            </select>
+            <button class="btn btn-small" onclick="refreshWiFiDevices()">刷新</button>
           </div>
         </div>
         
         <!-- Serial Port Selection (default) -->
         <div id="serial-settings" class="connection-settings">
           <div class="form-group">
-            <label class="form-label">串口：</label>
+            <label class="form-label">涓插彛锛?/label>
             <select id="serial-port-select">
-              <option value="">扫描中...</option>
+              <option value="">鎵弿涓?..</option>
             </select>
-            <button class="btn btn-small" onclick="refreshSerialPorts()">刷新</button>
+            <button class="btn btn-small" onclick="refreshSerialPorts()">鍒锋柊</button>
           </div>
           <div class="form-group">
-            <label class="form-label">波特率：</label>
+            <label class="form-label">娉㈢壒鐜囷細</label>
             <select id="serial-baud-select">
               <option value="115200">115200</option>
               <option value="230400">230400</option>
@@ -161,34 +172,34 @@
         <div id="ble-settings" class="connection-settings" style="display: none;">
           <div id="ble-status-card" class="ble-status-card" style="display: none;"></div>
           <div class="form-group">
-            <label class="form-label">蓝牙设备：</label>
+            <label class="form-label">钃濈墮璁惧锛?/label>
             <select id="ble-device-select">
-              <option value="">扫描中...</option>
+              <option value="">鎵弿涓?..</option>
             </select>
-            <button class="btn btn-small" onclick="refreshBLEDevices()">刷新</button>
-            <button id="ble-connect-btn" class="btn btn-primary btn-small ble-connect-btn" onclick="connectBLEDevice()">连接设备</button>
+            <button class="btn btn-small" onclick="refreshBLEDevices()">鍒锋柊</button>
+            <button id="ble-connect-btn" class="btn btn-primary btn-small ble-connect-btn" onclick="connectBLEDevice()">杩炴帴璁惧</button>
           </div>
         </div>
         
         <!-- Background Color -->
         <div class="form-group">
-          <label class="form-label">背景色（透明区域）：</label>
+          <label class="form-label">鑳屾櫙鑹诧紙閫忔槑鍖哄煙锛夛細</label>
           <input type="color" id="serial-bg-color" value="#000000">
         </div>
         
         <!-- Action Buttons -->
         <div class="form-group" style="border-top: 1px solid #ddd; padding-top: 15px; margin-top: 15px;">
-          <label class="form-label">操作：</label>
+          <label class="form-label">鎿嶄綔锛?/label>
           <div style="display: flex; flex-wrap: wrap; gap: 8px;">
-            <button class="btn btn-primary" onclick="sendToESP32Direct(); hideSerialSettings();">发送到ESP32</button>
-            <button class="btn btn-secondary" onclick="exportPNG()">导出PNG</button>
-            <button class="btn btn-secondary" onclick="exportPDF()">导出PDF</button>
-            <button class="btn btn-secondary" onclick="exportJSON()">导出JSON</button>
+            <button class="btn btn-primary" onclick="sendToESP32Direct(); hideSerialSettings();">鍙戦€佸埌ESP32</button>
+            <button class="btn btn-secondary" onclick="exportPNG()">瀵煎嚭PNG</button>
+            <button class="btn btn-secondary" onclick="exportPDF()">瀵煎嚭PDF</button>
+            <button class="btn btn-secondary" onclick="exportJSON()">瀵煎嚭JSON</button>
           </div>
         </div>
       </div>
       <div class="modal-footer">
-        <button class="btn btn-primary" onclick="hideSerialSettings()">关闭</button>
+        <button class="btn btn-primary" onclick="hideSerialSettings()">鍏抽棴</button>
       </div>
     </div>
   </div>
@@ -200,7 +211,7 @@
   <div id="crop-dialog" class="modal" style="display: none;">
     <div class="modal-content modal-content-crop" style="width: auto; max-width: 80vw; max-height: 85vh;">
       <div class="modal-header">
-        <h3>裁剪图像</h3>
+        <h3>瑁佸壀鍥惧儚</h3>
         <button class="modal-close" onclick="cancelCrop()">&times;</button>
       </div>
       <div class="modal-body modal-body-crop" style="padding: 10px; display: flex; justify-content: center; align-items: center; overflow: auto;">
@@ -210,15 +221,15 @@
         </div>
       </div>
       <div class="modal-footer modal-footer-split" style="display: flex; gap: 0;">
-        <button class="btn btn-secondary" onclick="cancelCrop()" style="flex: 1; border-radius: 0;">取消</button>
-        <button class="btn btn-primary" onclick="confirmCrop()" style="flex: 1; border-radius: 0;">确认裁剪</button>
+        <button class="btn btn-secondary" onclick="cancelCrop()" style="flex: 1; border-radius: 0;">鍙栨秷</button>
+        <button class="btn btn-primary" onclick="confirmCrop()" style="flex: 1; border-radius: 0;">纭瑁佸壀</button>
       </div>
     </div>
   </div>
   <div id="qr-scanner-dialog" class="modal" style="display: none;">
     <div class="modal-content modal-content-form">
       <div class="modal-header">
-        <h3>扫描二维码</h3>
+        <h3>鎵弿浜岀淮鐮?/h3>
         <button class="modal-close" onclick="closeQrScanner()">&times;</button>
       </div>
       <div class="modal-body">
@@ -227,29 +238,32 @@
           <div class="qr-scanner-overlay"></div>
         </div>
         <div class="qr-scanner-actions">
-          <button class="btn btn-secondary" onclick="triggerQrImagePicker()">拍照/选图识别</button>
+          <button class="btn btn-secondary" onclick="triggerQrImagePicker()">鎷嶇収/閫夊浘璇嗗埆</button>
           <input id="qr-image-input" class="hidden-input" type="file" accept="image/*" capture="environment">
         </div>
         <div class="qr-scanner-manual">
-          <input id="manual-uuid-input" type="text" placeholder="输入设备 UUID">
-          <button class="btn btn-primary" onclick="connectByManualUuid()">连接 UUID</button>
+          <input id="manual-uuid-input" type="text" placeholder="杈撳叆璁惧 UUID">
+          <button class="btn btn-primary" onclick="connectByManualUuid()">杩炴帴 UUID</button>
         </div>
-        <div id="qr-scanner-status" class="qr-scanner-status">正在启动摄像头...</div>
+        <div id="qr-scanner-status" class="qr-scanner-status">姝ｅ湪鍚姩鎽勫儚澶?..</div>
       </div>
       <div class="modal-footer">
-        <button class="btn btn-primary" onclick="closeQrScanner()">关闭</button>
+        <button class="btn btn-primary" onclick="closeQrScanner()">鍏抽棴</button>
       </div>
     </div>
   </div>
   <div id="ble-quick-connect" class="ble-quick-connect" style="display: none;">
     <div class="ble-quick-connect-card">
-      <div class="ble-quick-connect-title">连接这台设备</div>
+      <div class="ble-quick-connect-title">杩炴帴杩欏彴璁惧</div>
       <div id="ble-quick-connect-text" class="ble-quick-connect-text"></div>
       <div class="ble-quick-connect-actions">
-        <button class="btn btn-secondary" onclick="hideBleQuickConnect()">稍后</button>
-        <button class="btn btn-primary" onclick="confirmBleQuickConnect()">连接设备</button>
+        <button class="btn btn-secondary" onclick="hideBleQuickConnect()">绋嶅悗</button>
+        <button class="btn btn-primary" onclick="confirmBleQuickConnect()">杩炴帴璁惧</button>
       </div>
     </div>
   </div>
 </body>
 </html>
+
+
+
