@@ -1,5 +1,8 @@
 #include <Arduino.h>
+#include <esp_system.h>
+#include <esp_log.h>
 #include <ESP32-HUB75-MatrixPanel-I2S-DMA.h>
+#include <WiFi.h>
 #include "BeadCraftReceiver.h"
 #include "BLEImageReceiver.h"
 
@@ -12,6 +15,25 @@
 MatrixPanel_I2S_DMA *dma_display = nullptr;
 BeadCraftReceiver *receiver = nullptr;
 BLEImageReceiver *bleReceiver = nullptr;
+RTC_DATA_ATTR uint32_t g_bootCount = 0;
+
+const char* resetReasonToString(esp_reset_reason_t reason)
+{
+  switch (reason) {
+    case ESP_RST_UNKNOWN: return "unknown";
+    case ESP_RST_POWERON: return "poweron";
+    case ESP_RST_EXT: return "external";
+    case ESP_RST_SW: return "software";
+    case ESP_RST_PANIC: return "panic";
+    case ESP_RST_INT_WDT: return "int_wdt";
+    case ESP_RST_TASK_WDT: return "task_wdt";
+    case ESP_RST_WDT: return "wdt";
+    case ESP_RST_DEEPSLEEP: return "deepsleep";
+    case ESP_RST_BROWNOUT: return "brownout";
+    case ESP_RST_SDIO: return "sdio";
+    default: return "other";
+  }
+}
 
 String getDeviceCode()
 {
@@ -37,8 +59,20 @@ String buildPairingUrl(const String &deviceCode)
 
 void setup()
 {
-  Serial.begin(460800);
+  Serial.begin(115200);
+  delay(200);
   pinMode(ESP32_LED_BUILTIN, OUTPUT);
+  g_bootCount++;
+
+  const esp_reset_reason_t resetReason = esp_reset_reason();
+  Serial.printf("BOOT:%lu RESET:%s(%d)\n", static_cast<unsigned long>(g_bootCount), resetReasonToString(resetReason), static_cast<int>(resetReason));
+
+  esp_log_level_set("wifi", ESP_LOG_NONE);
+  esp_log_level_set("wifi_init", ESP_LOG_NONE);
+  WiFi.persistent(false);
+  WiFi.mode(WIFI_STA);
+  WiFi.disconnect(true, true);
+  delay(100);
 
   for (int i = 0; i < 3; i++) {
     digitalWrite(ESP32_LED_BUILTIN, HIGH);

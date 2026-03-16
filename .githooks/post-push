@@ -4,6 +4,7 @@ set -euo pipefail
 REMOTE_HOST="terry@10.0.0.99"
 REMOTE_DIR="~/PixelDoodle"
 TMUX_SESSION="main"
+FETCH_URL="https://gh-proxy.com/github.com/TerryHank/PixelDoodle"
 
-ssh "${REMOTE_HOST}" "cd ${REMOTE_DIR} && git pull --ff-only"
-ssh "${REMOTE_HOST}" "tmux has-session -t ${TMUX_SESSION} && tmux send-keys -t ${TMUX_SESSION} C-c && tmux send-keys -t ${TMUX_SESSION} 'cd ${REMOTE_DIR} && python3 main.py' C-m"
+ssh "${REMOTE_HOST}" "cd ${REMOTE_DIR} && git fetch ${FETCH_URL} && git reset --hard FETCH_HEAD"
+ssh "${REMOTE_HOST}" "tmux has-session -t ${TMUX_SESSION} && tmux send-keys -t ${TMUX_SESSION} C-c && tmux send-keys -t ${TMUX_SESSION} 'cd /home/terry/PixelDoodle && python3 main.py' C-m"

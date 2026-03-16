@@ -4,6 +4,7 @@ import time
 import asyncio
 import json
 import os
+import requests
 from pathlib import Path
 from datetime import datetime
 from typing import Optional, Dict, Any
@@ -43,6 +44,7 @@ palette = ArtkalPalette()
 
 # In-memory session storage
 sessions: Dict[str, Dict[str, Any]] = {}
+wifi_devices: Dict[str, Dict[str, Any]] = {}
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -391,7 +393,6 @@ async def send_to_ble(data: dict):
         raise HTTPException(status_code=400, detail="pixel_matrix is required")
 
     device_address = data.get('device_address')
-    device_uuid = data.get('device_uuid')
     bg_color = data.get('background_color', [0, 0, 0])
 
     try:
@@ -399,7 +400,6 @@ async def send_to_ble(data: dict):
             pixel_matrix=pixel_matrix,
             palette=palette,
             device_address=device_address,
-            device_uuid=device_uuid,
             background_color=tuple(bg_color),
         )
         return result
@@ -407,9 +407,127 @@ async def send_to_ble(data: dict):
         raise HTTPException(status_code=500, detail=f"BLE send failed: {str(e)}")
 
 
+async def _register_wifi_device_impl(data: dict):
+    device_uuid = (data.get('device_uuid') or '').strip().upper()
+    ip = (data.get('ip') or '').strip()
+    if not device_uuid or not ip:
+        raise HTTPException(status_code=400, detail="device_uuid and ip are required")
+
+    wifi_devices[device_uuid] = {
+        "ip": ip,
+        "updated_at": time.time(),
+    }
+    return {"success": True, "device_uuid": device_uuid, "ip": ip}
+
+
+async def _send_to_wifi_impl(data: dict):
+    pixel_matrix = data.get('pixel_matrix')
+    if not pixel_matrix:
+        raise HTTPException(status_code=400, detail="pixel_matrix is required")
+
+    device_uuid = (data.get('device_uuid') or '').strip().upper()
+    if not device_uuid:
+        raise HTTPException(status_code=400, detail="device_uuid is required")
+
+    entry = wifi_devices.get(device_uuid)
+    if not entry:
+        raise HTTPException(status_code=404, detail=f"WiFi device {device_uuid} is not registered")
+
+    bg_color = tuple(data.get('background_color', [0, 0, 0]))
+    try:
+        rgb565_data = pixel_matrix_to_rgb565(pixel_matrix, palette, bg_color)
+        
+        # ESP32 expects exactly 8192 bytes (64x64 * 2), pad if smaller
+        EXPECTED_SIZE = 8192
+        if len(rgb565_data) < EXPECTED_SIZE:
+            rgb565_data = rgb565_data + b'\x00' * (EXPECTED_SIZE - len(rgb565_data))
+        elif len(rgb565_data) > EXPECTED_SIZE:
+            rgb565_data = rgb565_data[:EXPECTED_SIZE]
+        
+        response = requests.post(
+            f"http://{entry['ip']}:8766/image",
+            data=rgb565_data,
+            headers={"Content-Type": "application/octet-stream"},
+            timeout=10,
+        )
+        response.raise_for_status()
+        return {
+            "success": True,
+            "bytes_sent": len(rgb565_data),
+            "duration_ms": 0,
+            "device_uuid": device_uuid,
+            "ip": entry["ip"],
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"WiFi send failed: {str(e)}")
+
+
+async def _highlight_wifi_impl(data: dict):
+    device_uuid = (data.get('device_uuid') or '').strip().upper()
+    if not device_uuid:
+        raise HTTPException(status_code=400, detail="device_uuid is required")
+
+    entry = wifi_devices.get(device_uuid)
+    if not entry:
+        raise HTTPException(status_code=404, detail=f"WiFi device {device_uuid} is not registered")
+
+    highlight_colors = data.get('highlight_colors', [])
+    packet = bytearray()
+    if not highlight_colors:
+        packet.append(0x05)
+    else:
+        packet.extend([0x04, len(highlight_colors)])
+        for color in highlight_colors:
+            if len(color) != 3:
+                continue
+            rgb565 = (
+                ((color[0] >> 3) & 0x1F) << 11 |
+                ((color[1] >> 2) & 0x3F) << 5 |
+                ((color[2] >> 3) & 0x1F)
+            )
+            packet.extend(rgb565.to_bytes(2, 'little'))
+
+    try:
+        response = requests.post(
+            f"http://{entry['ip']}:8766/highlight",
+            data=bytes(packet),
+            headers={"Content-Type": "application/octet-stream"},
+            timeout=5,
+        )
+        response.raise_for_status()
+        return {"success": True, "device_uuid": device_uuid, "ip": entry["ip"]}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"WiFi highlight failed: {str(e)}")
+
+
+# Compatible WiFi API routes (keep old and new paths aligned)
+@app.post("/api/wifi/register")
+@app.post("/api/wifi/register/")
+@app.post("/wifi/register")
+@app.post("/wifi/register/")
+async def register_wifi_device(data: dict):
+    return await _register_wifi_device_impl(data)
+
+
+@app.post("/api/wifi/send")
+@app.post("/api/wifi/send/")
+@app.post("/wifi/send")
+@app.post("/wifi/send/")
+async def send_to_wifi(data: dict):
+    return await _send_to_wifi_impl(data)
+
+
+@app.post("/api/wifi/highlight")
+@app.post("/api/wifi/highlight/")
+@app.post("/wifi/highlight")
+@app.post("/wifi/highlight/")
+async def highlight_wifi(data: dict):
+    return await _highlight_wifi_impl(data)
+
+
 if __name__ == "__main__":
     import uvicorn
-    port = int(os.getenv("PORT", "8000"))
+    port = int(os.getenv("PORT", "8765"))
     host = os.getenv("HOST", "0.0.0.0")
     cert_file = Path(os.getenv("SSL_CERTFILE", "certs/localhost-cert.pem"))
     key_file = Path(os.getenv("SSL_KEYFILE", "certs/localhost-key.pem"))

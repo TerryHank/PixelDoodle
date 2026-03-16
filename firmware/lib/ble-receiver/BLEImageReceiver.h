@@ -1,14 +1,14 @@
 #pragma once
 #include <Arduino.h>
-#include <BLEDevice.h>
-#include <BLEServer.h>
-#include <BLEUtils.h>
-#include <BLE2902.h>
+#include <NimBLEDevice.h>
 #include <ESP32-HUB75-MatrixPanel-I2S-DMA.h>
+#include <WiFi.h>
+#include <esp_wifi.h>
 
 // BLE Service UUID (custom for BeadCraft)
 #define SERVICE_UUID           "4fafc201-1fb5-459e-8fcc-c5c9c331914b"
 #define CHARACTERISTIC_UUID    "beb5483e-36e1-4688-b7f5-ea0734b3e6c1"
+#define WIFI_SCAN_CHARACTERISTIC_UUID "9f6b2a1d-6a52-4f4e-93c7-8d9c6d41e7a1"
 
 const uint16_t IMAGE_SIZE = 8192;  // 64x64 * 2 bytes
 const uint8_t MAX_HIGHLIGHT_COLORS = 16;
@@ -19,8 +19,15 @@ const uint8_t MAX_HIGHLIGHT_COLORS = 16;
 #define PKT_END_IMAGE      0x03
 #define PKT_HIGHLIGHT      0x04
 #define PKT_SHOW_ALL       0x05
+#define PKT_WIFI_SCAN      0x07
+#define PKT_WIFI_CONNECT   0x08
 
-class BLEImageReceiver : public BLEServerCallbacks, public BLECharacteristicCallbacks {
+#define NTF_WIFI_SCAN_BEGIN 0x21
+#define NTF_WIFI_SCAN_DATA  0x22
+#define NTF_WIFI_SCAN_END   0x23
+#define NTF_WIFI_SCAN_ERROR 0x24
+
+class BLEImageReceiver : public NimBLEServerCallbacks, public NimBLECharacteristicCallbacks {
 private:
     MatrixPanel_I2S_DMA* _display;
     
@@ -37,14 +44,37 @@ private:
     size_t _recvIndex;
     uint16_t _recvChecksum;
     bool _deviceConnected;
-    BLEServer* _pServer;
-    BLECharacteristic* _pCharacteristic;
+    NimBLEServer* _pServer;
+    NimBLECharacteristic* _pCharacteristic;
+    NimBLECharacteristic* _pWiFiScanCharacteristic;
     bool _loading;
     uint8_t _loadingFrame;
     unsigned long _lastLoadingAnimMs;
+    bool _wifiScanPending;
+    bool _wifiScanInProgress;
+    uint8_t _wifiScanStatus;
+    String _wifiScanResultText;
+    bool _wifiConnectPending;
+    String _pendingWiFiSsid;
+    String _pendingWiFiPassword;
+    WiFiServer _wifiServer;
+    bool _wifiServerStarted;
 
     uint16_t rgbTo565(uint8_t r, uint8_t g, uint8_t b) {
         return ((r & 0xF8) << 8) | ((g & 0xFC) << 3) | (b >> 3);
+    }
+
+    void startWiFiImageServer() {
+        if (_wifiServerStarted || WiFi.status() != WL_CONNECTED) return;
+        _wifiServer.begin();
+        _wifiServerStarted = true;
+        Serial.println("BLE: WiFi image server started on :8766");
+    }
+
+    void stopWiFiImageServer() {
+        if (!_wifiServerStarted) return;
+        _wifiServer.stop();
+        _wifiServerStarted = false;
     }
 
     void drawLoadingSpinner(bool force = false) {
@@ -75,62 +105,298 @@ private:
         }
         _loadingFrame = (_loadingFrame + 1) % 8;
     }
+
+    void sendCodeNotification(uint8_t code) {
+        uint8_t payload[] = {code};
+        _pCharacteristic->setValue(payload, 1);
+        _pCharacteristic->notify(true);
+        delay(12);
+    }
+
+    void updateWiFiScanCharacteristic() {
+        if (!_pWiFiScanCharacteristic) return;
+        if (!_deviceConnected) return;
+
+        if (_wifiScanStatus == 1) {
+            uint8_t payload[] = {'B'};
+            _pWiFiScanCharacteristic->setValue(payload, 1);
+            _pWiFiScanCharacteristic->notify(true);
+            delay(12);
+            return;
+        }
+
+        if (_wifiScanStatus == 2) {
+            uint8_t beginPayload[] = {NTF_WIFI_SCAN_BEGIN};
+            _pWiFiScanCharacteristic->setValue(beginPayload, 1);
+            _pWiFiScanCharacteristic->notify(true);
+            delay(12);
+
+            const size_t maxChunk = 19;
+            for (size_t offset = 0; offset < _wifiScanResultText.length(); offset += maxChunk) {
+                const String chunk = _wifiScanResultText.substring(offset, offset + maxChunk);
+                uint8_t payload[20];
+                payload[0] = NTF_WIFI_SCAN_DATA;
+                memcpy(payload + 1, chunk.c_str(), chunk.length());
+                _pWiFiScanCharacteristic->setValue(payload, chunk.length() + 1);
+                _pWiFiScanCharacteristic->notify(true);
+                delay(12);
+            }
+
+            uint8_t endPayload[] = {NTF_WIFI_SCAN_END};
+            _pWiFiScanCharacteristic->setValue(endPayload, 1);
+            _pWiFiScanCharacteristic->notify(true);
+            delay(12);
+            return;
+        }
+
+        if (_wifiScanStatus == 3) {
+            const size_t textLen = min(static_cast<size_t>(_wifiScanResultText.length()), static_cast<size_t>(19));
+            uint8_t payload[20];
+            payload[0] = NTF_WIFI_SCAN_ERROR;
+            memcpy(payload + 1, _wifiScanResultText.c_str(), textLen);
+            _pWiFiScanCharacteristic->setValue(payload, textLen + 1);
+            _pWiFiScanCharacteristic->notify(true);
+            delay(12);
+            return;
+        }
+
+        uint8_t idlePayload[] = {'I'};
+        _pWiFiScanCharacteristic->setValue(idlePayload, 1);
+    }
+
+    void sendTextNotification(uint8_t code, const String& text) {
+        const size_t maxChunk = 19;
+        for (size_t offset = 0; offset < text.length(); offset += maxChunk) {
+            const String chunk = text.substring(offset, offset + maxChunk);
+            uint8_t payload[20];
+            payload[0] = code;
+            memcpy(payload + 1, chunk.c_str(), chunk.length());
+            _pCharacteristic->setValue(payload, chunk.length() + 1);
+            _pCharacteristic->notify(true);
+            delay(12);
+        }
+    }
+
+    void scanNearbyWiFi() {
+        if (!_deviceConnected || !_pWiFiScanCharacteristic) return;
+        _wifiScanInProgress = true;
+        _wifiScanStatus = 1;
+        _wifiScanResultText = "";
+        updateWiFiScanCharacteristic();
+
+        Serial.println("BLE: WiFi scan request");
+        const unsigned long scanStartMs = millis();
+        Serial.println("BLE: WiFi scan started");
+
+        WiFi.disconnect(false, false);
+        delay(80);
+
+        int count = WiFi.scanNetworks(false, false);
+        Serial.printf("BLE: WiFi scan finished in %lu ms, count=%d\n", millis() - scanStartMs, count);
+        String resultText;
+        if (count < 0) {
+            _wifiScanStatus = 3;
+            _wifiScanResultText = "scan_failed";
+            updateWiFiScanCharacteristic();
+            _wifiScanInProgress = false;
+            return;
+        }
+
+        const int maxResults = min(count, 12);
+        for (int i = 0; i < maxResults; i++) {
+            String ssid = WiFi.SSID(i);
+            if (ssid.length() == 0) ssid = "(Hidden SSID)";
+            if (ssid.length() > 24) ssid = ssid.substring(0, 24);
+            int32_t rssi = WiFi.RSSI(i);
+            bool secured = WiFi.encryptionType(i) != WIFI_AUTH_OPEN;
+            resultText += ssid + "\t" + String(rssi) + "\t" + String(secured ? 1 : 0) + "\n";
+        }
+
+        WiFi.scanDelete();
+        _wifiScanStatus = 2;
+        _wifiScanResultText = resultText;
+        updateWiFiScanCharacteristic();
+        _wifiScanInProgress = false;
+    }
+
+    void sendWiFiConnectStatus(char code, const String& text = "") {
+        if (!_pWiFiScanCharacteristic || !_deviceConnected) return;
+        const size_t textLen = min(static_cast<size_t>(text.length()), static_cast<size_t>(19));
+        uint8_t payload[20];
+        payload[0] = static_cast<uint8_t>(code);
+        if (textLen > 0) {
+            memcpy(payload + 1, text.c_str(), textLen);
+        }
+        _pWiFiScanCharacteristic->setValue(payload, textLen + 1);
+        _pWiFiScanCharacteristic->notify(true);
+        delay(12);
+    }
+
+    void connectToWiFi() {
+        if (_pendingWiFiSsid.isEmpty()) {
+            sendWiFiConnectStatus('F', "empty_ssid");
+            return;
+        }
+
+        Serial.printf("BLE: WiFi connect request to %s\n", _pendingWiFiSsid.c_str());
+        WiFi.disconnect(true, false);
+        delay(100);
+        WiFi.begin(_pendingWiFiSsid.c_str(), _pendingWiFiPassword.c_str());
+
+        const unsigned long startMs = millis();
+        while (millis() - startMs < 15000) {
+            if (WiFi.status() == WL_CONNECTED) {
+                Serial.printf("BLE: WiFi connected %s\n", WiFi.localIP().toString().c_str());
+                startWiFiImageServer();
+                sendWiFiConnectStatus('C', WiFi.localIP().toString());
+                return;
+            }
+            delay(250);
+        }
+
+        Serial.println("BLE: WiFi connect timeout");
+        stopWiFiImageServer();
+        sendWiFiConnectStatus('F', "connect_timeout");
+    }
+
+    void handleWiFiImageServer() {
+        if (!_wifiServerStarted || WiFi.status() != WL_CONNECTED) return;
+
+        WiFiClient client = _wifiServer.available();
+        if (!client) return;
+
+        client.setTimeout(3000);
+        String requestLine = client.readStringUntil('\n');
+        requestLine.trim();
+
+        int contentLength = 0;
+        while (client.connected()) {
+            String line = client.readStringUntil('\n');
+            line.trim();
+            if (line.length() == 0) break;
+            if (line.startsWith("Content-Length:")) {
+                contentLength = line.substring(15).toInt();
+            }
+        }
+
+        if (requestLine.startsWith("POST /highlight")) {
+            uint8_t buffer[2 + MAX_HIGHLIGHT_COLORS * 2];
+            size_t received = 0;
+            const size_t targetLength = min(static_cast<size_t>(contentLength), sizeof(buffer));
+            unsigned long deadline = millis() + 3000;
+            while (received < targetLength && millis() < deadline) {
+                while (client.available() > 0 && received < targetLength) {
+                    buffer[received++] = static_cast<uint8_t>(client.read());
+                }
+                delay(1);
+            }
+            applyHighlightPacket(buffer, received);
+            client.print("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nConnection: close\r\n\r\n{\"success\":true}");
+            client.stop();
+            return;
+        }
+
+        if (!requestLine.startsWith("POST /image") || contentLength != IMAGE_SIZE) {
+            client.print("HTTP/1.1 400 Bad Request\r\nConnection: close\r\n\r\n");
+            client.stop();
+            return;
+        }
+
+        size_t received = 0;
+        unsigned long deadline = millis() + 5000;
+        while (received < IMAGE_SIZE && millis() < deadline) {
+            while (client.available() > 0 && received < IMAGE_SIZE) {
+                _imageBuffer[received++] = static_cast<uint8_t>(client.read());
+            }
+            delay(1);
+        }
+
+        if (received == IMAGE_SIZE) {
+            _hasImage = true;
+            _highlightMode = false;
+            displayStoredImage();
+            client.print("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nConnection: close\r\n\r\n{\"success\":true}");
+            Serial.println("BLE: WiFi image received");
+        } else {
+            client.print("HTTP/1.1 408 Request Timeout\r\nConnection: close\r\n\r\n");
+            Serial.printf("BLE: WiFi image receive failed %u/%u\n", received, IMAGE_SIZE);
+        }
+        client.stop();
+    }
     
 public:
-    BLEImageReceiver(MatrixPanel_I2S_DMA* display) : _display(display) {
+    BLEImageReceiver(MatrixPanel_I2S_DMA* display) : _display(display), _wifiServer(8766) {
         _hasImage = false;
         _highlightCount = 0;
         _highlightMode = false;
         _recvIndex = 0;
         _recvChecksum = 0;
         _deviceConnected = false;
+        _pServer = nullptr;
+        _pCharacteristic = nullptr;
+        _pWiFiScanCharacteristic = nullptr;
         _loading = false;
         _loadingFrame = 0;
         _lastLoadingAnimMs = 0;
+        _wifiScanPending = false;
+        _wifiScanInProgress = false;
+        _wifiScanStatus = 0;
+        _wifiScanResultText = "";
+        _wifiConnectPending = false;
+        _pendingWiFiSsid = "";
+        _pendingWiFiPassword = "";
+        _wifiServerStarted = false;
         memset(_imageBuffer, 0, IMAGE_SIZE);
         memset(_highlightColors, 0, sizeof(_highlightColors));
     }
 
     void begin(const String& deviceCode) {
         String bleName = "BeadCraft-" + deviceCode;
-        BLEDevice::init(bleName.c_str());
-        _pServer = BLEDevice::createServer();
+        NimBLEDevice::init(bleName.c_str());
+        NimBLEDevice::setPower(ESP_PWR_LVL_P9);
+        _pServer = NimBLEDevice::createServer();
         _pServer->setCallbacks(this);
         
-        BLEService* pService = _pServer->createService(SERVICE_UUID);
+        NimBLEService* pService = _pServer->createService(SERVICE_UUID);
         _pCharacteristic = pService->createCharacteristic(
             CHARACTERISTIC_UUID,
-            BLECharacteristic::PROPERTY_WRITE |
-            BLECharacteristic::PROPERTY_NOTIFY
+            NIMBLE_PROPERTY::READ |
+            NIMBLE_PROPERTY::WRITE |
+            NIMBLE_PROPERTY::NOTIFY
         );
-        _pCharacteristic->addDescriptor(new BLE2902());
         _pCharacteristic->setCallbacks(this);
+        _pWiFiScanCharacteristic = pService->createCharacteristic(
+            WIFI_SCAN_CHARACTERISTIC_UUID,
+            NIMBLE_PROPERTY::READ |
+            NIMBLE_PROPERTY::NOTIFY
+        );
+        updateWiFiScanCharacteristic();
         
         pService->start();
         
-        BLEAdvertising* pAdvertising = BLEDevice::getAdvertising();
+        NimBLEAdvertising* pAdvertising = NimBLEDevice::getAdvertising();
         pAdvertising->addServiceUUID(SERVICE_UUID);
-        pAdvertising->setScanResponse(false);
-        pAdvertising->setMinPreferred(0x0);
-        BLEDevice::startAdvertising();
+        pAdvertising->setScanResponse(true);
+        NimBLEDevice::startAdvertising();
         
         Serial.println("BLE Ready");
     }
 
-    void onConnect(BLEServer* pServer) {
+    void onConnect(NimBLEServer* pServer) override {
         _deviceConnected = true;
         Serial.println("BLE Connected");
     };
 
-    void onDisconnect(BLEServer* pServer) {
+    void onDisconnect(NimBLEServer* pServer) override {
         _deviceConnected = false;
         Serial.println("BLE Disconnected");
-        BLEDevice::startAdvertising();
+        NimBLEDevice::startAdvertising();
     }
 
-    void onWrite(BLECharacteristic *pCharacteristic) {
-        uint8_t* data = pCharacteristic->getData();
-        size_t len = pCharacteristic->getLength();
+    void onWrite(NimBLECharacteristic *pCharacteristic) override {
+        std::string value = pCharacteristic->getValue();
+        const uint8_t* data = reinterpret_cast<const uint8_t*>(value.data());
+        size_t len = value.length();
         
         if (len == 0) return;
         
@@ -205,6 +471,36 @@ public:
                     displayStoredImage();
                 }
                 break;
+
+            case PKT_WIFI_SCAN:
+                if (!_wifiScanInProgress) {
+                    Serial.println("BLE: Queue WiFi scan");
+                    _wifiScanStatus = 1;
+                    _wifiScanResultText = "";
+                    updateWiFiScanCharacteristic();
+                    _wifiScanPending = true;
+                }
+                break;
+
+            case PKT_WIFI_CONNECT:
+                if (len >= 3) {
+                    const uint8_t ssidLen = data[1];
+                    const uint8_t passwordLen = data[2];
+                    if (len >= static_cast<size_t>(3 + ssidLen + passwordLen)) {
+                        char ssidBuf[65] = {0};
+                        char passwordBuf[65] = {0};
+                        const size_t safeSsidLen = min(static_cast<size_t>(ssidLen), sizeof(ssidBuf) - 1);
+                        const size_t safePasswordLen = min(static_cast<size_t>(passwordLen), sizeof(passwordBuf) - 1);
+                        memcpy(ssidBuf, data + 3, safeSsidLen);
+                        memcpy(passwordBuf, data + 3 + ssidLen, safePasswordLen);
+                        _pendingWiFiSsid = String(ssidBuf);
+                        _pendingWiFiPassword = String(passwordBuf);
+                        _wifiConnectPending = true;
+                    } else {
+                        sendWiFiConnectStatus('F', "bad_packet");
+                    }
+                }
+                break;
         }
     }
 
@@ -237,18 +533,49 @@ public:
         Serial.println(_highlightMode ? "Display: Highlighted" : "Display: Full");
     }
 
+    void applyHighlightPacket(const uint8_t* data, size_t len) {
+        if (len == 0) return;
+        if (data[0] == PKT_SHOW_ALL) {
+            _highlightMode = false;
+            if (_hasImage) displayStoredImage();
+            return;
+        }
+        if (data[0] != PKT_HIGHLIGHT || len < 2) return;
+
+        _highlightCount = min(data[1], (uint8_t)MAX_HIGHLIGHT_COLORS);
+        for (int i = 0; i < _highlightCount; i++) {
+            int offset = 2 + i * 2;
+            if (offset + 1 < len) {
+                _highlightColors[i] = data[offset] | (data[offset + 1] << 8);
+            }
+        }
+        _highlightMode = (_highlightCount > 0);
+        if (_hasImage) displayStoredImage();
+    }
+
     void sendAck(bool success) {
-        uint8_t ack[] = {static_cast<uint8_t>(success ? 0x06 : 0x15)};  // ACK or NAK
-        _pCharacteristic->setValue(ack, 1);
-        _pCharacteristic->notify();
+        sendCodeNotification(static_cast<uint8_t>(success ? 0x06 : 0x15));
     }
 
     bool isConnected() { return _deviceConnected; }
     bool hasImage() { return _hasImage; }
     
     void update() {
+        if (WiFi.status() == WL_CONNECTED) {
+            handleWiFiImageServer();
+        } else if (_wifiServerStarted) {
+            stopWiFiImageServer();
+        }
         if (_loading) {
             drawLoadingSpinner();
+        }
+        if (_wifiScanPending && !_wifiScanInProgress) {
+            _wifiScanPending = false;
+            scanNearbyWiFi();
+        }
+        if (_wifiConnectPending) {
+            _wifiConnectPending = false;
+            connectToWiFi();
         }
     }
 };
