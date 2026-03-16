@@ -420,6 +420,12 @@ async def _register_wifi_device_impl(data: dict):
     return {"success": True, "device_uuid": device_uuid, "ip": ip}
 
 
+@app.get("/api/wifi/devices")
+async def list_wifi_devices():
+    """List all registered WiFi devices."""
+    return {"devices": wifi_devices, "count": len(wifi_devices)}
+
+
 async def _send_to_wifi_impl(data: dict):
     pixel_matrix = data.get('pixel_matrix')
     if not pixel_matrix:
@@ -448,7 +454,7 @@ async def _send_to_wifi_impl(data: dict):
             f"http://{entry['ip']}:8766/image",
             data=rgb565_data,
             headers={"Content-Type": "application/octet-stream"},
-            timeout=10,
+            timeout=15,
         )
         response.raise_for_status()
         return {
@@ -458,6 +464,12 @@ async def _send_to_wifi_impl(data: dict):
             "device_uuid": device_uuid,
             "ip": entry["ip"],
         }
+    except requests.exceptions.ConnectTimeout:
+        raise HTTPException(status_code=504, detail=f"WiFi device {device_uuid} ({entry['ip']}) connection timeout - device may be offline")
+    except requests.exceptions.Timeout:
+        raise HTTPException(status_code=504, detail=f"WiFi device {device_uuid} ({entry['ip']}) response timeout")
+    except requests.exceptions.ConnectionError:
+        raise HTTPException(status_code=503, detail=f"WiFi device {device_uuid} ({entry['ip']}) unreachable - check network connection")
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"WiFi send failed: {str(e)}")
 

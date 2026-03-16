@@ -31,6 +31,34 @@ window.appState = {
   isSending: false,        // Lock to prevent concurrent sends
 };
 
+// === Persistent State (localStorage) ===
+function loadPersistentState() {
+  try {
+    const saved = localStorage.getItem('beadcraft_state');
+    if (saved) {
+      const data = JSON.parse(saved);
+      if (data.targetDeviceUuid) window.appState.targetDeviceUuid = data.targetDeviceUuid;
+      if (data.connectionMode) window.appState.connectionMode = data.connectionMode;
+      if (data.qrScannerMode) window.appState.qrScannerMode = data.qrScannerMode;
+    }
+  } catch (e) {
+    console.warn('Failed to load persistent state:', e);
+  }
+}
+
+function savePersistentState() {
+  try {
+    const data = {
+      targetDeviceUuid: window.appState.targetDeviceUuid,
+      connectionMode: window.appState.connectionMode,
+      qrScannerMode: window.appState.qrScannerMode,
+    };
+    localStorage.setItem('beadcraft_state', JSON.stringify(data));
+  } catch (e) {
+    console.warn('Failed to save persistent state:', e);
+  }
+}
+
 const BLE_SERVICE_UUID = '4fafc201-1fb5-459e-8fcc-c5c9c331914b';
 const BLE_CHARACTERISTIC_UUID = 'beb5483e-36e1-4688-b7f5-ea0734b3e6c1';
 const BLE_WIFI_SCAN_CHARACTERISTIC_UUID = '9f6b2a1d-6a52-4f4e-93c7-8d9c6d41e7a1';
@@ -91,21 +119,28 @@ function clearCanvas() {
 
 // === Initialization ===
 document.addEventListener('DOMContentLoaded', () => {
+  // Load persistent state first
+  loadPersistentState();
+  
   const params = new URLSearchParams(window.location.search);
   const targetDeviceUuid = (params.get('device_uuid') || params.get('u') || '').trim().toUpperCase();
-  window.appState.targetDeviceUuid = targetDeviceUuid || null;
+  // URL param takes priority over saved state
+  if (targetDeviceUuid) {
+    window.appState.targetDeviceUuid = targetDeviceUuid;
+    savePersistentState();
+  }
 
   loadFullPalette();
   initUpload();
   applyTranslations();
   renderBleStatus();
   updateConnectionModeQuickButton();
-  if (targetDeviceUuid) {
-    setConnectionMode('ble');
+  if (window.appState.targetDeviceUuid) {
+    setConnectionMode(window.appState.connectionMode || 'ble');
   }
   
   // Auto-scan and select serial port (ESP32/CH340/CP210x)
-  if (!targetDeviceUuid) {
+  if (!window.appState.targetDeviceUuid) {
     refreshSerialPorts(true);
   }
   
@@ -458,6 +493,7 @@ async function beginUuidPairing(uuid, tryImmediateConnect = false) {
 
   window.appState.targetDeviceUuid = normalized;
   syncTargetUuidToUrl(normalized);
+  savePersistentState();
   setConnectionMode('ble');
   renderBleStatus();
 
@@ -525,6 +561,7 @@ async function beginUuidPairing(uuid, tryImmediateConnect = false) {
 
   window.appState.targetDeviceUuid = normalized;
   syncTargetUuidToUrl(normalized);
+  savePersistentState();
   setConnectionMode('ble');
   renderBleStatus();
   hideBleQuickConnect();
@@ -1512,6 +1549,7 @@ async function connectAndScanWiFiForTarget(uuid) {
   bleWifiScanPendingError = null;
   bleWifiScanWaiters = [];
   syncTargetUuidToUrl(uuid);
+  savePersistentState();
   renderBleStatus();
   setConnectionMode('wifi');
   const wifiSelect = document.getElementById('wifi-device-select');
@@ -2623,6 +2661,7 @@ function setConnectionMode(mode) {
     window.appState.qrScannerMode = mode;
     updateQrScannerModeUi();
   }
+  savePersistentState();
   
   // Update button states
   document.querySelectorAll('.mode-btn').forEach(btn => {
@@ -2751,11 +2790,16 @@ async function connectBLEDevice() {
 
 // === One-Click Send to ESP32 ===
 async function sendToESP32Direct() {
-  const { pixelMatrix, connectionMode } = window.appState;
+  const { pixelMatrix, connectionMode, isSending } = window.appState;
   if (!pixelMatrix) {
     showToast(t('toast.generate_first'), true);
     return;
   }
+  if (isSending) {
+    console.log('[ESP32] Send already in progress, skipping');
+    return;
+  }
+  window.appState.isSending = true;
 
   const bgColor = document.getElementById('serial-bg-color').value;
   const bgRgb = [
@@ -2805,6 +2849,8 @@ async function sendToESP32Direct() {
     setTimeout(() => {
       toast.style.display = 'none';
     }, 3000);
+  } finally {
+    window.appState.isSending = false;
   }
 }
 
