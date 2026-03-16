@@ -2033,11 +2033,23 @@ async function sendMatrixViaCurrentMode(pixelMatrix, bgRgb, requestIfNeeded = tr
     const mappedMatrix = scaleAndCenterImage(pixelMatrix, targetSize);
     const wifiUuid = (document.getElementById('wifi-device-select')?.value || window.appState.targetDeviceUuid || '').trim().toUpperCase();
     if (!wifiUuid) throw new Error('Please choose a WiFi relay device');
-    return await postJsonOrThrow('/api/wifi/send', {
-      pixel_matrix: mappedMatrix,
-      device_uuid: wifiUuid,
-      background_color: bgRgb,
-    }, 'WiFi send failed');
+    
+    try {
+      return await postJsonOrThrow('/api/wifi/send', {
+        pixel_matrix: mappedMatrix,
+        device_uuid: wifiUuid,
+        background_color: bgRgb,
+      }, 'WiFi send failed');
+    } catch (err) {
+      // If device not registered, open QR scanner to guide user
+      if (err.message && err.message.includes('is not registered')) {
+        showToast(t('wifi.device_not_registered', {uuid: wifiUuid}), true);
+        openQrScanner();
+        setQrScannerMode('wifi');
+        throw err;
+      }
+      throw err;
+    }
   }
 
   const port = document.getElementById('serial-port-select')?.value;
