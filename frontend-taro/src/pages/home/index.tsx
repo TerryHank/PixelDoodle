@@ -598,7 +598,7 @@ export default function HomePage() {
 
   return (
     <View className='home-page'>
-      <View className='home-page__badge'>vNext</View>
+      <View className='home-page__badge'>v5.26.41</View>
       <View className='home-page__shell'>
         <Toolbar
           connectionModeLabel={getConnectionModeLabel(connectionMode)}
