@@ -1,16 +1,18 @@
-import { Text, View } from '@tarojs/components'
+import { Image, Text, View } from '@tarojs/components'
 import './index.scss'
 
 export interface CanvasPanelProps {
   showUploadGuide: boolean
   showDeviceChip?: boolean
   targetDeviceUuid?: string
+  previewImage?: string | null
 }
 
 export function CanvasPanel({
   showUploadGuide,
   showDeviceChip = false,
-  targetDeviceUuid
+  targetDeviceUuid,
+  previewImage
 }: CanvasPanelProps) {
   return (
     <View className='canvas-panel'>
@@ -26,6 +28,14 @@ export function CanvasPanel({
               <Text>已锁定设备 {targetDeviceUuid}</Text>
             </View>
           ) : null}
+        </View>
+      ) : previewImage ? (
+        <View className='canvas-panel__preview'>
+          <Image
+            className='canvas-panel__preview-image'
+            mode='aspectFit'
+            src={previewImage}
+          />
         </View>
       ) : (
         <View className='canvas-panel__preview'>

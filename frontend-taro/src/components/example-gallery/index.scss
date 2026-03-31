@@ -21,6 +21,14 @@
   margin-bottom: 8px;
 }
 
+.example-gallery__image {
+  width: 100%;
+  aspect-ratio: 1;
+  border-radius: 8px;
+  margin-bottom: 8px;
+  background: #f8fafc;
+}
+
 .example-gallery__thumb--ink {
   background: linear-gradient(135deg, #111827, #60a5fa);
 }
