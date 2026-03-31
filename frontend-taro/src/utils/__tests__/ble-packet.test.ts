@@ -32,4 +32,14 @@ describe('splitBlePayload', () => {
       secure: false
     })
   })
+
+  it('parses wifi scan payload from json text', () => {
+    const result = parseWifiScanResult('{"ssid":"Office","rssi":-52,"secured":true}')
+
+    expect(result[0]).toMatchObject({
+      ssid: 'Office',
+      rssi: -52,
+      secure: true
+    })
+  })
 })

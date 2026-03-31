@@ -18,9 +18,14 @@ export interface DeviceState {
   selectedWifiHotspot: WifiScanResult | null
   registeredWifiDevice: RegisteredWifiDevice | null
   isSending: boolean
+  setTargetDeviceUuid: (uuid: string) => void
+  setConnectionMode: (mode: ConnectionMode) => void
   setBleConnectionStatus: (status: DeviceConnectionStatus) => void
   setBleCharacteristicStatus: (status: DeviceCharacteristicStatus) => void
   setWifiScanResults: (results: WifiScanResult[]) => void
+  setSelectedWifiHotspot: (hotspot: WifiScanResult | null) => void
+  setRegisteredWifiDevice: (device: RegisteredWifiDevice | null) => void
+  setIsSending: (value: boolean) => void
   toggleHighlightCode: (code: string) => string[]
   clearHighlightCodes: () => void
 }
@@ -35,6 +40,18 @@ export const useDeviceStore = create<DeviceState>((set, get) => ({
   selectedWifiHotspot: null,
   registeredWifiDevice: null,
   isSending: false,
+  setTargetDeviceUuid: (uuid) =>
+    set((state) => ({
+      targetDeviceUuid: uuid,
+      registeredWifiDevice:
+        state.registeredWifiDevice?.device_uuid === uuid
+          ? state.registeredWifiDevice
+          : null
+    })),
+  setConnectionMode: (mode) =>
+    set(() => ({
+      connectionMode: mode
+    })),
   setBleConnectionStatus: (status) =>
     set(() => ({
       bleConnectionStatus: status
@@ -44,8 +61,23 @@ export const useDeviceStore = create<DeviceState>((set, get) => ({
       bleCharacteristicStatus: status
     })),
   setWifiScanResults: (results) =>
+    set((state) => ({
+      wifiScanResults: results,
+      selectedWifiHotspot:
+        results.find((item) => item.ssid === state.selectedWifiHotspot?.ssid) ||
+        null
+    })),
+  setSelectedWifiHotspot: (hotspot) =>
     set(() => ({
-      wifiScanResults: results
+      selectedWifiHotspot: hotspot
+    })),
+  setRegisteredWifiDevice: (device) =>
+    set(() => ({
+      registeredWifiDevice: device
+    })),
+  setIsSending: (value) =>
+    set(() => ({
+      isSending: value
     })),
   toggleHighlightCode: (code) => {
     const current = get().activeHighlightCodes

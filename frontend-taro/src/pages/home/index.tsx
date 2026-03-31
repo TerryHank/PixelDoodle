@@ -2,8 +2,8 @@ import Taro from '@tarojs/taro'
 import { useEffect, useRef, useState } from 'react'
 import { View } from '@tarojs/components'
 import { bleAdapter } from '@/adapters/ble'
-import { scanAdapter } from '@/adapters/scan'
 import { fileAdapter } from '@/adapters/file'
+import { scanAdapter } from '@/adapters/scan'
 import { CanvasPanel } from '@/components/canvas-panel'
 import { ColorPanel } from '@/components/color-panel'
 import {
@@ -11,17 +11,27 @@ import {
   ExampleGallery
 } from '@/components/example-gallery'
 import { PairSheet } from '@/components/pair-sheet'
+import { SettingsSheet } from '@/components/settings-sheet'
 import { ToastHost } from '@/components/toast-host'
 import { Toolbar } from '@/components/toolbar'
-import { useDeviceStore } from '@/store/device-store'
-import { usePatternStore } from '@/store/pattern-store'
-import { useUIStore } from '@/store/ui-store'
-import type { ConnectionMode } from '@/types/device'
 import { getApiBaseUrl } from '@/services/env'
 import {
   exportPattern,
   type ExportKind
 } from '@/services/pattern-service'
+import {
+  registerWifiDevice,
+  sendWifiHighlight,
+  sendWifiImage
+} from '@/services/wifi-service'
+import { useDeviceStore } from '@/store/device-store'
+import { usePatternStore } from '@/store/pattern-store'
+import { useUIStore } from '@/store/ui-store'
+import type { ConnectionMode } from '@/types/device'
+import {
+  pixelMatrixToRgb565Bytes,
+  scaleAndCenterPixelMatrix
+} from '@/utils/ble-packet'
 import {
   buildColorHexMap,
   getExportFileName,
@@ -32,6 +42,7 @@ import { buildHomeViewModel } from './view-model'
 import './index.scss'
 
 const EXAMPLE_BASE_URL = getApiBaseUrl()
+const DEFAULT_BACKGROUND_COLOR: [number, number, number] = [0, 0, 0]
 
 const EXAMPLE_ITEMS: ExampleGalleryItem[] = [
   {
@@ -86,6 +97,7 @@ function hasGeneratedPattern(pixelMatrix: string[][] | (string | null)[][]) {
 export default function HomePage() {
   const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const [manualUuid, setManualUuid] = useState('')
+  const [wifiPassword, setWifiPassword] = useState('')
 
   const pixelMatrix = usePatternStore((state) => state.pixelMatrix)
   const colorSummary = usePatternStore((state) => state.colorSummary)
@@ -101,9 +113,14 @@ export default function HomePage() {
   const bleConnectionStatus = useDeviceStore((state) => state.bleConnectionStatus)
   const bleCharacteristicStatus = useDeviceStore((state) => state.bleCharacteristicStatus)
   const activeHighlightCodes = useDeviceStore((state) => state.activeHighlightCodes)
+  const wifiScanResults = useDeviceStore((state) => state.wifiScanResults)
+  const selectedWifiHotspot = useDeviceStore((state) => state.selectedWifiHotspot)
+  const registeredWifiDevice = useDeviceStore((state) => state.registeredWifiDevice)
+  const isSending = useDeviceStore((state) => state.isSending)
 
   const toastMessage = useUIStore((state) => state.toastMessage)
   const isPairSheetOpen = useUIStore((state) => state.isPairSheetOpen)
+  const isSettingsSheetOpen = useUIStore((state) => state.isSettingsSheetOpen)
 
   useEffect(() => {
     if (fullPaletteList.length > 0) {
@@ -269,34 +286,16 @@ export default function HomePage() {
     }
   }
 
-  async function handleOpenSettings() {
-    if (!hasGeneratedPattern(pixelMatrix)) {
-      showToast('请先上传或选择示例图')
-      return
-    }
+  function handleOpenSettings() {
+    useUIStore.setState({
+      isSettingsSheetOpen: true
+    })
+  }
 
-    try {
-      const result = await Taro.showActionSheet({
-        itemList: ['导出 PNG', '导出 PDF', '导出 JSON']
-      })
-      const actions: ExportKind[] = ['png', 'pdf', 'json']
-      const selected = actions[result.tapIndex]
-
-      if (selected) {
-        await handleExport(selected)
-      }
-    } catch (error) {
-      if (
-        error &&
-        typeof error === 'object' &&
-        'errMsg' in error &&
-        String(error.errMsg).includes('cancel')
-      ) {
-        return
-      }
-
-      showToast('导出菜单打开失败')
-    }
+  function handleCloseSettings() {
+    useUIStore.setState({
+      isSettingsSheetOpen: false
+    })
   }
 
   async function handleToggleBackground() {
@@ -340,13 +339,27 @@ export default function HomePage() {
     try {
       const scannedUuid = await scanAdapter.scanDevice()
       setManualUuid(scannedUuid)
-      useDeviceStore.setState({
-        targetDeviceUuid: scannedUuid
-      })
+      useDeviceStore.getState().setTargetDeviceUuid(scannedUuid)
       showToast(`已识别设备 ${scannedUuid}`)
     } catch (error) {
       showToast(error instanceof Error ? error.message : '扫码失败')
     }
+  }
+
+  async function ensureBleReady(uuid?: string) {
+    if (
+      bleConnectionStatus === 'connected' &&
+      bleCharacteristicStatus === 'ready'
+    ) {
+      return
+    }
+
+    useDeviceStore.getState().setBleConnectionStatus('connecting')
+    useDeviceStore.getState().setBleCharacteristicStatus('discovering')
+
+    await bleAdapter.connectTargetDevice(uuid)
+    useDeviceStore.getState().setBleConnectionStatus('connected')
+    useDeviceStore.getState().setBleCharacteristicStatus('ready')
   }
 
   async function handleConnectDevice() {
@@ -357,24 +370,183 @@ export default function HomePage() {
       return
     }
 
-    useDeviceStore.setState({
-      targetDeviceUuid: normalizedUuid || targetDeviceUuid
-    })
-    useDeviceStore.getState().setBleConnectionStatus('connecting')
-    useDeviceStore.getState().setBleCharacteristicStatus('discovering')
+    const lockedUuid = normalizedUuid || targetDeviceUuid
+    useDeviceStore.getState().setTargetDeviceUuid(lockedUuid)
 
     try {
-      await bleAdapter.connectTargetDevice(normalizedUuid || undefined)
-      useDeviceStore.getState().setBleConnectionStatus('connected')
-      useDeviceStore.getState().setBleCharacteristicStatus('ready')
-      useUIStore.setState({
-        isPairSheetOpen: false
-      })
-      showToast(normalizedUuid ? `蓝牙已连接 ${normalizedUuid}` : '蓝牙连接成功')
+      await ensureBleReady(lockedUuid || undefined)
+
+      if (connectionMode === 'wifi') {
+        showToast('设备已连接，可开始扫描热点')
+      } else {
+        useUIStore.setState({
+          isPairSheetOpen: false
+        })
+        showToast(lockedUuid ? `蓝牙已连接 ${lockedUuid}` : '蓝牙连接成功')
+      }
     } catch (error) {
       useDeviceStore.getState().setBleConnectionStatus('error')
       useDeviceStore.getState().setBleCharacteristicStatus('error')
       showToast(error instanceof Error ? error.message : '蓝牙连接失败')
+    }
+  }
+
+  function handleChangeConnectionMode(mode: ConnectionMode) {
+    useDeviceStore.getState().setConnectionMode(mode)
+
+    if (mode === 'wifi') {
+      showToast('切到 WiFi 后，请通过顶部扫按钮完成热点配网')
+    }
+  }
+
+  async function handleScanWifiHotspots() {
+    const lockedUuid = normalizeUuid(manualUuid || targetDeviceUuid)
+    if (!lockedUuid || !isUuidLike(lockedUuid)) {
+      showToast('请先扫码或手输 12 位设备 UUID')
+      return
+    }
+
+    useDeviceStore.getState().setTargetDeviceUuid(lockedUuid)
+    useDeviceStore.getState().setSelectedWifiHotspot(null)
+    Taro.showLoading({
+      title: '扫描热点...'
+    })
+
+    try {
+      await ensureBleReady(lockedUuid)
+      const results = await bleAdapter.scanWifiNetworks()
+      useDeviceStore.getState().setWifiScanResults(results)
+      showToast(results.length ? `已发现 ${results.length} 个热点` : '未扫描到可用热点')
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : '热点扫描失败')
+    } finally {
+      Taro.hideLoading()
+    }
+  }
+
+  async function handleConnectWifi() {
+    const lockedUuid = normalizeUuid(manualUuid || targetDeviceUuid)
+    if (!lockedUuid || !isUuidLike(lockedUuid)) {
+      showToast('请先锁定目标设备 UUID')
+      return
+    }
+
+    if (!selectedWifiHotspot) {
+      showToast('请先选择要连接的热点')
+      return
+    }
+
+    if (selectedWifiHotspot.secure && !wifiPassword.trim()) {
+      showToast('请输入 WiFi 密码')
+      return
+    }
+
+    Taro.showLoading({
+      title: '联网中...'
+    })
+
+    try {
+      await ensureBleReady(lockedUuid)
+      const ip = await bleAdapter.connectWifiNetwork({
+        ssid: selectedWifiHotspot.ssid,
+        password: selectedWifiHotspot.secure ? wifiPassword : ''
+      })
+      const response = await registerWifiDevice({
+        device_uuid: lockedUuid,
+        ip
+      })
+
+      useDeviceStore.getState().setTargetDeviceUuid(lockedUuid)
+      useDeviceStore.getState().setRegisteredWifiDevice({
+        device_uuid: response.device_uuid,
+        ip: response.ip,
+        updated_at: Math.floor(Date.now() / 1000)
+      })
+      useDeviceStore.getState().setConnectionMode('wifi')
+      useUIStore.setState({
+        isPairSheetOpen: false
+      })
+      setWifiPassword('')
+      showToast(`WiFi 已连接 ${response.ip}`)
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : 'WiFi 配网失败')
+    } finally {
+      Taro.hideLoading()
+    }
+  }
+
+  async function handleSendCurrentPattern() {
+    const currentState = usePatternStore.getState()
+    const deviceState = useDeviceStore.getState()
+
+    if (!hasGeneratedPattern(currentState.pixelMatrix)) {
+      showToast('请先上传或选择示例图')
+      return
+    }
+
+    const mappedMatrix = scaleAndCenterPixelMatrix(
+      currentState.pixelMatrix,
+      currentState.ledSize
+    )
+
+    deviceState.setIsSending(true)
+
+    try {
+      if (deviceState.connectionMode === 'wifi') {
+        const deviceUuid = normalizeUuid(deviceState.targetDeviceUuid)
+        if (!deviceUuid) {
+          useUIStore.setState({
+            isPairSheetOpen: true,
+            isSettingsSheetOpen: false
+          })
+          throw new Error('请先完成 WiFi 配网')
+        }
+
+        const result = await sendWifiImage({
+          device_uuid: deviceUuid,
+          pixel_matrix: mappedMatrix,
+          background_color: DEFAULT_BACKGROUND_COLOR
+        })
+
+        deviceState.setRegisteredWifiDevice({
+          device_uuid: result.device_uuid,
+          ip: result.ip,
+          updated_at: Math.floor(Date.now() / 1000)
+        })
+        showToast(`图案已通过 WiFi 发送到 ${result.ip}`)
+      } else {
+        if (
+          bleConnectionStatus !== 'connected' ||
+          bleCharacteristicStatus !== 'ready'
+        ) {
+          useUIStore.setState({
+            isPairSheetOpen: true,
+            isSettingsSheetOpen: false
+          })
+          throw new Error('请先连接蓝牙设备')
+        }
+
+        const payload = pixelMatrixToRgb565Bytes(
+          mappedMatrix,
+          currentState.fullPalette,
+          DEFAULT_BACKGROUND_COLOR
+        )
+        await bleAdapter.sendImage(payload)
+        showToast('图案已通过蓝牙发送')
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : '图案发送失败'
+
+      if (message.includes('is not registered')) {
+        useUIStore.setState({
+          isPairSheetOpen: true,
+          isSettingsSheetOpen: false
+        })
+      }
+
+      showToast(message)
+    } finally {
+      deviceState.setIsSending(false)
     }
   }
 
@@ -384,18 +556,37 @@ export default function HomePage() {
       .map((itemCode) => colorSummary.find((item) => item.code === itemCode)?.rgb)
       .filter((rgb): rgb is [number, number, number] => Array.isArray(rgb))
 
-    if (
-      connectionMode !== 'ble' ||
-      bleConnectionStatus !== 'connected' ||
-      bleCharacteristicStatus !== 'ready'
-    ) {
-      return
-    }
-
     try {
-      await bleAdapter.sendHighlight(highlightRgb)
+      if (
+        connectionMode === 'ble' &&
+        bleConnectionStatus === 'connected' &&
+        bleCharacteristicStatus === 'ready'
+      ) {
+        await bleAdapter.sendHighlight(highlightRgb)
+      } else if (connectionMode === 'wifi') {
+        const deviceUuid = normalizeUuid(targetDeviceUuid)
+
+        if (!deviceUuid) {
+          return
+        }
+
+        await sendWifiHighlight({
+          device_uuid: deviceUuid,
+          highlight_colors: highlightRgb
+        })
+      }
     } catch (error) {
-      showToast(error instanceof Error ? error.message : '颜色高亮同步失败')
+      const message =
+        error instanceof Error ? error.message : '颜色高亮同步失败'
+
+      if (message.includes('is not registered')) {
+        useUIStore.setState({
+          isPairSheetOpen: true,
+          isSettingsSheetOpen: false
+        })
+      }
+
+      showToast(message)
     }
   }
 
@@ -442,12 +633,35 @@ export default function HomePage() {
       <PairSheet
         bleConnectionStatus={bleConnectionStatus}
         manualUuid={manualUuid}
+        mode={connectionMode}
+        registeredWifiDevice={registeredWifiDevice}
+        selectedWifiHotspot={selectedWifiHotspot}
         targetDeviceUuid={targetDeviceUuid}
         visible={isPairSheetOpen}
+        wifiPassword={wifiPassword}
+        wifiScanResults={wifiScanResults}
         onClose={handleClosePairSheet}
         onConnect={handleConnectDevice}
+        onConnectWifi={handleConnectWifi}
         onManualUuidChange={setManualUuid}
+        onModeChange={handleChangeConnectionMode}
         onScan={handleScanDevice}
+        onScanWifi={handleScanWifiHotspots}
+        onSelectWifiHotspot={(hotspot) =>
+          useDeviceStore.getState().setSelectedWifiHotspot(hotspot)
+        }
+        onWifiPasswordChange={setWifiPassword}
+      />
+      <SettingsSheet
+        connectionMode={connectionMode}
+        isSending={isSending}
+        registeredWifiDevice={registeredWifiDevice}
+        targetDeviceUuid={targetDeviceUuid}
+        visible={isSettingsSheetOpen}
+        onChangeMode={handleChangeConnectionMode}
+        onClose={handleCloseSettings}
+        onExport={handleExport}
+        onSend={handleSendCurrentPattern}
       />
       <ToastHost message={toastMessage} />
     </View>

@@ -5,4 +5,5 @@ export interface BleAdapter {
   sendImage(payload: Uint8Array): Promise<void>
   sendHighlight(colors: Array<[number, number, number]>): Promise<void>
   scanWifiNetworks(): Promise<WifiScanResult[]>
+  connectWifiNetwork(input: { ssid: string; password?: string }): Promise<string>
 }

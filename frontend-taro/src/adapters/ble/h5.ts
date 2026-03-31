@@ -2,10 +2,12 @@ import {
   BLE_ACK_TIMEOUT_MS,
   BLE_CHARACTERISTIC_UUID,
   BLE_CHUNK_SIZE,
+  BLE_WIFI_CONNECT_TIMEOUT_MS,
   BLE_PACKET_GAP_MS,
   BLE_SERVICE_UUID,
   BLE_WIFI_SCAN_BEGIN,
   BLE_WIFI_SCAN_CHARACTERISTIC_UUID,
+  BLE_WIFI_CONNECT_PACKET,
   BLE_WIFI_SCAN_DATA,
   BLE_WIFI_SCAN_END,
   BLE_WIFI_SCAN_ERROR,
@@ -13,8 +15,10 @@ import {
   BLE_WIFI_SCAN_TIMEOUT_MS
 } from '@/constants/ble'
 import {
+  buildWifiConnectPacket,
   buildHighlightPacket,
   buildImagePackets,
+  decodeUtf8,
   parseWifiScanResult
 } from '@/utils/ble-packet'
 import type { BleAdapter } from './types'
@@ -123,6 +127,23 @@ async function writePacket(
 
   if (BLE_PACKET_GAP_MS > 0) {
     await wait(BLE_PACKET_GAP_MS)
+  }
+}
+
+function readWifiValue(
+  value: DataView | null
+): { code: number; status: string; payload: string } | null {
+  if (!value || value.byteLength < 1) {
+    return null
+  }
+
+  const bytes = new Uint8Array(value.buffer, value.byteOffset, value.byteLength)
+  const code = bytes[0]
+
+  return {
+    code,
+    status: String.fromCharCode(code),
+    payload: decodeUtf8(bytes.slice(1))
   }
 }
 
@@ -280,5 +301,40 @@ export const h5BleAdapter: BleAdapter = {
     }
 
     throw new Error('WiFi scan timeout')
+  },
+
+  async connectWifiNetwork({ ssid, password }) {
+    const { imageCharacteristic, wifiCharacteristic } = await ensureCharacteristics()
+
+    if (!ssid.trim()) {
+      throw new Error('请选择要连接的 WiFi 热点')
+    }
+
+    const packet = buildWifiConnectPacket(ssid.trim(), password ?? '')
+    if (packet[0] !== BLE_WIFI_CONNECT_PACKET) {
+      throw new Error('WiFi 配网数据包构造失败')
+    }
+
+    await writePacket(imageCharacteristic, packet)
+
+    const deadline = Date.now() + BLE_WIFI_CONNECT_TIMEOUT_MS
+    while (Date.now() < deadline) {
+      const response = readWifiValue(await wifiCharacteristic.readValue())
+
+      if (response?.status === 'C') {
+        return response.payload.trim()
+      }
+
+      if (
+        response?.status === 'F' ||
+        response?.code === BLE_WIFI_SCAN_ERROR
+      ) {
+        throw new Error(response.payload || 'ESP32 WiFi connect failed')
+      }
+
+      await wait(250)
+    }
+
+    throw new Error('WiFi connect timeout')
   }
 }
