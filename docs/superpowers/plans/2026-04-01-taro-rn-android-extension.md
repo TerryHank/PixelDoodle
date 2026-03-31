@@ -92,10 +92,7 @@ describe('rn env utils', () => {
 {
   "scripts": {
     "dev:rn": "taro build --type rn --watch",
-    "build:rn": "taro build --type rn",
-    "android": "react-native run-android",
-    "apk:debug": "cd android && gradlew assembleDebug",
-    "apk:release": "cd android && gradlew assembleRelease"
+    "build:rn": "taro build --type rn"
   }
 }
 ```
@@ -105,13 +102,23 @@ describe('rn env utils', () => {
 ```json
 {
   "dependencies": {
-    "react-native": "0.74.x"
+    "react-native": "^0.73.1",
+    "react-native-device-info": "^14.0.0",
+    "react-native-root-siblings": "^5.0.1",
+    "react-native-safe-area-context": "4.8.2",
+    "react-native-gesture-handler": "~2.14.0",
+    "react-native-screens": "~3.29.0"
   },
   "devDependencies": {
-    "@react-native/metro-config": "^0.74.0"
+    "@react-native/metro-config": "0.73.2"
   }
 }
 ```
+
+要求：
+
+- 依赖版本必须与 `Taro 4.1.11` 的 peer 约束对齐。
+- 不提前加入依赖 `frontend-taro/android/` 已存在的脚本。
 
 - [ ] **步骤 4：新增 RN 配置与入口**
 
@@ -172,7 +179,13 @@ export function isRnEnv(env?: string) {
 
 预期：Taro 能识别 `rn` 目标；若仍缺少后续原生工程，会报告后续缺口，但不应再报未知脚本或未知端类型错误。
 
-- [ ] **步骤 9：Commit**
+- [ ] **步骤 9：验证依赖树处于可接受状态**
+
+运行：`npm ls react-native-root-siblings react-native-device-info react-native-gesture-handler react-native-safe-area-context react-native-screens --depth=0`
+
+预期：以上依赖可正常解析，且版本落在 `Taro 4.1.11` peer 允许范围内。
+
+- [ ] **步骤 10：Commit**
 
 ```bash
 git add frontend-taro/package.json frontend-taro/package-lock.json frontend-taro/config/index.ts frontend-taro/config/rn.ts frontend-taro/index.js frontend-taro/tsconfig.json frontend-taro/src/utils
@@ -186,6 +199,8 @@ git commit -m "feat(RN基础): 初始化 Taro React Native 构建配置"
 - 创建：`frontend-taro/metro.config.js`
 - 修改：`frontend-taro/babel.config.js`
 - 创建：`frontend-taro/android/` 下 Gradle 工程文件
+- 修改：`frontend-taro/package.json`
+- 修改：`frontend-taro/package-lock.json`
 - 修改：`.gitignore`
 
 - [ ] **步骤 1：创建 RN 适配选择失败测试**
@@ -231,6 +246,18 @@ module.exports = mergeConfig(getDefaultConfig(__dirname), {})
 ```js
 module.exports = {
   presets: ['babel-preset-taro', '@react-native/babel-preset']
+}
+```
+
+并在此任务中补齐 Android 相关脚本：
+
+```json
+{
+  "scripts": {
+    "android": "react-native run-android",
+    "apk:debug": "cd android && gradlew assembleDebug",
+    "apk:release": "cd android && gradlew assembleRelease"
+  }
 }
 ```
 
@@ -282,7 +309,7 @@ frontend-taro/.metro/
 - [ ] **步骤 9：Commit**
 
 ```bash
-git add frontend-taro/rn-cli.config.js frontend-taro/metro.config.js frontend-taro/babel.config.js frontend-taro/android .gitignore frontend-taro/src/adapters/runtime.ts frontend-taro/src/adapters/__tests__/rn-adapter-selection.test.ts
+git add frontend-taro/package.json frontend-taro/package-lock.json frontend-taro/rn-cli.config.js frontend-taro/metro.config.js frontend-taro/babel.config.js frontend-taro/android .gitignore frontend-taro/src/adapters/runtime.ts frontend-taro/src/adapters/__tests__/rn-adapter-selection.test.ts
 git commit -m "feat(Android工程): 生成 RN Android 原生工程与打包基础"
 ```
 

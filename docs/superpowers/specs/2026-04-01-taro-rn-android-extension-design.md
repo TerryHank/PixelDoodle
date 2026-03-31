@@ -117,16 +117,15 @@ frontend-taro/
 
 ### 7.2 新增脚本
 
-建议新增以下脚本：
+脚本分两阶段引入。
+
+第一阶段先补 RN 构建脚本：
 
 ```json
 {
   "scripts": {
     "dev:rn": "taro build --type rn --watch",
-    "build:rn": "taro build --type rn",
-    "android": "react-native run-android",
-    "apk:debug": "cd android && gradlew assembleDebug",
-    "apk:release": "cd android && gradlew assembleRelease"
+    "build:rn": "taro build --type rn"
   }
 }
 ```
@@ -134,8 +133,49 @@ frontend-taro/
 说明：
 
 - `build:rn` 负责生成 RN 侧 JS bundle 和工程依赖产物。
+
+第二阶段在 `frontend-taro/android/` 原生工程生成后，再补：
+
+```json
+{
+  "scripts": {
+    "android": "react-native run-android",
+    "apk:debug": "cd android && gradlew assembleDebug",
+    "apk:release": "cd android && gradlew assembleRelease"
+  }
+}
+```
+
 - `android` 用于本地调试运行。
 - `apk:debug` 与 `apk:release` 用于明确出包路径。
+
+### 7.3 RN 依赖基线
+
+RN 依赖版本必须与 `Taro 4.1.11` 的 peer 约束保持一致，避免靠 `--legacy-peer-deps` 强行落地一个不稳定组合。
+
+推荐以以下基线为准：
+
+```json
+{
+  "dependencies": {
+    "react-native": "^0.73.1",
+    "react-native-device-info": "^14.0.0",
+    "react-native-root-siblings": "^5.0.1",
+    "react-native-safe-area-context": "4.8.2",
+    "react-native-gesture-handler": "~2.14.0",
+    "react-native-screens": "~3.29.0"
+  },
+  "devDependencies": {
+    "@react-native/metro-config": "0.73.2"
+  }
+}
+```
+
+说明：
+
+- 不以 `0.74.x` 作为首轮基线。
+- 如需补齐更完整的 RN peer，优先按照 Taro RN 当前 peer 依赖对齐。
+- Android 工程生成前，不提前引入依赖于 `android/` 目录存在的脚本验证。
 
 ## 8. 代码分层设计
 
@@ -333,12 +373,13 @@ Android 链路要真正跑通并产出 APK，机器必须具备以下前提：
 
 1. 为 `frontend-taro` 增加 `RN` 依赖和脚本。
 2. 增加 `rn` 端配置并确认 `build:rn` 可执行。
-3. 生成 `android/` 原生工程。
-4. 补 `RN` 端适配器骨架。
-5. 优先保证首页、图片生成和导出链路在 Android 可运行。
-6. 打通 Android Studio 调试。
-7. 打通 `debug/release APK` 构建。
-8. 第二阶段再继续补 BLE / 扫码 / WiFi 体验追平。
+3. 依照 Taro RN peer 约束校准依赖版本。
+4. 生成 `android/` 原生工程。
+5. 补 `RN` 端适配器骨架。
+6. 优先保证首页、图片生成和导出链路在 Android 可运行。
+7. 打通 Android Studio 调试。
+8. 打通 `debug/release APK` 构建。
+9. 第二阶段再继续补 BLE / 扫码 / WiFi 体验追平。
 
 ## 15. 结论
 
