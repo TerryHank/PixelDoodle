@@ -36,6 +36,10 @@ uploads/
 .superpowers/
 .worktrees/
 frontend-taro/dist/
+frontend-taro/dist-rn/
 frontend-taro/.temp/
+frontend-taro/.metro/
 frontend-taro/node_modules/
 frontend-taro/.swc/
+frontend-taro/android/.gradle/
+frontend-taro/android/app/build/

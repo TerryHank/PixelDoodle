@@ -16,6 +16,9 @@
     "build:h5": "taro build --type h5",
     "dev:rn": "taro build --type rn --watch",
     "build:rn": "taro build --type rn",
+    "android": "react-native run-android",
+    "apk:debug": "cd android && gradlew.bat assembleDebug",
+    "apk:release": "cd android && gradlew.bat assembleRelease",
     "test": "vitest run"
   },
   "browserslist": [
