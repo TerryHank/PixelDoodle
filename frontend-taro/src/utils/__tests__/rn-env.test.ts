@@ -1,9 +1,14 @@
 import { describe, expect, it } from 'vitest'
 import packageJson from '../../../package.json'
 import rnConfig from '../../../config/rn'
+import { getApiBaseUrlByEnv } from '../../services/env'
 import { isRnEnv } from '../rn-env'
 
 describe('rn env utils', () => {
+  it('returns explicit rn base url', () => {
+    expect(getApiBaseUrlByEnv('rn', 'http://10.0.2.2:8765')).toBe('http://10.0.2.2:8765')
+  })
+
   it('detects rn environment', () => {
     expect(isRnEnv('rn')).toBe(true)
   })
