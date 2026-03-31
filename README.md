@@ -5,6 +5,7 @@ PixelDoodle（像素豆绘）是一个“图片转拼豆图 + ESP32 点阵显示
 **Version: 5.26.316**
 
 - Web 前端（上传、裁剪、生成、导出、扫码）
+- Taro 多端前端（`frontend-taro/`，支持 H5 / 微信小程序）
 - Python/FastAPI 后端（调色、量化、导出、串口接口）
 - ESP32 固件（BLE 接收图像、设备 UUID、二维码配对页）
 
@@ -29,6 +30,7 @@ PixelDoodle（像素豆绘）是一个“图片转拼豆图 + ESP32 点阵显示
 ```text
 PixelDoodle/
 ├─ main.py                    # FastAPI 入口
+├─ frontend-taro/             # Taro 多端前端（H5 / 微信小程序）
 ├─ requirements.txt
 ├─ core/                      # 图像处理、串口/BLE 后端能力
 ├─ static/                    # 前端 JS/CSS
@@ -52,6 +54,12 @@ PixelDoodle/
 - Python 3.8+
 - Windows/macOS/Linux
 
+### Taro 前端
+
+- Node.js 18+
+- npm 9+
+- 微信开发者工具（调试小程序时）
+
 ### 固件
 
 - PlatformIO（CLI）
@@ -66,9 +74,42 @@ PixelDoodle/
 
 ---
 
-## 4. 本地启动（Web）
+## 4. Taro 前端开发
 
 在项目根目录执行：
+
+```bash
+cd frontend-taro
+npm install
+npm run dev:h5
+# 或
+npm run dev:weapp
+```
+
+构建命令：
+
+```bash
+cd frontend-taro
+npm run build:h5
+npm run build:weapp
+```
+
+说明：
+
+- `frontend-taro/` 是当前主线前端，目标端为 H5 和微信小程序。
+- 项目根目录下 `static/` 与 `templates/` 中的旧网页前端可作为迁移对照，但不再是新的主开发入口。
+- Taro 前端依赖项目根目录的 FastAPI 服务提供 `/api/palette`、`/api/generate`、`/api/export/*`、`/api/wifi/*` 等接口。
+
+## 5. 本地启动（FastAPI）
+
+在项目根目录执行：
+
+```bash
+pip install -r requirements.txt
+python main.py
+```
+
+FastAPI 仍运行在项目根目录，供 Taro H5 和微信小程序共用：
 
 ```bash
 pip install -r requirements.txt
@@ -89,7 +130,7 @@ python main.py
 
 ---
 
-## 5. 固件编译与烧录
+## 6. 固件编译与烧录
 
 进入固件目录：
 
@@ -117,7 +158,7 @@ https://10.39.251.173:8765/?u=F42DC97179B4
 
 ---
 
-## 6. 配对与发送流程（推荐）
+## 7. 配对与发送流程（推荐）
 
 1. ESP32 上电，显示二维码和设备 UUID。
 2. 前端点击扫码，或手动输入 UUID。
@@ -132,7 +173,7 @@ https://10.39.251.173:8765/?u=F42DC97179B4
 
 ---
 
-## 7. API 速览
+## 8. API 速览
 
 核心接口在 [main.py](./main.py)：
 
@@ -147,12 +188,15 @@ https://10.39.251.173:8765/?u=F42DC97179B4
 - `POST /api/serial/highlight`
 - `GET /api/ble/devices`（旧后端 BLE 扫描）
 - `POST /api/ble/send`（旧后端 BLE 发送）
+- `POST /api/wifi/register`
+- `POST /api/wifi/send`
+- `POST /api/wifi/highlight`
 
 备注：当前主流程已改为浏览器 Web Bluetooth 直连，`/api/ble/*` 主要用于兼容旧方案。
 
 ---
 
-## 8. 常见问题
+## 9. 常见问题
 
 ### Q1：浏览器提示“找不到兼容设备”
 
@@ -177,14 +221,14 @@ https://10.39.251.173:8765/?u=F42DC97179B4
 
 ---
 
-## 9. 开发建议
+## 10. 开发建议
 
-- 前端调试：优先桌面 Chrome/Edge
+- 前端调试：Taro H5 优先桌面 Chrome/Edge，小程序请使用微信开发者工具
 - BLE 联调：先确认设备名、再确认 GATT UUID
 - 固件改动后：务必重新烧录并观察串口日志
 
 ---
 
-## 10. License
+## 11. License
 
 MIT
