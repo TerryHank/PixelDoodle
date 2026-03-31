@@ -25,8 +25,7 @@ describe('rn env utils', () => {
   })
 
   it('exposes rn build scripts', () => {
-    expect(packageJson.scripts?.android).toBe('react-native run-android')
-    expect(packageJson.scripts?.['apk:debug']).toBe('cd android && gradlew assembleDebug')
-    expect(packageJson.scripts?.['apk:release']).toBe('cd android && gradlew assembleRelease')
+    expect(packageJson.scripts?.['dev:rn']).toBe('taro build --type rn --watch')
+    expect(packageJson.scripts?.['build:rn']).toBe('taro build --type rn')
   })
 })
