@@ -76,11 +76,11 @@ android {
 
     namespace "com.pixeldoodle.app"
     defaultConfig {
-        applicationId "com.pixeldoodle.app"
-        minSdkVersion rootProject.ext.minSdkVersion
-        targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode 1
-        versionName "1.0"
+        applicationId "com.pixeldoodle"
+        minSdkVersion 24
+        targetSdkVersion 34
+        versionCode 52641
+        versionName "5.26.41"
     }
     signingConfigs {
         debug {
@@ -95,8 +95,7 @@ android {
             signingConfig signingConfigs.debug
         }
         release {
-            // Caution! In production, you need to generate your own keystore file.
-            // see https://reactnative.dev/docs/signed-apk-android.
+            // Keep release buildable in local/dev environments until a production keystore is ready.
             signingConfig signingConfigs.debug
             minifyEnabled enableProguardInReleaseBuilds
             proguardFiles getDefaultProguardFile("proguard-android.txt"), "proguard-rules.pro"
