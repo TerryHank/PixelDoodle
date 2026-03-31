@@ -59,7 +59,7 @@
 
 1. 继续保留现有 `src/pages`、`src/components`、`src/store`、`src/services`。
 2. 在 `config` 中扩展 `rn` 端配置。
-3. 在 `package.json` 中新增 `dev:rn`、`build:rn` 及 Android 构建脚本。
+3. 在 `package.json` 中先新增 `dev:rn`、`build:rn`。
 4. 在 `src/adapters` 下新增 `rn.ts` 实现，承接 BLE、扫码和文件保存的端差异。
 5. 在 `frontend-taro/android/` 下生成 Android 原生工程。
 6. 后续通过 Android Studio 或 Gradle 构建 `debug/release APK`。

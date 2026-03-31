@@ -32,7 +32,6 @@
 - `frontend-taro/package.json`：新增 RN 依赖与脚本。
 - `frontend-taro/package-lock.json`：依赖锁文件。
 - `frontend-taro/config/index.ts`：加入 RN 端配置合并。
-- `frontend-taro/tsconfig.json`：补充 RN 侧类型或路径设置。
 - `frontend-taro/src/adapters/ble/index.ts`：增加 `rn` 端分发。
 - `frontend-taro/src/adapters/scan/index.ts`：增加 `rn` 端分发。
 - `frontend-taro/src/adapters/file/index.ts`：增加 `rn` 端分发。
@@ -58,7 +57,6 @@
 - 修改：`frontend-taro/config/index.ts`
 - 创建：`frontend-taro/config/rn.ts`
 - 创建：`frontend-taro/index.js`
-- 修改：`frontend-taro/tsconfig.json`
 
 - [ ] **步骤 1：编写 RN 环境辅助失败测试**
 
@@ -188,7 +186,7 @@ export function isRnEnv(env?: string) {
 - [ ] **步骤 10：Commit**
 
 ```bash
-git add frontend-taro/package.json frontend-taro/package-lock.json frontend-taro/config/index.ts frontend-taro/config/rn.ts frontend-taro/index.js frontend-taro/tsconfig.json frontend-taro/src/utils
+git add frontend-taro/package.json frontend-taro/package-lock.json frontend-taro/config/index.ts frontend-taro/config/rn.ts frontend-taro/index.js frontend-taro/src/utils
 git commit -m "feat(RN基础): 初始化 Taro React Native 构建配置"
 ```
 
