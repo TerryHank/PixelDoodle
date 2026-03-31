@@ -1,6 +1,6 @@
 import Taro from '@tarojs/taro'
 import { useEffect, useRef, useState } from 'react'
-import { View } from '@tarojs/components'
+import { Text, View } from '@tarojs/components'
 import { bleAdapter } from '@/adapters/ble'
 import { fileAdapter } from '@/adapters/file'
 import { scanAdapter } from '@/adapters/scan'
@@ -98,6 +98,8 @@ export default function HomePage() {
   const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const [manualUuid, setManualUuid] = useState('')
   const [wifiPassword, setWifiPassword] = useState('')
+  const currentEnv = process.env.TARO_ENV
+  const isRnRuntime = currentEnv === 'rn'
 
   const pixelMatrix = usePatternStore((state) => state.pixelMatrix)
   const colorSummary = usePatternStore((state) => state.colorSummary)
@@ -232,6 +234,11 @@ export default function HomePage() {
 
     if (!hasGeneratedPattern(currentState.pixelMatrix)) {
       showToast('请先上传或选择示例图')
+      return
+    }
+
+    if (isRnRuntime) {
+      showToast('RN Android 端导出文件保存尚未接通，当前无法完成保存')
       return
     }
 
@@ -593,7 +600,8 @@ export default function HomePage() {
   const vm = buildHomeViewModel({
     pixelMatrix,
     targetDeviceUuid,
-    colorSummaryCount: colorSummary.length
+    colorSummaryCount: colorSummary.length,
+    env: currentEnv
   })
 
   return (
@@ -612,6 +620,31 @@ export default function HomePage() {
           onPickImage={handlePickImage}
           onToggleBackground={handleToggleBackground}
         />
+        {vm.showRnCapabilityHint ? (
+          <View
+            style={{
+              width: '100%',
+              maxWidth: 720,
+              marginBottom: 12,
+              paddingVertical: 12,
+              paddingHorizontal: 14,
+              borderRadius: 16,
+              backgroundColor: 'rgba(254, 249, 195, 0.92)',
+              borderWidth: 1,
+              borderColor: 'rgba(250, 204, 21, 0.5)'
+            }}
+          >
+            <Text
+              style={{
+                fontSize: 12,
+                lineHeight: 18,
+                color: '#854d0e'
+              }}
+            >
+              Android 端已启用 RN 工程；BLE、扫码与文件保存能力将逐步补齐。
+            </Text>
+          </View>
+        ) : null}
         <CanvasPanel
           previewImage={previewImage}
           showDeviceChip={vm.showDeviceChip}

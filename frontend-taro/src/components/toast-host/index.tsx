@@ -6,9 +6,13 @@ export interface ToastHostProps {
 }
 
 export function ToastHost({ message = '' }: ToastHostProps) {
+  if (!message) {
+    return null
+  }
+
   return (
-    <View className={`toast-host ${message ? 'toast-host--visible' : ''}`}>
-      {message ? <Text className='toast-host__message'>{message}</Text> : null}
+    <View className='toast-host toast-host--visible'>
+      <Text className='toast-host__message'>{message}</Text>
     </View>
   )
 }

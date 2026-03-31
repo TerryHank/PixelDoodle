@@ -22,4 +22,14 @@ describe('buildHomeViewModel', () => {
     expect(vm.showUploadGuide).toBe(false)
     expect(vm.showColorPanel).toBe(true)
   })
+
+  it('shows the RN capability hint when running in RN', () => {
+    const vm = buildHomeViewModel({
+      pixelMatrix: [],
+      targetDeviceUuid: '',
+      env: 'rn'
+    })
+
+    expect(vm.showRnCapabilityHint).toBe(true)
+  })
 })

@@ -26,6 +26,8 @@ export function SettingsSheet({
   onSend,
   onExport
 }: SettingsSheetProps) {
+  const isRnRuntime = process.env.TARO_ENV === 'rn'
+
   if (!visible) {
     return null
   }
@@ -72,6 +74,11 @@ export function SettingsSheet({
             <Text className='settings-sheet__summary-hint'>
               切换到 WiFi 后，请通过顶部“扫”按钮完成热点扫描和配网。
             </Text>
+            {isRnRuntime ? (
+              <Text className='settings-sheet__summary-hint'>
+                RN Android 端当前未接通导出文件保存，点击导出会提示失败原因。
+              </Text>
+            ) : null}
           </View>
 
           <View

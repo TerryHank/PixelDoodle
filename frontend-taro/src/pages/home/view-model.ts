@@ -4,6 +4,7 @@ export interface BuildHomeViewModelInput {
   pixelMatrix: PixelMatrix
   targetDeviceUuid: string
   colorSummaryCount?: number
+  env?: string
 }
 
 function hasGeneratedPattern(pixelMatrix: PixelMatrix) {
@@ -17,6 +18,7 @@ export function buildHomeViewModel(input: BuildHomeViewModelInput) {
     showUploadGuide: !hasPattern,
     showDeviceChip: Boolean(input.targetDeviceUuid),
     showExampleGallery: !hasPattern,
-    showColorPanel: (input.colorSummaryCount ?? 0) > 0
+    showColorPanel: (input.colorSummaryCount ?? 0) > 0,
+    showRnCapabilityHint: input.env === 'rn'
   }
 }

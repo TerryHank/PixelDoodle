@@ -55,6 +55,8 @@ export function PairSheet({
   onWifiPasswordChange,
   onConnectWifi
 }: PairSheetProps) {
+  const isRnRuntime = process.env.TARO_ENV === 'rn'
+
   if (!visible) {
     return null
   }
@@ -106,6 +108,12 @@ export function PairSheet({
             </Text>
           </View>
 
+          {isRnRuntime ? (
+            <View className='pair-sheet__group'>
+              <Text className='pair-sheet__hint'>RN Android 端当前请优先手动输入 UUID。</Text>
+            </View>
+          ) : null}
+
           <View className='pair-sheet__group'>
             <Text className='pair-sheet__label'>目标 UUID</Text>
             <Input
@@ -118,7 +126,11 @@ export function PairSheet({
             {targetDeviceUuid ? (
               <Text className='pair-sheet__hint'>当前锁定：{targetDeviceUuid}</Text>
             ) : (
-              <Text className='pair-sheet__hint'>不输入时可直接选择附近的 BeadCraft 设备</Text>
+              <Text className='pair-sheet__hint'>
+                {isRnRuntime
+                  ? 'RN Android 端暂不支持扫码自动填充，请先手动输入 12 位 UUID'
+                  : '不输入时可直接选择附近的 BeadCraft 设备'}
+              </Text>
             )}
           </View>
 
