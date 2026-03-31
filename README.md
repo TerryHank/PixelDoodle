@@ -59,6 +59,10 @@ PixelDoodle/
 - Node.js 18+
 - npm 9+
 - 微信开发者工具（调试小程序时）
+- JDK（Android / RN 构建）
+- Android SDK（Android / RN 构建）
+- adb（设备调试）
+- Android Studio（打开 `frontend-taro/android`）
 
 ### 固件
 
@@ -84,6 +88,8 @@ npm install
 npm run dev:h5
 # 或
 npm run dev:weapp
+# 或
+npm run dev:rn
 ```
 
 构建命令：
@@ -92,11 +98,17 @@ npm run dev:weapp
 cd frontend-taro
 npm run build:h5
 npm run build:weapp
+npm run build:rn
+npm run apk:debug
+npm run apk:release
 ```
 
 说明：
 
-- `frontend-taro/` 是当前主线前端，目标端为 H5 和微信小程序。
+- `frontend-taro/` 是当前主线前端，目标端为 H5、微信小程序和 RN Android。
+- Taro RN Android 调试命令可直接执行：`cd frontend-taro && npm install && npm run dev:rn`。
+- Android Studio 请直接打开 `frontend-taro/android`。
+- APK 构建命令为 `npm run apk:debug` 和 `npm run apk:release`。
 - 项目根目录下 `static/` 与 `templates/` 中的旧网页前端可作为迁移对照，但不再是新的主开发入口。
 - Taro 前端依赖项目根目录的 FastAPI 服务提供 `/api/palette`、`/api/generate`、`/api/export/*`、`/api/wifi/*` 等接口。
 
