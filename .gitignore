@@ -33,3 +33,5 @@ uploads/
 
 # Test artifacts
 /tmp/
+.superpowers/
+.worktrees/
