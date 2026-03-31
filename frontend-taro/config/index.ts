@@ -7,7 +7,7 @@ import rnConfig from './rn'
 import prodConfig from './prod'
 
 // https://taro-docs.jd.com/docs/next/config#defineconfig-辅助函数
-export default defineConfig<'webpack5'>(async (merge, { command }) => {
+export default defineConfig<'webpack5'>(async (merge) => {
   const baseConfig: UserConfigExport<'webpack5'> = {
     projectName: 'frontend-taro',
     date: '2026-3-31',

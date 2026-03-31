@@ -20,10 +20,6 @@
     "typeRoots": [
       "node_modules/@types"
     ],
-    "types": [
-      "node",
-      "react-native"
-    ],
     "paths": {
       // TS5090 leading './'
       "@/*": ["./src/*"]
