@@ -1,3 +1,5 @@
+import path from 'node:path'
+
 import { defineConfig, type UserConfigExport } from '@tarojs/cli'
 import TsconfigPathsPlugin from 'tsconfig-paths-webpack-plugin'
 import devConfig from './dev'
@@ -20,7 +22,7 @@ export default defineConfig<'webpack5'>(async (merge, { command }) => {
     framework: 'react',
     compiler: 'webpack5',
     alias: {
-      '@': '../src'
+      '@': path.resolve(__dirname, '..', 'src')
     },
     mini: {
       postcss: {
