@@ -1,6 +1,7 @@
 import Taro from '@tarojs/taro'
 import { useEffect, useRef } from 'react'
 import { View } from '@tarojs/components'
+import { bleAdapter } from '@/adapters/ble'
 import { fileAdapter } from '@/adapters/file'
 import { CanvasPanel } from '@/components/canvas-panel'
 import { ColorPanel } from '@/components/color-panel'
@@ -93,6 +94,9 @@ export default function HomePage() {
 
   const targetDeviceUuid = useDeviceStore((state) => state.targetDeviceUuid)
   const connectionMode = useDeviceStore((state) => state.connectionMode)
+  const bleConnectionStatus = useDeviceStore((state) => state.bleConnectionStatus)
+  const bleCharacteristicStatus = useDeviceStore((state) => state.bleCharacteristicStatus)
+  const activeHighlightCodes = useDeviceStore((state) => state.activeHighlightCodes)
 
   const toastMessage = useUIStore((state) => state.toastMessage)
 
@@ -140,6 +144,7 @@ export default function HomePage() {
 
     try {
       await usePatternStore.getState().generateFromFile(filePath, { fileName })
+      useDeviceStore.getState().clearHighlightCodes()
       showToast('图案已生成')
     } finally {
       Taro.hideLoading()
@@ -307,9 +312,52 @@ export default function HomePage() {
 
   function handleClear() {
     usePatternStore.getState().clear()
+    useDeviceStore.getState().clearHighlightCodes()
     useUIStore.setState({
       toastMessage: ''
     })
+  }
+
+  async function handleOpenPairSheet() {
+    if (process.env.TARO_ENV !== 'h5') {
+      showToast('扫码与小程序蓝牙会在下一步接入')
+      return
+    }
+
+    useDeviceStore.getState().setBleConnectionStatus('connecting')
+    useDeviceStore.getState().setBleCharacteristicStatus('discovering')
+
+    try {
+      await bleAdapter.connectTargetDevice(targetDeviceUuid || undefined)
+      useDeviceStore.getState().setBleConnectionStatus('connected')
+      useDeviceStore.getState().setBleCharacteristicStatus('ready')
+      showToast(targetDeviceUuid ? `蓝牙已连接 ${targetDeviceUuid}` : '蓝牙连接成功')
+    } catch (error) {
+      useDeviceStore.getState().setBleConnectionStatus('error')
+      useDeviceStore.getState().setBleCharacteristicStatus('error')
+      showToast(error instanceof Error ? error.message : '蓝牙连接失败')
+    }
+  }
+
+  async function handleToggleColor(code: string) {
+    const nextCodes = useDeviceStore.getState().toggleHighlightCode(code)
+    const highlightRgb = nextCodes
+      .map((itemCode) => colorSummary.find((item) => item.code === itemCode)?.rgb)
+      .filter((rgb): rgb is [number, number, number] => Array.isArray(rgb))
+
+    if (
+      connectionMode !== 'ble' ||
+      bleConnectionStatus !== 'connected' ||
+      bleCharacteristicStatus !== 'ready'
+    ) {
+      return
+    }
+
+    try {
+      await bleAdapter.sendHighlight(highlightRgb)
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : '颜色高亮同步失败')
+    }
   }
 
   const vm = buildHomeViewModel({
@@ -329,7 +377,7 @@ export default function HomePage() {
           removeBackground={removeBackground}
           targetDeviceUuid={targetDeviceUuid}
           onClear={handleClear}
-          onOpenPairSheet={() => showToast('配对弹层会在下一步接入')}
+          onOpenPairSheet={handleOpenPairSheet}
           onOpenSettings={handleOpenSettings}
           onPickImage={handlePickImage}
           onToggleBackground={handleToggleBackground}
@@ -344,7 +392,12 @@ export default function HomePage() {
           <ExampleGallery items={EXAMPLE_ITEMS} onSelectExample={handleSelectExample} />
         ) : null}
         {vm.showColorPanel ? (
-          <ColorPanel colors={colorSummary} totalBeads={totalBeads} />
+          <ColorPanel
+            activeCodes={activeHighlightCodes}
+            colors={colorSummary}
+            totalBeads={totalBeads}
+            onToggleColor={handleToggleColor}
+          />
         ) : null}
       </View>
       <ToastHost message={toastMessage} />

@@ -15,6 +15,15 @@
   box-shadow: var(--shadow-soft);
 }
 
+.color-panel__row--active {
+  border-color: rgba(37, 99, 235, 0.5);
+  background: rgba(239, 246, 255, 0.96);
+}
+
+.color-panel__row--muted {
+  opacity: 0.5;
+}
+
 .color-panel__meta {
   display: flex;
   align-items: center;
