@@ -1,7 +1,8 @@
 import Taro from '@tarojs/taro'
-import { useEffect, useRef } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { View } from '@tarojs/components'
 import { bleAdapter } from '@/adapters/ble'
+import { scanAdapter } from '@/adapters/scan'
 import { fileAdapter } from '@/adapters/file'
 import { CanvasPanel } from '@/components/canvas-panel'
 import { ColorPanel } from '@/components/color-panel'
@@ -9,6 +10,7 @@ import {
   type ExampleGalleryItem,
   ExampleGallery
 } from '@/components/example-gallery'
+import { PairSheet } from '@/components/pair-sheet'
 import { ToastHost } from '@/components/toast-host'
 import { Toolbar } from '@/components/toolbar'
 import { useDeviceStore } from '@/store/device-store'
@@ -25,6 +27,7 @@ import {
   getExportFileName,
   getExportMimeType
 } from '@/utils/export'
+import { isUuidLike, normalizeUuid } from '@/utils/uuid'
 import { buildHomeViewModel } from './view-model'
 import './index.scss'
 
@@ -82,6 +85,7 @@ function hasGeneratedPattern(pixelMatrix: string[][] | (string | null)[][]) {
 
 export default function HomePage() {
   const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const [manualUuid, setManualUuid] = useState('')
 
   const pixelMatrix = usePatternStore((state) => state.pixelMatrix)
   const colorSummary = usePatternStore((state) => state.colorSummary)
@@ -99,6 +103,7 @@ export default function HomePage() {
   const activeHighlightCodes = useDeviceStore((state) => state.activeHighlightCodes)
 
   const toastMessage = useUIStore((state) => state.toastMessage)
+  const isPairSheetOpen = useUIStore((state) => state.isPairSheetOpen)
 
   useEffect(() => {
     if (fullPaletteList.length > 0) {
@@ -318,20 +323,54 @@ export default function HomePage() {
     })
   }
 
-  async function handleOpenPairSheet() {
-    if (process.env.TARO_ENV !== 'h5') {
-      showToast('扫码与小程序蓝牙会在下一步接入')
+  function handleOpenPairSheet() {
+    setManualUuid(targetDeviceUuid)
+    useUIStore.setState({
+      isPairSheetOpen: true
+    })
+  }
+
+  function handleClosePairSheet() {
+    useUIStore.setState({
+      isPairSheetOpen: false
+    })
+  }
+
+  async function handleScanDevice() {
+    try {
+      const scannedUuid = await scanAdapter.scanDevice()
+      setManualUuid(scannedUuid)
+      useDeviceStore.setState({
+        targetDeviceUuid: scannedUuid
+      })
+      showToast(`已识别设备 ${scannedUuid}`)
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : '扫码失败')
+    }
+  }
+
+  async function handleConnectDevice() {
+    const normalizedUuid = manualUuid ? normalizeUuid(manualUuid) : ''
+
+    if (normalizedUuid && !isUuidLike(normalizedUuid)) {
+      showToast('请输入 12 位设备 UUID')
       return
     }
 
+    useDeviceStore.setState({
+      targetDeviceUuid: normalizedUuid || targetDeviceUuid
+    })
     useDeviceStore.getState().setBleConnectionStatus('connecting')
     useDeviceStore.getState().setBleCharacteristicStatus('discovering')
 
     try {
-      await bleAdapter.connectTargetDevice(targetDeviceUuid || undefined)
+      await bleAdapter.connectTargetDevice(normalizedUuid || undefined)
       useDeviceStore.getState().setBleConnectionStatus('connected')
       useDeviceStore.getState().setBleCharacteristicStatus('ready')
-      showToast(targetDeviceUuid ? `蓝牙已连接 ${targetDeviceUuid}` : '蓝牙连接成功')
+      useUIStore.setState({
+        isPairSheetOpen: false
+      })
+      showToast(normalizedUuid ? `蓝牙已连接 ${normalizedUuid}` : '蓝牙连接成功')
     } catch (error) {
       useDeviceStore.getState().setBleConnectionStatus('error')
       useDeviceStore.getState().setBleCharacteristicStatus('error')
@@ -400,6 +439,16 @@ export default function HomePage() {
           />
         ) : null}
       </View>
+      <PairSheet
+        bleConnectionStatus={bleConnectionStatus}
+        manualUuid={manualUuid}
+        targetDeviceUuid={targetDeviceUuid}
+        visible={isPairSheetOpen}
+        onClose={handleClosePairSheet}
+        onConnect={handleConnectDevice}
+        onManualUuidChange={setManualUuid}
+        onScan={handleScanDevice}
+      />
       <ToastHost message={toastMessage} />
     </View>
   )

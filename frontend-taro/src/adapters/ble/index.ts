@@ -1,4 +1,5 @@
 import { h5BleAdapter } from './h5'
+import { weappBleAdapter } from './weapp'
 import type { BleAdapter } from './types'
 
 const unsupportedBleAdapter: BleAdapter = {
@@ -17,4 +18,8 @@ const unsupportedBleAdapter: BleAdapter = {
 }
 
 export const bleAdapter =
-  process.env.TARO_ENV === 'h5' ? h5BleAdapter : unsupportedBleAdapter
+  process.env.TARO_ENV === 'h5'
+    ? h5BleAdapter
+    : process.env.TARO_ENV === 'weapp'
+      ? weappBleAdapter
+      : unsupportedBleAdapter
