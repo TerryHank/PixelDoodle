@@ -98,5 +98,7 @@ export interface WifiHighlightResponse {
 }
 
 export interface ApiErrorResponse {
-  detail: string
+  success?: false
+  message?: string
+  detail?: string
 }

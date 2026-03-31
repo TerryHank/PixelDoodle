@@ -15,7 +15,6 @@ export interface DeviceState {
   bleCharacteristicStatus: DeviceCharacteristicStatus
   wifiScanResults: WifiScanResult[]
   selectedWifiHotspot: WifiScanResult | null
-  registeredDeviceIp: string
   registeredWifiDevice: RegisteredWifiDevice | null
   isSending: boolean
 }
@@ -27,8 +26,6 @@ export const useDeviceStore = create<DeviceState>(() => ({
   bleCharacteristicStatus: 'idle',
   wifiScanResults: [],
   selectedWifiHotspot: null,
-  registeredDeviceIp: '',
   registeredWifiDevice: null,
   isSending: false
 }))
-
