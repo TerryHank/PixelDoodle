@@ -38,7 +38,3 @@ uploads/
 frontend-taro/dist/
 frontend-taro/.temp/
 frontend-taro/node_modules/
-frontend-taro/deploy_versions/
-frontend-taro/.rn_temp/
-frontend-taro/.swc/
-frontend-taro/*.local

@@ -1,7 +1,5 @@
-import type { PropsWithChildren } from 'react'
-
 import './app.scss'
 
-export default function App({ children }: PropsWithChildren<unknown>) {
+export default function App({ children }) {
   return children
 }
