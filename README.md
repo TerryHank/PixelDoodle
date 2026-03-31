@@ -5,7 +5,7 @@ PixelDoodle（像素豆绘）是一个“图片转拼豆图 + ESP32 点阵显示
 **Version: 5.26.41**
 
 - Web 前端（上传、裁剪、生成、导出、扫码）
-- Taro 多端前端（`frontend-taro/`，支持 H5 / 微信小程序）
+- Taro 多端前端（`frontend-taro/`，支持 H5 / 微信小程序 / RN Android）
 - Python/FastAPI 后端（调色、量化、导出、串口接口）
 - ESP32 固件（BLE 接收图像、设备 UUID、二维码配对页）
 
@@ -30,7 +30,7 @@ PixelDoodle（像素豆绘）是一个“图片转拼豆图 + ESP32 点阵显示
 ```text
 PixelDoodle/
 ├─ main.py                    # FastAPI 入口
-├─ frontend-taro/             # Taro 多端前端（H5 / 微信小程序）
+├─ frontend-taro/             # Taro 多端前端（H5 / 微信小程序 / RN Android）
 ├─ requirements.txt
 ├─ core/                      # 图像处理、串口/BLE 后端能力
 ├─ static/                    # 前端 JS/CSS
@@ -109,6 +109,7 @@ npm run apk:release
 - Taro RN Android 调试命令可直接执行：`cd frontend-taro && npm install && npm run dev:rn`。
 - Android Studio 请直接打开 `frontend-taro/android`。
 - APK 构建命令为 `npm run apk:debug` 和 `npm run apk:release`。
+- 当前 `npm run apk:release` 仍复用 `debug.keystore`，只用于本地开发链路验证，不能作为正式发布包直接分发。
 - 项目根目录下 `static/` 与 `templates/` 中的旧网页前端可作为迁移对照，但不再是新的主开发入口。
 - Taro 前端依赖项目根目录的 FastAPI 服务提供 `/api/palette`、`/api/generate`、`/api/export/*`、`/api/wifi/*` 等接口。
 

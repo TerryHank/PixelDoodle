@@ -95,7 +95,7 @@ android {
             signingConfig signingConfigs.debug
         }
         release {
-            // Keep release buildable in local/dev environments until a production keystore is ready.
+            // Development-only release verification. Replace with a production keystore before shipping.
             signingConfig signingConfigs.debug
             minifyEnabled enableProguardInReleaseBuilds
             proguardFiles getDefaultProguardFile("proguard-android.txt"), "proguard-rules.pro"
