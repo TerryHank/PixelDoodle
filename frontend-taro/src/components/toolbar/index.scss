@@ -1,0 +1,86 @@
+.toolbar {
+  width: 100%;
+  max-width: 600px;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.toolbar__spacer {
+  flex: 1;
+}
+
+.toolbar__chip {
+  height: 36px;
+  padding: 0 12px;
+  border-radius: 999px;
+  border: 1px solid rgba(147, 197, 253, 0.9);
+  background: rgba(239, 246, 255, 0.96);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: #1d4ed8;
+  box-shadow: var(--shadow-soft);
+}
+
+.toolbar__chip-label,
+.toolbar__chip-value {
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.toolbar__button {
+  width: 36px;
+  height: 36px;
+  border-radius: 6px;
+  border: 2px dashed var(--border);
+  background: rgba(255, 255, 255, 0.82);
+  color: var(--text-secondary);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: var(--shadow-soft);
+}
+
+.toolbar__button--active {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.toolbar__button--compact {
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.toolbar__button--wide {
+  width: auto;
+  min-width: 56px;
+  padding: 0 10px;
+  border-style: solid;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.toolbar__button-plus {
+  font-size: 20px;
+  line-height: 1;
+}
+
+@media (max-width: 768px) {
+  .toolbar {
+    gap: 6px;
+    flex-wrap: wrap;
+    justify-content: flex-start;
+  }
+
+  .toolbar__spacer {
+    display: none;
+  }
+
+  .toolbar__chip {
+    order: -1;
+  }
+}

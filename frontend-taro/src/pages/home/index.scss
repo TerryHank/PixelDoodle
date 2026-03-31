@@ -1,0 +1,38 @@
+.home-page {
+  min-height: 100vh;
+  padding: 24px;
+  position: relative;
+}
+
+.home-page__shell {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding-top: 28px;
+}
+
+.home-page__badge {
+  position: fixed;
+  top: 12px;
+  right: 14px;
+  z-index: 20;
+  padding: 4px 10px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 700;
+  color: #1d4ed8;
+  background: rgba(239, 246, 255, 0.96);
+  border: 1px solid rgba(147, 197, 253, 0.9);
+  box-shadow: var(--shadow-soft);
+}
+
+@media (max-width: 768px) {
+  .home-page {
+    padding: 16px 12px 28px;
+  }
+
+  .home-page__shell {
+    padding-top: 40px;
+  }
+}

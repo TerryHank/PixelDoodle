@@ -38,3 +38,4 @@ uploads/
 frontend-taro/dist/
 frontend-taro/.temp/
 frontend-taro/node_modules/
+frontend-taro/.swc/
