@@ -33,3 +33,6 @@ uploads/
 
 # Test artifacts
 /tmp/
+
+# Local brainstorming artifacts
+.superpowers/
