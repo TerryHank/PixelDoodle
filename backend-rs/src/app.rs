@@ -6,12 +6,16 @@ use std::{
 use axum::{
     extract::Multipart,
     http::StatusCode,
+    response::{Html, IntoResponse},
     routing::{get, post},
     Json, Router,
 };
+use base64::Engine;
+use chrono::Local;
 use serde::Serialize;
 use serde_json::{json, Value};
 use tokio::process::Command;
+use tower_http::services::ServeDir;
 use uuid::Uuid;
 
 #[derive(Debug, Serialize)]
@@ -39,6 +43,13 @@ async fn get_palette() -> Json<PaletteResponse> {
     let colors = read_json_file(root.join("data").join("artkal_m_series.json")).await;
     let presets = read_json_file(root.join("data").join("artkal_presets.json")).await;
     Json(PaletteResponse { colors, presets })
+}
+
+async fn index() -> Result<Html<String>, (StatusCode, String)> {
+    let html = tokio::fs::read_to_string(repo_root().join("templates").join("index.html"))
+        .await
+        .map_err(|err| (StatusCode::INTERNAL_SERVER_ERROR, format!("Failed to load index: {err}")))?;
+    Ok(Html(html))
 }
 
 fn python_executable() -> &'static str {
@@ -166,8 +177,122 @@ async fn generate_pattern(mut multipart: Multipart) -> Result<Json<Value>, (Stat
     Ok(Json(payload))
 }
 
+async fn run_export_bridge(command: &str, payload: Value) -> Result<impl IntoResponse, (StatusCode, String)> {
+    let root = repo_root();
+    let work_dir = root.join("backend-rs").join("target").join("bridge");
+    tokio::fs::create_dir_all(&work_dir)
+        .await
+        .map_err(|err| (StatusCode::INTERNAL_SERVER_ERROR, format!("Failed to prepare bridge dir: {err}")))?;
+
+    let request_id = Uuid::new_v4().to_string();
+    let request_path = work_dir.join(format!("export-{request_id}.json"));
+    tokio::fs::write(
+        &request_path,
+        serde_json::to_vec(&payload)
+            .map_err(|err| (StatusCode::INTERNAL_SERVER_ERROR, format!("Failed to serialize export payload: {err}")))?,
+    )
+    .await
+    .map_err(|err| (StatusCode::INTERNAL_SERVER_ERROR, format!("Failed to persist export payload: {err}")))?;
+
+    let output = Command::new(python_executable())
+        .arg(root.join("tools").join("parity").join("export_baseline.py"))
+        .arg(command)
+        .arg(&request_path)
+        .current_dir(&root)
+        .output()
+        .await
+        .map_err(|err| (StatusCode::INTERNAL_SERVER_ERROR, format!("Failed to start export bridge: {err}")))?;
+
+    let _ = tokio::fs::remove_file(&request_path).await;
+
+    if !output.status.success() {
+        return Err((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Export failed: {}", String::from_utf8_lossy(&output.stderr).trim()),
+        ));
+    }
+
+    let payload: Value = serde_json::from_slice(&output.stdout)
+        .map_err(|err| (StatusCode::INTERNAL_SERVER_ERROR, format!("Failed to decode export output: {err}")))?;
+    let content_type = payload["content_type"]
+        .as_str()
+        .unwrap_or("application/octet-stream")
+        .to_string();
+    let filename = payload["filename"]
+        .as_str()
+        .unwrap_or("beadcraft_export.bin")
+        .to_string();
+    let body_base64 = payload["body_base64"]
+        .as_str()
+        .ok_or_else(|| (StatusCode::INTERNAL_SERVER_ERROR, "Export response missing body".to_string()))?;
+    let body = base64::engine::general_purpose::STANDARD
+        .decode(body_base64)
+        .map_err(|err| (StatusCode::INTERNAL_SERVER_ERROR, format!("Failed to decode export body: {err}")))?;
+
+    Ok((
+        [
+            (axum::http::header::CONTENT_TYPE, content_type),
+            (
+                axum::http::header::CONTENT_DISPOSITION,
+                format!("attachment; filename={filename}"),
+            ),
+        ],
+        body,
+    ))
+}
+
+async fn export_pattern_json(Json(data): Json<Value>) -> Result<impl IntoResponse, (StatusCode, String)> {
+    let pixel_matrix = data
+        .get("pixel_matrix")
+        .and_then(|value| value.as_array())
+        .ok_or_else(|| (StatusCode::BAD_REQUEST, "pixel_matrix is required".to_string()))?;
+    let width = pixel_matrix
+        .first()
+        .and_then(|row| row.as_array())
+        .map(|row| row.len())
+        .unwrap_or(0);
+    let height = pixel_matrix.len();
+
+    let export_data = json!({
+        "version": "1.0",
+        "exported_at": Local::now().to_rfc3339(),
+        "dimensions": {
+            "width": width,
+            "height": height,
+        },
+        "pixel_matrix": data.get("pixel_matrix").cloned().unwrap_or(Value::Null),
+        "color_summary": data.get("color_summary").cloned().unwrap_or_else(|| json!([])),
+    });
+
+    Ok((
+        [(axum::http::header::CONTENT_TYPE, "application/json".to_string())],
+        serde_json::to_vec_pretty(&export_data)
+            .map_err(|err| (StatusCode::INTERNAL_SERVER_ERROR, format!("JSON export failed: {err}")))?,
+    ))
+}
+
+async fn export_pattern_png(Json(data): Json<Value>) -> Result<impl IntoResponse, (StatusCode, String)> {
+    if data.get("pixel_matrix").is_none() {
+        return Err((StatusCode::BAD_REQUEST, "pixel_matrix is required".to_string()));
+    }
+    run_export_bridge("png", data).await
+}
+
+async fn export_pattern_pdf(Json(data): Json<Value>) -> Result<impl IntoResponse, (StatusCode, String)> {
+    if data.get("pixel_matrix").is_none() {
+        return Err((StatusCode::BAD_REQUEST, "pixel_matrix is required".to_string()));
+    }
+    run_export_bridge("pdf", data).await
+}
+
 pub async fn build_app() -> Router {
     Router::new()
+        .route("/", get(index))
         .route("/api/palette", get(get_palette))
         .route("/api/generate", post(generate_pattern))
+        .route("/api/export/json", post(export_pattern_json))
+        .route("/api/export/png", post(export_pattern_png))
+        .route("/api/export/pdf", post(export_pattern_pdf))
+        .nest_service("/static", ServeDir::new(repo_root().join("static")))
+        .nest_service("/examples", ServeDir::new(repo_root().join("docs").join("examples")))
 }

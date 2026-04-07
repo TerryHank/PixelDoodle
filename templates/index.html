@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>BeadCraft - Perler Bead Pattern Generator</title>
-  <link rel="stylesheet" href="/static/style.css?v=v8">
+  <link rel="stylesheet" href="/static/style.css?v=v9">
 </head>
 <body>
 
@@ -17,21 +17,17 @@
     <!-- Result Area -->
     <div id="result-area" style="width: 100%; max-width: 640px; margin: 0 auto;">
 
-      <div class="site-status-header">
-        <div class="site-version-badge">v8</div>
-        <div id="ble-target-chip" class="header-status-chip" style="display: none;"></div>
-      </div>
-
       <!-- Canvas Toolbar -->
         <div class="canvas-toolbar">
+          <button id="home-btn" class="toolbar-btn" onclick="goHome()" title="回到主页">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M3 10.5 12 3l9 7.5"></path>
+              <path d="M5 9.5V21h14V9.5"></path>
+              <path d="M9 21v-6h6v6"></path>
+            </svg>
+          </button>
           <button id="bg-toggle" class="toolbar-btn" onclick="toggleBackground()" title="自动去除背景">
             背
-          </button>
-          <button id="clear-btn" class="toolbar-btn" onclick="clearCanvas()" title="清除">
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <polyline points="3 6 5 6 21 6"></polyline>
-              <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
-            </svg>
           </button>
           <button id="upload-btn" class="toolbar-btn" onclick="document.getElementById('file-input').click()" title="上传">
             <span class="toolbar-btn-icon">+</span>
@@ -50,13 +46,14 @@
             <option value="52">52</option>
             <option value="64" selected>64</option>
           </select>
-          <button id="mode-quick-btn" class="toolbar-btn mode-quick-btn" onclick="cycleConnectionMode()" title="连接模式">
-            蓝牙
+          <button id="mode-quick-btn" class="toolbar-btn mode-quick-btn disconnected" onclick="handleQuickBleAction()" title="蓝牙连接状态">
+            未连接
           </button>
-          <button class="toolbar-btn" onclick="showSerialSettings()" title="设置">
+          <button id="export-btn" class="toolbar-btn" onclick="showExportDialog()" title="导出">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <circle cx="12" cy="12" r="3"></circle>
-              <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
+              <path d="M12 3v12"></path>
+              <path d="m7 10 5 5 5-5"></path>
+              <path d="M5 21h14"></path>
             </svg>
           </button>
         </div>
@@ -111,79 +108,51 @@
     </div>
   </div>
 
-  <script src="/static/i18n.js?v=v8"></script>
-  <script src="/static/app.js?v=v8"></script>
+  <script src="/static/i18n.js?v=v9"></script>
+  <script src="/static/app.js?v=v9"></script>
 
-  <!-- Settings Dialog -->
+  <!-- BLE Connection Dialog -->
   <div id="serial-settings-dialog" class="modal" style="display: none;">
     <div class="modal-content modal-content-form qr-modal-content">
       <div class="modal-header">
-        <h3>设置</h3>
+        <h3>蓝牙连接</h3>
         <button class="modal-close" onclick="hideSerialSettings()">&times;</button>
       </div>
       <div class="modal-body">
-        <!-- Connection Mode -->
-        <div class="form-group">
-          <label class="form-label">连接模式：</label>
-          <div class="mode-toggle">
-            <button class="mode-btn active" data-mode="ble" onclick="setConnectionMode('ble')">蓝牙</button>
-            <button class="mode-btn" data-mode="wifi" onclick="setConnectionMode('wifi')">WiFi</button>
-          </div>
-        </div>
-
-        <div id="wifi-settings" class="connection-settings" style="display: none;">
-          <div id="wifi-status-card" class="ble-status-card" style="display: block;">
-            请先通过蓝牙连接设备，WiFi 将作为同一台设备的备选发送路径
-          </div>
-          <div class="form-group">
-            <label class="form-label">当前设备：</label>
-            <select id="wifi-device-select">
-              <option value="">请先通过蓝牙连接设备</option>
-            </select>
-          </div>
-        </div>
-
-        <!-- BLE Device Selection (hidden by default) -->
         <div id="ble-settings" class="connection-settings">
           <div id="ble-status-card" class="ble-status-card" style="display: none;"></div>
           <div class="form-group">
             <label class="form-label">蓝牙设备：</label>
-            <select id="ble-device-select">
-              <option value="">扫描中...</option>
-            </select>
-            <button class="btn btn-small" onclick="refreshBLEDevices()">刷新</button>
-            <button id="ble-connect-btn" class="btn btn-primary btn-small ble-connect-btn" onclick="connectBLEDevice()">连接设备</button>
-          </div>
-        </div>
-        
-        <!-- Background Color -->
-        <div class="form-group">
-          <label class="form-label">背景色（透明区域）：</label>
-          <input type="color" id="serial-bg-color" value="#000000">
-        </div>
-
-        <div class="form-group">
-          <label class="form-label" for="brightness-slider" data-i18n="brightness.label">屏幕亮度：</label>
-          <div class="brightness-control">
-            <input type="range" id="brightness-slider" min="10" max="100" value="25">
-            <span id="brightness-value" class="brightness-value">25%</span>
-          </div>
-          <div id="brightness-hint" class="form-hint">请先连接设备后再同步亮度</div>
-        </div>
-        
-        <!-- Action Buttons -->
-        <div class="form-group" style="border-top: 1px solid #ddd; padding-top: 15px; margin-top: 15px;">
-          <label class="form-label">操作：</label>
-          <div style="display: flex; flex-wrap: wrap; gap: 8px;">
-            <button class="btn btn-primary" onclick="sendToESP32Direct(); hideSerialSettings();">发送到ESP32</button>
-            <button class="btn btn-secondary" onclick="exportPNG()">导出PNG</button>
-            <button class="btn btn-secondary" onclick="exportPDF()">导出PDF</button>
-            <button class="btn btn-secondary" onclick="exportJSON()">导出JSON</button>
+            <div id="ble-device-list" class="ble-device-list" role="radiogroup" aria-label="已授权蓝牙设备"></div>
+            <button id="ble-add-device-btn" class="btn btn-primary btn-small ble-add-device-btn" onclick="addBLEDevice()">添加设备</button>
           </div>
         </div>
       </div>
       <div class="modal-footer">
         <button class="btn btn-primary" onclick="hideSerialSettings()">关闭</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Export Dialog -->
+  <div id="export-dialog" class="modal" style="display: none;">
+    <div class="modal-content modal-content-form">
+      <div class="modal-header">
+        <h3>导出</h3>
+        <button class="modal-close" onclick="hideExportDialog()">&times;</button>
+      </div>
+      <div class="modal-body">
+        <div class="form-group">
+          <label class="form-label">选择格式：</label>
+          <div style="display: flex; flex-wrap: wrap; gap: 8px;">
+            <button class="btn btn-secondary" onclick="exportPNG(); hideExportDialog()">导出PNG</button>
+            <button class="btn btn-secondary" onclick="exportPDF(); hideExportDialog()">导出PDF</button>
+            <button class="btn btn-secondary" onclick="exportJSON(); hideExportDialog()">导出JSON</button>
+          </div>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-primary" onclick="hideExportDialog()">关闭</button>
       </div>
     </div>
   </div>
@@ -210,5 +179,6 @@
       </div>
     </div>
   </div>
+  <div class="site-version-badge site-version-corner">v9</div>
 </body>
 </html>
