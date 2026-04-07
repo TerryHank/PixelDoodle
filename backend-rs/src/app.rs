@@ -153,6 +153,8 @@ async fn generate_pattern(mut multipart: Multipart) -> Result<Json<Value>, (Stat
         .arg(root.join("tools").join("parity").join("generate_baseline.py"))
         .arg("generate")
         .arg(&request_path)
+        .env("PYTHONUTF8", "1")
+        .env("PYTHONIOENCODING", "utf-8")
         .current_dir(&root)
         .output()
         .await
@@ -198,6 +200,8 @@ async fn run_export_bridge(command: &str, payload: Value) -> Result<impl IntoRes
         .arg(root.join("tools").join("parity").join("export_baseline.py"))
         .arg(command)
         .arg(&request_path)
+        .env("PYTHONUTF8", "1")
+        .env("PYTHONIOENCODING", "utf-8")
         .current_dir(&root)
         .output()
         .await
@@ -239,6 +243,60 @@ async fn run_export_bridge(command: &str, payload: Value) -> Result<impl IntoRes
         ],
         body,
     ))
+}
+
+async fn run_json_bridge(script_name: &str, command: &str, payload: Option<Value>) -> Result<Value, (StatusCode, String)> {
+    let root = repo_root();
+    let work_dir = root.join("backend-rs").join("target").join("bridge");
+    tokio::fs::create_dir_all(&work_dir)
+        .await
+        .map_err(|err| (StatusCode::INTERNAL_SERVER_ERROR, format!("Failed to prepare bridge dir: {err}")))?;
+
+    let request_id = Uuid::new_v4().to_string();
+    let request_path = work_dir.join(format!("{script_name}-{request_id}.json"));
+
+    let maybe_request_arg = if let Some(payload) = payload {
+        tokio::fs::write(
+            &request_path,
+            serde_json::to_vec(&payload)
+                .map_err(|err| (StatusCode::INTERNAL_SERVER_ERROR, format!("Failed to serialize bridge payload: {err}")))?,
+        )
+        .await
+        .map_err(|err| (StatusCode::INTERNAL_SERVER_ERROR, format!("Failed to persist bridge payload: {err}")))?;
+        Some(request_path.clone())
+    } else {
+        None
+    };
+
+    let mut process = Command::new(python_executable());
+    process
+        .arg(root.join("tools").join("parity").join(script_name))
+        .arg(command)
+        .env("PYTHONUTF8", "1")
+        .env("PYTHONIOENCODING", "utf-8")
+        .current_dir(&root);
+    if let Some(path) = &maybe_request_arg {
+        process.arg(path);
+    }
+
+    let output = process
+        .output()
+        .await
+        .map_err(|err| (StatusCode::INTERNAL_SERVER_ERROR, format!("Failed to start {script_name}: {err}")))?;
+
+    if maybe_request_arg.is_some() {
+        let _ = tokio::fs::remove_file(&request_path).await;
+    }
+
+    if !output.status.success() {
+        return Err((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("{command} failed: {}", String::from_utf8_lossy(&output.stderr).trim()),
+        ));
+    }
+
+    serde_json::from_slice(&output.stdout)
+        .map_err(|err| (StatusCode::INTERNAL_SERVER_ERROR, format!("Failed to decode bridge output: {err}")))
 }
 
 async fn export_pattern_json(Json(data): Json<Value>) -> Result<impl IntoResponse, (StatusCode, String)> {
@@ -285,6 +343,38 @@ async fn export_pattern_pdf(Json(data): Json<Value>) -> Result<impl IntoResponse
     run_export_bridge("pdf", data).await
 }
 
+async fn get_serial_ports() -> Result<Json<Value>, (StatusCode, String)> {
+    Ok(Json(run_json_bridge("device_bridge.py", "serial_ports", None).await?))
+}
+
+async fn send_to_serial(Json(data): Json<Value>) -> Result<Json<Value>, (StatusCode, String)> {
+    if data.get("pixel_matrix").is_none() {
+        return Err((StatusCode::BAD_REQUEST, "pixel_matrix is required".to_string()));
+    }
+    if data.get("port").is_none() {
+        return Err((StatusCode::BAD_REQUEST, "port is required".to_string()));
+    }
+    Ok(Json(run_json_bridge("device_bridge.py", "serial_send", Some(data)).await?))
+}
+
+async fn highlight_serial(Json(data): Json<Value>) -> Result<Json<Value>, (StatusCode, String)> {
+    if data.get("port").is_none() {
+        return Err((StatusCode::BAD_REQUEST, "port is required".to_string()));
+    }
+    Ok(Json(run_json_bridge("device_bridge.py", "serial_highlight", Some(data)).await?))
+}
+
+async fn get_ble_devices() -> Result<Json<Value>, (StatusCode, String)> {
+    Ok(Json(run_json_bridge("device_bridge.py", "ble_devices", None).await?))
+}
+
+async fn send_to_ble(Json(data): Json<Value>) -> Result<Json<Value>, (StatusCode, String)> {
+    if data.get("pixel_matrix").is_none() {
+        return Err((StatusCode::BAD_REQUEST, "pixel_matrix is required".to_string()));
+    }
+    Ok(Json(run_json_bridge("device_bridge.py", "ble_send", Some(data)).await?))
+}
+
 pub async fn build_app() -> Router {
     Router::new()
         .route("/", get(index))
@@ -293,6 +383,11 @@ pub async fn build_app() -> Router {
         .route("/api/export/json", post(export_pattern_json))
         .route("/api/export/png", post(export_pattern_png))
         .route("/api/export/pdf", post(export_pattern_pdf))
+        .route("/api/serial/ports", get(get_serial_ports))
+        .route("/api/serial/send", post(send_to_serial))
+        .route("/api/serial/highlight", post(highlight_serial))
+        .route("/api/ble/devices", get(get_ble_devices))
+        .route("/api/ble/send", post(send_to_ble))
         .nest_service("/static", ServeDir::new(repo_root().join("static")))
         .nest_service("/examples", ServeDir::new(repo_root().join("docs").join("examples")))
 }
