@@ -2446,18 +2446,17 @@ function renderColorPanel() {
 // === Color Highlight Toggle ===
 function toggleColorHighlight(code) {
   const { activeColors } = window.appState;
+  const isSameSelection = activeColors.size === 1 && activeColors.has(code);
 
-  if (activeColors.has(code)) {
-    activeColors.delete(code);
-  } else {
+  activeColors.clear();
+
+  if (!isSameSelection) {
     activeColors.add(code);
   }
 
   // Update tag UI
   document.querySelectorAll('.color-tag').forEach(tag => {
-    if (tag.dataset.code === code) {
-      tag.classList.toggle('active');
-    }
+    tag.classList.toggle('active', activeColors.has(tag.dataset.code));
   });
 
   renderCanvas();
