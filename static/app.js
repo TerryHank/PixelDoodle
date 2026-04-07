@@ -239,16 +239,6 @@ document.addEventListener('DOMContentLoaded', () => {
   setConnectionMode(window.appState.connectionMode || 'ble');
   updateBrightnessControlState();
   promptBleConnectionOnStartup();
-  
-  // Auto-generate pattern when LED size changes
-  const ledSizeSelect = document.getElementById('led-matrix-size');
-  if (ledSizeSelect) {
-    ledSizeSelect.addEventListener('change', () => {
-      if (window.appState.originalImage) {
-        generatePattern();
-      }
-    });
-  }
 });
 
 function getConnectionModeLabel(mode) {
