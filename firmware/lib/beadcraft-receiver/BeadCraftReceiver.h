@@ -17,6 +17,10 @@
 const uint8_t BEADCRAFT_MAGIC[] = {0xBC, 0xD1, 0x32, 0x57};
 const uint16_t SERIAL_IMAGE_SIZE = 8192;  // 64x64 * 2 bytes
 const uint8_t SERIAL_MAX_HIGHLIGHT_COLORS = 16;
+#ifndef BEADCRAFT_TRANSPARENT_RGB565_DEFINED
+const uint16_t TRANSPARENT_RGB565 = 0x0001;
+#define BEADCRAFT_TRANSPARENT_RGB565_DEFINED
+#endif
 
 // Packet types
 const uint8_t PKT_IMAGE_START = 0xBC;  // First byte of image header
@@ -327,17 +331,21 @@ public:
         int idx = 0;
         for (int y = 0; y < 64; y++) {
             for (int x = 0; x < 64; x++) {
-                uint16_t pixel = _buffer[idx] | (_buffer[idx + 1] << 8);
+                uint16_t storedPixel = _buffer[idx] | (_buffer[idx + 1] << 8);
                 idx += 2;
+                bool transparentPixel = storedPixel == TRANSPARENT_RGB565;
+                uint16_t pixel = transparentPixel ? bgColor : storedPixel;
                 
                 uint16_t displayColor = pixel;
                 
                 if (_highlightMode) {
                     bool match = false;
-                    for (int i = 0; i < _highlightCount; i++) {
-                        if (pixel == _highlightColors[i]) {
-                            match = true;
-                            break;
+                    if (!transparentPixel) {
+                        for (int i = 0; i < _highlightCount; i++) {
+                            if (storedPixel == _highlightColors[i]) {
+                                match = true;
+                                break;
+                            }
                         }
                     }
                     displayColor = match ? highlightColor : bgColor;

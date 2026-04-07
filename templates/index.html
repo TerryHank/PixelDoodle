@@ -4,13 +4,13 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>BeadCraft - Perler Bead Pattern Generator</title>
-  <link rel="stylesheet" href="/static/style.css?v=23">
+  <link rel="stylesheet" href="/static/style.css?v=v8">
 </head>
 <body>
 
   <!-- Toast Container -->
   <div id="toast-container" class="toast-container"></div>
-  <div class="site-version-badge">v6.26.47</div>
+  <div class="site-version-badge">v8</div>
 
   <!-- Main Layout -->
   <div class="main-container">
@@ -109,8 +109,8 @@
     </div>
   </div>
 
-  <script src="/static/i18n.js?v=78"></script>
-  <script src="/static/app.js?v=62648"></script>
+  <script src="/static/i18n.js?v=v8"></script>
+  <script src="/static/app.js?v=v8"></script>
 
   <!-- Settings Dialog -->
   <div id="serial-settings-dialog" class="modal" style="display: none;">
@@ -159,6 +159,15 @@
           <label class="form-label">背景色（透明区域）：</label>
           <input type="color" id="serial-bg-color" value="#000000">
         </div>
+
+        <div class="form-group">
+          <label class="form-label" for="brightness-slider" data-i18n="brightness.label">屏幕亮度：</label>
+          <div class="brightness-control">
+            <input type="range" id="brightness-slider" min="10" max="100" value="25">
+            <span id="brightness-value" class="brightness-value">25%</span>
+          </div>
+          <div id="brightness-hint" class="form-hint">请先连接设备后再同步亮度</div>
+        </div>
         
         <!-- Action Buttons -->
         <div class="form-group" style="border-top: 1px solid #ddd; padding-top: 15px; margin-top: 15px;">
@@ -201,4 +210,3 @@
   </div>
 </body>
 </html>
-

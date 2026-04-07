@@ -28,6 +28,10 @@ window.appState = {
   pendingBleAction: null,
   selectedWifiNetwork: null,
   wifiDeviceIp: null,
+  brightnessPercent: 25,
+  deviceBrightnessLoaded: false,
+  brightnessSyncTimer: null,
+  isSyncingBrightness: false,
   isSending: false,        // Lock to prevent concurrent sends
 };
 
@@ -42,6 +46,9 @@ function loadPersistentState() {
         window.appState.connectionMode = data.connectionMode;
       }
       if (data.qrScannerMode) window.appState.qrScannerMode = data.qrScannerMode;
+      if (Number.isFinite(data.brightnessPercent)) {
+        window.appState.brightnessPercent = Math.min(100, Math.max(10, Math.round(data.brightnessPercent)));
+      }
     }
   } catch (e) {
     console.warn('Failed to load persistent state:', e);
@@ -54,6 +61,7 @@ function savePersistentState() {
       targetDeviceUuid: window.appState.targetDeviceUuid,
       connectionMode: window.appState.connectionMode,
       qrScannerMode: window.appState.qrScannerMode,
+      brightnessPercent: window.appState.brightnessPercent,
     };
     localStorage.setItem('beadcraft_state', JSON.stringify(data));
   } catch (e) {
@@ -72,10 +80,20 @@ const BLE_PACKET_GAP_MS = 8;
 const BLE_WIFI_SCAN_TIMEOUT_MS = 15000;
 const BLE_PKT_WIFI_SCAN = 0x07;
 const BLE_PKT_WIFI_CONNECT = 0x08;
+const BLE_PKT_SET_BRIGHTNESS = 0x09;
+const BLE_PKT_GET_BRIGHTNESS = 0x0A;
+const RGB565_BLACK = 0x0000;
+const RGB565_TRANSPARENT_MARKER = 0x0001;
 const BLE_NTF_WIFI_SCAN_BEGIN = 0x21;
 const BLE_NTF_WIFI_SCAN_DATA = 0x22;
 const BLE_NTF_WIFI_SCAN_END = 0x23;
 const BLE_NTF_WIFI_SCAN_ERROR = 0x24;
+const BLE_NTF_BRIGHTNESS = 0x26;
+const DEVICE_BRIGHTNESS_MIN = 26;
+const DEVICE_BRIGHTNESS_MAX = 255;
+const BRIGHTNESS_PERCENT_MIN = 10;
+const BRIGHTNESS_PERCENT_MAX = 100;
+const BRIGHTNESS_SYNC_DEBOUNCE_MS = 120;
 
 let bleAckWaiters = [];
 let bleWifiScanWaiters = [];
@@ -85,6 +103,8 @@ let bleWifiScanPendingError = null;
 let bleWifiConnectWaiters = [];
 let bleWifiConnectPendingResult = null;
 let bleWifiConnectPendingError = null;
+let bleBrightnessWaiters = [];
+let bleBrightnessPendingValue = null;
 
 let qrScannerState = {
   stream: null,
@@ -94,6 +114,74 @@ let qrScannerState = {
   canvas: null,
   context: null,
 };
+
+function clampNumber(value, min, max) {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) return min;
+  return Math.min(max, Math.max(min, numeric));
+}
+
+function percentToDeviceBrightness(percent) {
+  const clampedPercent = clampNumber(percent, BRIGHTNESS_PERCENT_MIN, BRIGHTNESS_PERCENT_MAX);
+  const ratio = (clampedPercent - BRIGHTNESS_PERCENT_MIN) / (BRIGHTNESS_PERCENT_MAX - BRIGHTNESS_PERCENT_MIN);
+  return Math.round(DEVICE_BRIGHTNESS_MIN + ratio * (DEVICE_BRIGHTNESS_MAX - DEVICE_BRIGHTNESS_MIN));
+}
+
+function deviceBrightnessToPercent(brightness) {
+  const clampedBrightness = clampNumber(brightness, DEVICE_BRIGHTNESS_MIN, DEVICE_BRIGHTNESS_MAX);
+  const ratio = (clampedBrightness - DEVICE_BRIGHTNESS_MIN) / (DEVICE_BRIGHTNESS_MAX - DEVICE_BRIGHTNESS_MIN);
+  return Math.round(BRIGHTNESS_PERCENT_MIN + ratio * (BRIGHTNESS_PERCENT_MAX - BRIGHTNESS_PERCENT_MIN));
+}
+
+function getCurrentWiFiTargetUuid() {
+  return (document.getElementById('wifi-device-select')?.value || window.appState.targetDeviceUuid || '').trim().toUpperCase();
+}
+
+function canSyncBrightness() {
+  if (window.appState.bleDevice?.gatt?.connected) return true;
+  return window.appState.connectionMode === 'wifi' && !!getCurrentWiFiTargetUuid();
+}
+
+function applyDeviceBrightness(brightness) {
+  const percent = deviceBrightnessToPercent(brightness);
+  window.appState.brightnessPercent = percent;
+  window.appState.deviceBrightnessLoaded = true;
+  savePersistentState();
+  updateBrightnessControlState();
+  return percent;
+}
+
+function updateBrightnessControlState() {
+  const slider = document.getElementById('brightness-slider');
+  const value = document.getElementById('brightness-value');
+  const hint = document.getElementById('brightness-hint');
+  if (!slider || !value || !hint) return;
+
+  const percent = clampNumber(window.appState.brightnessPercent, BRIGHTNESS_PERCENT_MIN, BRIGHTNESS_PERCENT_MAX);
+  slider.value = String(percent);
+  slider.disabled = !canSyncBrightness();
+  value.textContent = `${percent}%`;
+  hint.textContent = slider.disabled ? t('brightness.hint_disconnected') : t('brightness.hint_connected');
+}
+
+function handleBrightnessSliderInput(event) {
+  const percent = clampNumber(event?.target?.value ?? window.appState.brightnessPercent, BRIGHTNESS_PERCENT_MIN, BRIGHTNESS_PERCENT_MAX);
+  window.appState.brightnessPercent = percent;
+  savePersistentState();
+  updateBrightnessControlState();
+  queueBrightnessSync(percent);
+}
+
+function initBrightnessControls() {
+  const slider = document.getElementById('brightness-slider');
+  if (!slider) return;
+  if (!slider.dataset.bound) {
+    slider.addEventListener('input', handleBrightnessSliderInput);
+    slider.addEventListener('change', handleBrightnessSliderInput);
+    slider.dataset.bound = '1';
+  }
+  updateBrightnessControlState();
+}
 
 // === Clear Canvas ===
 function clearCanvas() {
@@ -135,8 +223,10 @@ document.addEventListener('DOMContentLoaded', () => {
   loadFullPalette();
   initUpload();
   applyTranslations();
+  initBrightnessControls();
   updateConnectionModeQuickButton();
   setConnectionMode(window.appState.connectionMode || 'ble');
+  updateBrightnessControlState();
   
   // Auto-generate pattern when LED size changes
   const ledSizeSelect = document.getElementById('led-matrix-size');
@@ -925,6 +1015,8 @@ function renderBleStatus() {
   if (connectBtn) {
     connectBtn.textContent = isConnected ? t('ble.reconnect') : (targetUuid ? t('ble.connect_target', {uuid: targetUuid}) : t('ble.connect_device'));
   }
+
+  updateBrightnessControlState();
 }
 
 function onBLEDisconnected() {
@@ -940,12 +1032,15 @@ function onBLEDisconnected() {
   window.appState.bleNotifyReady = false;
   window.appState.bleWifiScanNotifyReady = false;
   bleAckWaiters = [];
+  bleBrightnessWaiters = [];
+  bleBrightnessPendingValue = null;
   const uuid = window.appState.bleDevice
     ? normalizeBleDeviceUuid(window.appState.bleDevice.name)
     : window.appState.targetDeviceUuid;
   updateBLEDeviceSelect(uuid ? `${uuid} (disconnected)` : t('toast.ble_disconnected'));
   renderBleStatus();
   refreshWiFiDevices();
+  updateBrightnessControlState();
   showToast(t('toast.ble_disconnected'), true);
 }
 
@@ -958,6 +1053,18 @@ function handleBLENotification(event) {
     const waiter = bleAckWaiters.shift();
     if (waiter) {
       waiter.resolve(code);
+    }
+    return;
+  }
+
+  if (code === BLE_NTF_BRIGHTNESS) {
+    const brightness = dataView.byteLength >= 2 ? dataView.getUint8(1) : DEVICE_BRIGHTNESS_MIN;
+    applyDeviceBrightness(brightness);
+    const waiter = bleBrightnessWaiters.shift();
+    if (waiter) {
+      waiter.resolve(brightness);
+    } else {
+      bleBrightnessPendingValue = brightness;
     }
     return;
   }
@@ -1116,6 +1223,34 @@ function waitForBLEAck(timeoutMs = BLE_ACK_TIMEOUT_MS) {
       resolve: (code) => {
         clearTimeout(timer);
         resolve(code);
+      },
+    });
+  });
+}
+
+function waitForBLEBrightness(timeoutMs = 3000) {
+  return new Promise((resolve, reject) => {
+    if (bleBrightnessPendingValue !== null) {
+      const brightness = bleBrightnessPendingValue;
+      bleBrightnessPendingValue = null;
+      resolve(brightness);
+      return;
+    }
+
+    const timer = setTimeout(() => {
+      const idx = bleBrightnessWaiters.findIndex(item => item.resolve === resolve);
+      if (idx >= 0) bleBrightnessWaiters.splice(idx, 1);
+      reject(new Error('BLE brightness timeout'));
+    }, timeoutMs);
+
+    bleBrightnessWaiters.push({
+      resolve: (brightness) => {
+        clearTimeout(timer);
+        resolve(brightness);
+      },
+      reject: (err) => {
+        clearTimeout(timer);
+        reject(err);
       },
     });
   });
@@ -1320,20 +1455,23 @@ function rgbToRgb565(r, g, b) {
 function pixelMatrixToRgb565Bytes(pixelMatrix, backgroundColor) {
   const data = new Uint8Array(BLE_IMAGE_SIZE);
   let offset = 0;
+  const backgroundColorRgb565 = rgbToRgb565(backgroundColor[0], backgroundColor[1], backgroundColor[2]);
+  const backgroundFillRgb565 = backgroundColorRgb565 === RGB565_BLACK ? RGB565_TRANSPARENT_MARKER : backgroundColorRgb565;
 
   for (const row of pixelMatrix) {
     for (const code of row) {
-      let rgb = backgroundColor;
-      if (code) {
+      let rgb565 = backgroundFillRgb565;
+      if (code === null) {
+        rgb565 = backgroundFillRgb565;
+      } else {
         const colorInfo = window.appState.fullPalette[code] || window.appState.colorData[code];
         if (colorInfo && colorInfo.rgb) {
-          rgb = colorInfo.rgb;
+          rgb565 = rgbToRgb565(colorInfo.rgb[0], colorInfo.rgb[1], colorInfo.rgb[2]);
         } else {
-          rgb = [255, 255, 255];
+          rgb565 = rgbToRgb565(255, 255, 255);
         }
       }
 
-      const rgb565 = rgbToRgb565(rgb[0], rgb[1], rgb[2]);
       data[offset++] = rgb565 & 0xff;
       data[offset++] = (rgb565 >> 8) & 0xff;
       if (offset >= BLE_IMAGE_SIZE) {
@@ -1468,6 +1606,122 @@ async function sendHighlightViaWebBluetooth(highlightRGB) {
   });
 
   await writeBLEPacket(characteristic, packet);
+}
+
+async function sendBrightnessViaWebBluetooth(brightness) {
+  const characteristic = await ensureBLECharacteristic(false);
+  const waitTask = waitForBLEBrightness();
+  await writeBLEPacket(characteristic, new Uint8Array([BLE_PKT_SET_BRIGHTNESS, brightness]));
+  return await waitTask;
+}
+
+async function requestBrightnessViaWebBluetooth() {
+  const characteristic = await ensureBLECharacteristic(false);
+  const waitTask = waitForBLEBrightness();
+  await writeBLEPacket(characteristic, new Uint8Array([BLE_PKT_GET_BRIGHTNESS]));
+  return await waitTask;
+}
+
+async function sendBrightnessToESP32(percent = window.appState.brightnessPercent) {
+  const normalizedPercent = clampNumber(percent, BRIGHTNESS_PERCENT_MIN, BRIGHTNESS_PERCENT_MAX);
+  const deviceBrightness = percentToDeviceBrightness(normalizedPercent);
+  if (window.appState.isSyncingBrightness) {
+    return null;
+  }
+
+  window.appState.isSyncingBrightness = true;
+  try {
+    if (window.appState.bleDevice?.gatt?.connected) {
+      const brightness = await sendBrightnessViaWebBluetooth(deviceBrightness);
+      applyDeviceBrightness(brightness);
+      return brightness;
+    }
+
+    if (window.appState.connectionMode !== 'wifi') {
+      return null;
+    }
+
+    const wifiUuid = getCurrentWiFiTargetUuid();
+    if (!wifiUuid) {
+      return null;
+    }
+
+    const result = await postJsonOrThrow('/api/wifi/brightness', {
+      device_uuid: wifiUuid,
+      brightness: deviceBrightness,
+    }, t('toast.brightness_sync_failed'));
+    if (Number.isFinite(result.brightness)) {
+      applyDeviceBrightness(result.brightness);
+      return result.brightness;
+    }
+    return deviceBrightness;
+  } finally {
+    window.appState.isSyncingBrightness = false;
+    updateBrightnessControlState();
+  }
+}
+
+function queueBrightnessSync(percent = window.appState.brightnessPercent) {
+  window.appState.brightnessPercent = clampNumber(percent, BRIGHTNESS_PERCENT_MIN, BRIGHTNESS_PERCENT_MAX);
+  updateBrightnessControlState();
+
+  if (window.appState.brightnessSyncTimer) {
+    clearTimeout(window.appState.brightnessSyncTimer);
+  }
+
+  if (!canSyncBrightness()) {
+    return;
+  }
+
+  window.appState.brightnessSyncTimer = setTimeout(async () => {
+    window.appState.brightnessSyncTimer = null;
+    if (window.appState.isSyncingBrightness) {
+      queueBrightnessSync(window.appState.brightnessPercent);
+      return;
+    }
+
+    try {
+      await sendBrightnessToESP32(window.appState.brightnessPercent);
+    } catch (err) {
+      console.error('ESP32 brightness sync failed:', err);
+      showToast(t('toast.brightness_sync_failed'), true);
+    }
+  }, BRIGHTNESS_SYNC_DEBOUNCE_MS);
+}
+
+async function syncBrightnessFromCurrentDevice() {
+  updateBrightnessControlState();
+  try {
+    if (window.appState.bleDevice?.gatt?.connected) {
+      const brightness = await requestBrightnessViaWebBluetooth();
+      applyDeviceBrightness(brightness);
+      return brightness;
+    }
+
+    if (window.appState.connectionMode !== 'wifi') {
+      return null;
+    }
+
+    const wifiUuid = getCurrentWiFiTargetUuid();
+    if (!wifiUuid) {
+      return null;
+    }
+
+    const response = await fetch(`/api/wifi/brightness?device_uuid=${encodeURIComponent(wifiUuid)}`);
+    const result = await response.json().catch(() => ({}));
+    if (!response.ok || !result.success) {
+      throw new Error(result.detail || result.message || t('toast.brightness_sync_failed'));
+    }
+    if (Number.isFinite(result.brightness)) {
+      applyDeviceBrightness(result.brightness);
+      return result.brightness;
+    }
+  } catch (err) {
+    console.error('ESP32 brightness read failed:', err);
+  } finally {
+    updateBrightnessControlState();
+  }
+  return null;
 }
 
 async function requestWiFiScanViaWebBluetooth(requestIfNeeded = false) {
@@ -2023,7 +2277,7 @@ async function sendMatrixViaCurrentMode(pixelMatrix, bgRgb, requestIfNeeded = tr
     const targetSize = getTargetLedSize();
     // Scale to LED size, then center in 64x64 canvas
     const mappedMatrix = scaleAndCenterImage(pixelMatrix, targetSize);
-    const wifiUuid = (document.getElementById('wifi-device-select')?.value || window.appState.targetDeviceUuid || '').trim().toUpperCase();
+    const wifiUuid = getCurrentWiFiTargetUuid();
     if (!wifiUuid) throw new Error(t('wifi.no_saved_device'));
     
     try {
@@ -2050,6 +2304,9 @@ async function autoSendToESP32() {
     console.log('[ESP32] Send already in progress, skipping');
     return;
   }
+  if (connectionMode === 'ble' && !window.appState.bleDevice) {
+    return;
+  }
   window.appState.isSending = true;
 
   const bgColor = document.getElementById('serial-bg-color')?.value || '#000000';
@@ -2063,14 +2320,14 @@ async function autoSendToESP32() {
   const toast = document.getElementById('serial-toast');
   if (toast) {
     toast.textContent = connectionMode === 'ble'
-      ? 'Connecting via Bluetooth...'
+      ? (window.appState.bleDevice?.gatt?.connected ? 'Sending via Bluetooth...' : 'Reconnecting Bluetooth...')
       : 'Sending via server relay...';
     toast.className = 'serial-toast';
     toast.style.display = 'block';
   }
 
   try {
-    const result = await sendMatrixViaCurrentMode(pixelMatrix, bgRgb, true);
+    const result = await sendMatrixViaCurrentMode(pixelMatrix, bgRgb, false);
 
     if (result.success) {
       if (toast) {
@@ -2422,7 +2679,7 @@ async function sendHighlightToESP32() {
     }
     if (connectionMode !== 'wifi') return;
 
-    const wifiUuid = (document.getElementById('wifi-device-select')?.value || window.appState.targetDeviceUuid || '').trim().toUpperCase();
+    const wifiUuid = getCurrentWiFiTargetUuid();
     if (!wifiUuid) return;
     await fetch('/api/wifi/highlight', {
       method: 'POST',
@@ -2599,19 +2856,30 @@ function setConnectionMode(mode) {
   
   if (normalizedMode === 'ble') {
     refreshBLEDevices();
+    updateBrightnessControlState();
+    if (document.getElementById('serial-settings-dialog')?.style.display === 'flex') {
+      syncBrightnessFromCurrentDevice();
+    }
     return;
   }
   refreshWiFiDevices();
+  updateBrightnessControlState();
+  if (document.getElementById('serial-settings-dialog')?.style.display === 'flex') {
+    syncBrightnessFromCurrentDevice();
+  }
 }
 
-function showSerialSettings() {
+async function showSerialSettings() {
   document.getElementById('serial-settings-dialog').style.display = 'flex';
+  updateBrightnessControlState();
   
   if (window.appState.connectionMode === 'ble') {
-    refreshBLEDevices();
+    await refreshBLEDevices();
+    await syncBrightnessFromCurrentDevice();
     return;
   }
-  refreshWiFiDevices();
+  await refreshWiFiDevices();
+  await syncBrightnessFromCurrentDevice();
 }
 
 async function refreshWiFiDevices() {
@@ -2638,6 +2906,7 @@ async function refreshWiFiDevices() {
       ? t('wifi.target_locked_scan', {uuid: targetUuid})
       : t('wifi.no_saved_device');
   }
+  updateBrightnessControlState();
 }
 
 function hideSerialSettings() {
@@ -2683,6 +2952,7 @@ async function connectBLEDevice() {
     showToast(uuid ? t('toast.ble_connected', {uuid: uuid}) : t('toast.ble_connected_simple'));
     refreshBLEDevices();
     renderBleStatus();
+    await syncBrightnessFromCurrentDevice();
   } catch (err) {
     refreshBLEDevices();
     if (err?.name !== 'NotFoundError') {

@@ -248,6 +248,20 @@ body {
   margin-top: 4px;
 }
 
+.brightness-control {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.brightness-value {
+  min-width: 42px;
+  text-align: right;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
 select, input[type="range"] {
   width: 100%;
 }

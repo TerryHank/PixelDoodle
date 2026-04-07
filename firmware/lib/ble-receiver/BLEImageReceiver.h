@@ -1,5 +1,6 @@
 #pragma once
 #include <Arduino.h>
+#include <functional>
 #include <NimBLEDevice.h>
 #include <ESP32-HUB75-MatrixPanel-I2S-DMA.h>
 #include <WiFi.h>
@@ -12,6 +13,10 @@
 
 const uint16_t IMAGE_SIZE = 8192;  // 64x64 * 2 bytes
 const uint8_t MAX_HIGHLIGHT_COLORS = 16;
+#ifndef BEADCRAFT_TRANSPARENT_RGB565_DEFINED
+const uint16_t TRANSPARENT_RGB565 = 0x0001;
+#define BEADCRAFT_TRANSPARENT_RGB565_DEFINED
+#endif
 
 // Packet types
 #define PKT_START_IMAGE    0x01
@@ -21,11 +26,14 @@ const uint8_t MAX_HIGHLIGHT_COLORS = 16;
 #define PKT_SHOW_ALL       0x05
 #define PKT_WIFI_SCAN      0x07
 #define PKT_WIFI_CONNECT   0x08
+#define PKT_SET_BRIGHTNESS 0x09
+#define PKT_GET_BRIGHTNESS 0x0A
 
 #define NTF_WIFI_SCAN_BEGIN 0x21
 #define NTF_WIFI_SCAN_DATA  0x22
 #define NTF_WIFI_SCAN_END   0x23
 #define NTF_WIFI_SCAN_ERROR 0x24
+#define NTF_BRIGHTNESS      0x26
 
 class BLEImageReceiver : public NimBLEServerCallbacks, public NimBLECharacteristicCallbacks {
 private:
@@ -39,6 +47,8 @@ private:
     uint16_t _highlightColors[MAX_HIGHLIGHT_COLORS];
     uint8_t _highlightCount;
     bool _highlightMode;
+    std::function<void(uint8_t, bool)> _setBrightness;
+    std::function<uint8_t(void)> _getBrightness;
     
     // BLE state
     size_t _recvIndex;
@@ -109,6 +119,18 @@ private:
     void sendCodeNotification(uint8_t code) {
         uint8_t payload[] = {code};
         _pCharacteristic->setValue(payload, 1);
+        _pCharacteristic->notify(true);
+        delay(12);
+    }
+
+    uint8_t readBrightness() const {
+        return _getBrightness ? _getBrightness() : 64;
+    }
+
+    void sendBrightnessNotification() {
+        if (!_pCharacteristic || !_deviceConnected) return;
+        uint8_t payload[] = {NTF_BRIGHTNESS, readBrightness()};
+        _pCharacteristic->setValue(payload, sizeof(payload));
         _pCharacteristic->notify(true);
         delay(12);
     }
@@ -259,6 +281,13 @@ private:
         sendWiFiConnectStatus('F', "connect_timeout");
     }
 
+    void respondJson(WiFiClient& client, const String& body, const char* status = "200 OK") {
+        client.print("HTTP/1.1 ");
+        client.print(status);
+        client.print("\r\nContent-Type: application/json\r\nConnection: close\r\n\r\n");
+        client.print(body);
+    }
+
     void handleWiFiImageServer() {
         if (!_wifiServerStarted || WiFi.status() != WL_CONNECTED) return;
 
@@ -277,6 +306,45 @@ private:
             if (line.startsWith("Content-Length:")) {
                 contentLength = line.substring(15).toInt();
             }
+        }
+
+        if (requestLine.startsWith("GET /brightness")) {
+            const uint8_t brightness = readBrightness();
+            respondJson(client, "{\"success\":true,\"brightness\":" + String(brightness) + "}");
+            client.stop();
+            return;
+        }
+
+        if (requestLine.startsWith("POST /brightness")) {
+            if (contentLength < 1) {
+                respondJson(client, "{\"success\":false,\"message\":\"missing_brightness\"}", "400 Bad Request");
+                client.stop();
+                return;
+            }
+
+            uint8_t brightness = 0;
+            size_t received = 0;
+            unsigned long deadline = millis() + 3000;
+            while (received < 1 && millis() < deadline) {
+                while (client.available() > 0 && received < 1) {
+                    brightness = static_cast<uint8_t>(client.read());
+                    received++;
+                }
+                delay(1);
+            }
+
+            if (received == 1) {
+                if (_setBrightness) {
+                    _setBrightness(brightness, true);
+                }
+                const uint8_t currentBrightness = readBrightness();
+                respondJson(client, "{\"success\":true,\"brightness\":" + String(currentBrightness) + "}");
+                Serial.printf("BLE: Brightness set to %u\n", currentBrightness);
+            } else {
+                respondJson(client, "{\"success\":false,\"message\":\"brightness_timeout\"}", "408 Request Timeout");
+            }
+            client.stop();
+            return;
         }
 
         if (requestLine.startsWith("POST /highlight")) {
@@ -325,7 +393,11 @@ private:
     }
     
 public:
-    BLEImageReceiver(MatrixPanel_I2S_DMA* display) : _display(display), _wifiServer(8766) {
+    BLEImageReceiver(
+        MatrixPanel_I2S_DMA* display,
+        std::function<void(uint8_t, bool)> setBrightness,
+        std::function<uint8_t(void)> getBrightness
+    ) : _display(display), _setBrightness(setBrightness), _getBrightness(getBrightness), _wifiServer(8766) {
         _hasImage = false;
         _highlightCount = 0;
         _highlightMode = false;
@@ -385,6 +457,7 @@ public:
     void onConnect(NimBLEServer* pServer) override {
         _deviceConnected = true;
         Serial.println("BLE Connected");
+        sendBrightnessNotification();
     };
 
     void onDisconnect(NimBLEServer* pServer) override {
@@ -501,6 +574,17 @@ public:
                     }
                 }
                 break;
+
+            case PKT_SET_BRIGHTNESS:
+                if (len >= 2 && _setBrightness) {
+                    _setBrightness(data[1], true);
+                    sendBrightnessNotification();
+                }
+                break;
+
+            case PKT_GET_BRIGHTNESS:
+                sendBrightnessNotification();
+                break;
         }
     }
 
@@ -511,18 +595,22 @@ public:
         int idx = 0;
         for (int y = 0; y < 64; y++) {
             for (int x = 0; x < 64; x++) {
-                uint16_t pixel = _imageBuffer[idx] | (_imageBuffer[idx + 1] << 8);
+                uint16_t storedPixel = _imageBuffer[idx] | (_imageBuffer[idx + 1] << 8);
                 idx += 2;
+                bool transparentPixel = storedPixel == TRANSPARENT_RGB565;
+                uint16_t pixel = transparentPixel ? bgColor : storedPixel;
                 
                 uint16_t displayColor = pixel;
                 
                 if (_highlightMode) {
                     // Check if this pixel matches any highlight color
                     bool match = false;
-                    for (int i = 0; i < _highlightCount; i++) {
-                        if (pixel == _highlightColors[i]) {
-                            match = true;
-                            break;
+                    if (!transparentPixel) {
+                        for (int i = 0; i < _highlightCount; i++) {
+                            if (storedPixel == _highlightColors[i]) {
+                                match = true;
+                                break;
+                            }
                         }
                     }
                     displayColor = match ? highlightColor : bgColor;

@@ -20,6 +20,7 @@ from core.color_match import ArtkalPalette
 from core.quantizer import process_image
 from core.exporter import export_png, export_pdf, generate_preview_base64
 from core.serial_export import (
+    background_fill_rgb565,
     list_available_ports,
     send_to_esp32,
     pixel_matrix_to_rgb565,
@@ -45,6 +46,28 @@ palette = ArtkalPalette()
 # In-memory session storage
 sessions: Dict[str, Dict[str, Any]] = {}
 wifi_devices: Dict[str, Dict[str, Any]] = {}
+DEVICE_BRIGHTNESS_MIN = 26
+DEVICE_BRIGHTNESS_MAX = 255
+DEVICE_BRIGHTNESS_DEFAULT = 64
+
+
+def normalize_device_brightness(value: Any) -> int:
+    try:
+        brightness = int(value)
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=400, detail="brightness must be an integer")
+    return max(DEVICE_BRIGHTNESS_MIN, min(DEVICE_BRIGHTNESS_MAX, brightness))
+
+
+def get_registered_wifi_device(device_uuid: str) -> tuple[str, Dict[str, Any]]:
+    normalized_uuid = (device_uuid or "").strip().upper()
+    if not normalized_uuid:
+        raise HTTPException(status_code=400, detail="device_uuid is required")
+
+    entry = wifi_devices.get(normalized_uuid)
+    if not entry:
+        raise HTTPException(status_code=404, detail=f"WiFi device {normalized_uuid} is not registered")
+    return normalized_uuid, entry
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -431,13 +454,7 @@ async def _send_to_wifi_impl(data: dict):
     if not pixel_matrix:
         raise HTTPException(status_code=400, detail="pixel_matrix is required")
 
-    device_uuid = (data.get('device_uuid') or '').strip().upper()
-    if not device_uuid:
-        raise HTTPException(status_code=400, detail="device_uuid is required")
-
-    entry = wifi_devices.get(device_uuid)
-    if not entry:
-        raise HTTPException(status_code=404, detail=f"WiFi device {device_uuid} is not registered")
+    device_uuid, entry = get_registered_wifi_device(data.get('device_uuid'))
 
     bg_color = tuple(data.get('background_color', [0, 0, 0]))
     try:
@@ -446,7 +463,9 @@ async def _send_to_wifi_impl(data: dict):
         # ESP32 expects exactly 8192 bytes (64x64 * 2), pad if smaller
         EXPECTED_SIZE = 8192
         if len(rgb565_data) < EXPECTED_SIZE:
-            rgb565_data = rgb565_data + b'\x00' * (EXPECTED_SIZE - len(rgb565_data))
+            fill_rgb565 = background_fill_rgb565(bg_color)
+            fill_bytes = fill_rgb565.to_bytes(2, 'little')
+            rgb565_data = rgb565_data + fill_bytes * ((EXPECTED_SIZE - len(rgb565_data)) // 2)
         elif len(rgb565_data) > EXPECTED_SIZE:
             rgb565_data = rgb565_data[:EXPECTED_SIZE]
         
@@ -475,13 +494,7 @@ async def _send_to_wifi_impl(data: dict):
 
 
 async def _highlight_wifi_impl(data: dict):
-    device_uuid = (data.get('device_uuid') or '').strip().upper()
-    if not device_uuid:
-        raise HTTPException(status_code=400, detail="device_uuid is required")
-
-    entry = wifi_devices.get(device_uuid)
-    if not entry:
-        raise HTTPException(status_code=404, detail=f"WiFi device {device_uuid} is not registered")
+    device_uuid, entry = get_registered_wifi_device(data.get('device_uuid'))
 
     highlight_colors = data.get('highlight_colors', [])
     packet = bytearray()
@@ -512,6 +525,67 @@ async def _highlight_wifi_impl(data: dict):
         raise HTTPException(status_code=500, detail=f"WiFi highlight failed: {str(e)}")
 
 
+async def _get_wifi_brightness_impl(device_uuid: str):
+    normalized_uuid, entry = get_registered_wifi_device(device_uuid)
+
+    try:
+        response = requests.get(
+            f"http://{entry['ip']}:8766/brightness",
+            timeout=5,
+        )
+        response.raise_for_status()
+        payload = response.json()
+        brightness = normalize_device_brightness(payload.get("brightness", DEVICE_BRIGHTNESS_DEFAULT))
+        return {
+            "success": True,
+            "device_uuid": normalized_uuid,
+            "ip": entry["ip"],
+            "brightness": brightness,
+        }
+    except requests.exceptions.ConnectTimeout:
+        raise HTTPException(status_code=504, detail=f"WiFi device {normalized_uuid} ({entry['ip']}) connection timeout - device may be offline")
+    except requests.exceptions.Timeout:
+        raise HTTPException(status_code=504, detail=f"WiFi device {normalized_uuid} ({entry['ip']}) response timeout")
+    except requests.exceptions.ConnectionError:
+        raise HTTPException(status_code=503, detail=f"WiFi device {normalized_uuid} ({entry['ip']}) unreachable - check network connection")
+    except (ValueError, json.JSONDecodeError):
+        raise HTTPException(status_code=502, detail=f"WiFi device {normalized_uuid} returned invalid brightness payload")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"WiFi brightness read failed: {str(e)}")
+
+
+async def _set_wifi_brightness_impl(data: dict):
+    normalized_uuid, entry = get_registered_wifi_device(data.get('device_uuid'))
+    brightness = normalize_device_brightness(data.get("brightness"))
+
+    try:
+        response = requests.post(
+            f"http://{entry['ip']}:8766/brightness",
+            data=bytes([brightness]),
+            headers={"Content-Type": "application/octet-stream"},
+            timeout=5,
+        )
+        response.raise_for_status()
+        payload = response.json()
+        actual_brightness = normalize_device_brightness(payload.get("brightness", brightness))
+        return {
+            "success": True,
+            "device_uuid": normalized_uuid,
+            "ip": entry["ip"],
+            "brightness": actual_brightness,
+        }
+    except requests.exceptions.ConnectTimeout:
+        raise HTTPException(status_code=504, detail=f"WiFi device {normalized_uuid} ({entry['ip']}) connection timeout - device may be offline")
+    except requests.exceptions.Timeout:
+        raise HTTPException(status_code=504, detail=f"WiFi device {normalized_uuid} ({entry['ip']}) response timeout")
+    except requests.exceptions.ConnectionError:
+        raise HTTPException(status_code=503, detail=f"WiFi device {normalized_uuid} ({entry['ip']}) unreachable - check network connection")
+    except (ValueError, json.JSONDecodeError):
+        raise HTTPException(status_code=502, detail=f"WiFi device {normalized_uuid} returned invalid brightness payload")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"WiFi brightness sync failed: {str(e)}")
+
+
 # Compatible WiFi API routes (keep old and new paths aligned)
 @app.post("/api/wifi/register")
 @app.post("/api/wifi/register/")
@@ -535,6 +609,22 @@ async def send_to_wifi(data: dict):
 @app.post("/wifi/highlight/")
 async def highlight_wifi(data: dict):
     return await _highlight_wifi_impl(data)
+
+
+@app.get("/api/wifi/brightness")
+@app.get("/api/wifi/brightness/")
+@app.get("/wifi/brightness")
+@app.get("/wifi/brightness/")
+async def get_wifi_brightness(device_uuid: str = Query(...)):
+    return await _get_wifi_brightness_impl(device_uuid)
+
+
+@app.post("/api/wifi/brightness")
+@app.post("/api/wifi/brightness/")
+@app.post("/wifi/brightness")
+@app.post("/wifi/brightness/")
+async def set_wifi_brightness(data: dict):
+    return await _set_wifi_brightness_impl(data)
 
 
 if __name__ == "__main__":

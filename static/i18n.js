@@ -162,6 +162,9 @@ const I18N = {
     'wifi.select_device_hint': '请先通过蓝牙连接设备',
     'wifi.target_locked_scan': '当前已记住设备：{uuid}，WiFi 将作为这台设备的备选发送路径。',
     'wifi.no_saved_device': '请先通过蓝牙连接设备，才能使用 WiFi 备选模式',
+    'brightness.label': '屏幕亮度：',
+    'brightness.hint_connected': '拖动后会立即同步到当前设备',
+    'brightness.hint_disconnected': '请先连接设备后再同步亮度',
 
     // WiFi connection panel
     'wifi.selected_network': '已选择: {ssid}',
@@ -190,6 +193,7 @@ const I18N = {
     'toast.ble_uuid_mismatch': '选择了 {selected}，但目标是 {expected}',
     'toast.ble_connected': '蓝牙已连接: {uuid}',
     'toast.ble_connected_simple': '蓝牙已连接',
+    'toast.brightness_sync_failed': '亮度同步失败',
   },
 
   en: {
@@ -353,6 +357,9 @@ const I18N = {
     'wifi.select_device_hint': 'Connect over Bluetooth first',
     'wifi.target_locked_scan': 'Remembered device: {uuid}. WiFi will be used as a backup send path for this device.',
     'wifi.no_saved_device': 'Connect over Bluetooth first before using WiFi backup mode',
+    'brightness.label': 'Display brightness:',
+    'brightness.hint_connected': 'Drag to sync brightness to the current device immediately',
+    'brightness.hint_disconnected': 'Connect a device before syncing brightness',
 
     // WiFi connection panel
     'wifi.selected_network': 'Selected: {ssid}',
@@ -381,6 +388,7 @@ const I18N = {
     'toast.ble_uuid_mismatch': 'Selected {selected}, but expected {expected}',
     'toast.ble_connected': 'Bluetooth connected: {uuid}',
     'toast.ble_connected_simple': 'Bluetooth connected',
+    'toast.brightness_sync_failed': 'Brightness sync failed',
   }
 };
 

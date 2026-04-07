@@ -1,17 +1,59 @@
 #include <Arduino.h>
+#include <Preferences.h>
 #include <esp_system.h>
 #include <esp_log.h>
 #include <ESP32-HUB75-MatrixPanel-I2S-DMA.h>
 #include <WiFi.h>
+#include "Hub75ReferenceConfig.h"
 #include "BeadCraftReceiver.h"
 #include "BLEImageReceiver.h"
 
 #define ESP32_LED_BUILTIN 2
 
+using beadcraft::kHub75ChainLength;
+using beadcraft::kHub75PanelHeight;
+using beadcraft::kHub75PanelWidth;
+using beadcraft::kHub75Pins;
+
 MatrixPanel_I2S_DMA *dma_display = nullptr;
 BeadCraftReceiver *receiver = nullptr;
 BLEImageReceiver *bleReceiver = nullptr;
 RTC_DATA_ATTR uint32_t g_bootCount = 0;
+Preferences g_preferences;
+uint8_t g_brightness = 64;
+
+constexpr uint8_t kMinBrightness = 26;
+constexpr uint8_t kMaxBrightness = 255;
+constexpr uint8_t kDefaultBrightness = 64;
+
+uint8_t clampBrightness(uint8_t value)
+{
+  if (value < kMinBrightness) return kMinBrightness;
+  if (value > kMaxBrightness) return kMaxBrightness;
+  return value;
+}
+
+uint8_t loadBrightness()
+{
+  g_brightness = clampBrightness(g_preferences.getUChar("brightness", kDefaultBrightness));
+  return g_brightness;
+}
+
+void applyBrightness(uint8_t value, bool persist)
+{
+  g_brightness = clampBrightness(value);
+  if (dma_display) {
+    dma_display->setBrightness8(g_brightness);
+  }
+  if (persist) {
+    g_preferences.putUChar("brightness", g_brightness);
+  }
+}
+
+uint8_t getBrightness()
+{
+  return g_brightness;
+}
 
 const char* resetReasonToString(esp_reset_reason_t reason)
 {
@@ -63,17 +105,17 @@ void setup()
     delay(100);
   }
 
-  HUB75_I2S_CFG mxconfig(64, 64, 1);
-  mxconfig.gpio.e = 18;
+  HUB75_I2S_CFG mxconfig(kHub75PanelWidth, kHub75PanelHeight, kHub75ChainLength, kHub75Pins);
   mxconfig.clkphase = false;
   mxconfig.double_buff = false;
 
   dma_display = new MatrixPanel_I2S_DMA(mxconfig);
   dma_display->begin();
-  dma_display->setBrightness8(64);
+  g_preferences.begin("beadcraft", false);
+  dma_display->setBrightness8(loadBrightness());
 
   receiver = new BeadCraftReceiver(dma_display);
-  bleReceiver = new BLEImageReceiver(dma_display);
+  bleReceiver = new BLEImageReceiver(dma_display, applyBrightness, getBrightness);
 
   const String deviceCode = getDeviceCode();
 

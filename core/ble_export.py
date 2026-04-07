@@ -19,6 +19,8 @@ SERVICE_UUID = "4fafc201-1fb5-459e-8fcc-c5c9c331914b"
 CHARACTERISTIC_UUID = "beb5483e-36e1-4688-b7f5-ea0734b3e6c1"
 IMAGE_SIZE = 8192  # 64x64 * 2 bytes
 MTU_SIZE = 20  # BLE default MTU - 3 (header)
+RGB565_BLACK = 0x0000
+TRANSPARENT_RGB565 = 0x0001
 
 
 def rgb_to_rgb565(r: int, g: int, b: int) -> int:
@@ -27,6 +29,12 @@ def rgb_to_rgb565(r: int, g: int, b: int) -> int:
     g6 = (g >> 2) & 0x3F
     b5 = (b >> 3) & 0x1F
     return (r5 << 11) | (g6 << 5) | b5
+
+
+def background_fill_rgb565(background_color: Tuple[int, int, int]) -> int:
+    """Encode transparent pixels without colliding with real black beads."""
+    rgb565 = rgb_to_rgb565(*background_color)
+    return TRANSPARENT_RGB565 if rgb565 == RGB565_BLACK else rgb565
 
 
 def pixel_matrix_to_rgb565(
@@ -39,24 +47,24 @@ def pixel_matrix_to_rgb565(
         return b''
     
     data = bytearray()
+    background_rgb565 = background_fill_rgb565(background_color)
     
     for row in pixel_matrix:
         for code in row:
             if code is None:
-                r, g, b = background_color
+                rgb565 = background_rgb565
             else:
                 color_info = palette.get_by_code(code)
                 if color_info:
-                    r, g, b = color_info['rgb']
+                    rgb565 = rgb_to_rgb565(*color_info['rgb'])
                 else:
-                    r, g, b = 255, 255, 255
-            
-            rgb565 = rgb_to_rgb565(r, g, b)
+                    rgb565 = rgb_to_rgb565(255, 255, 255)
             data.extend(struct.pack('<H', rgb565))
     
     # Pad to IMAGE_SIZE
     if len(data) < IMAGE_SIZE:
-        data += b'\x00' * (IMAGE_SIZE - len(data))
+        fill_bytes = struct.pack('<H', background_rgb565)
+        data += fill_bytes * ((IMAGE_SIZE - len(data)) // 2)
     elif len(data) > IMAGE_SIZE:
         data = data[:IMAGE_SIZE]
     
