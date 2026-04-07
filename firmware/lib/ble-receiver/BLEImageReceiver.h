@@ -506,6 +506,7 @@ public:
 
     void displayStoredImage() {
         uint16_t bgColor = 0;  // Black
+        uint16_t highlightColor = rgbTo565(0, 0, 255);
         
         int idx = 0;
         for (int y = 0; y < 64; y++) {
@@ -524,7 +525,7 @@ public:
                             break;
                         }
                     }
-                    displayColor = match ? pixel : bgColor;
+                    displayColor = match ? highlightColor : bgColor;
                 }
                 
                 _display->drawPixel(x, y, displayColor);

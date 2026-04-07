@@ -8,10 +8,6 @@
 
 #define ESP32_LED_BUILTIN 2
 
-#ifndef PAIRING_BASE_URL
-#define PAIRING_BASE_URL "https://example.com/"
-#endif
-
 MatrixPanel_I2S_DMA *dma_display = nullptr;
 BeadCraftReceiver *receiver = nullptr;
 BLEImageReceiver *bleReceiver = nullptr;
@@ -41,20 +37,6 @@ String getDeviceCode()
   char code[13];
   snprintf(code, sizeof(code), "%012llX", chipId & 0xFFFFFFFFFFFFULL);
   return String(code);
-}
-
-String buildPairingUrl(const String &deviceCode)
-{
-  String baseUrl = String(PAIRING_BASE_URL);
-  baseUrl.replace("https://", "");
-  baseUrl.replace("http://", "");
-  if (baseUrl.endsWith("/")) {
-    baseUrl.remove(baseUrl.length() - 1);
-  }
-  if (baseUrl.indexOf('?') >= 0) {
-    return baseUrl + "&u=" + deviceCode;
-  }
-  return baseUrl + "?u=" + deviceCode;
 }
 
 void setup()
@@ -94,16 +76,14 @@ void setup()
   bleReceiver = new BLEImageReceiver(dma_display);
 
   const String deviceCode = getDeviceCode();
-  const String pairingUrl = buildPairingUrl(deviceCode);
 
   receiver->displayWelcome();
   delay(2000);
 
-  receiver->displayPairingScreen(deviceCode, pairingUrl);
+  receiver->displayDeviceCodeScreen(deviceCode);
   bleReceiver->begin(deviceCode);
 
   Serial.printf("READY_BLE:%s\n", deviceCode.c_str());
-  Serial.printf("PAIR_URL:%s\n", pairingUrl.c_str());
 }
 
 void loop()

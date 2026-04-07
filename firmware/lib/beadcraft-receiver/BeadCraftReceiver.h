@@ -12,7 +12,6 @@
 
 #include <Arduino.h>
 #include <ESP32-HUB75-MatrixPanel-I2S-DMA.h>
-#include <qrcode.h>
 #include "ChinesePixels.h"
 
 const uint8_t BEADCRAFT_MAGIC[] = {0xBC, 0xD1, 0x32, 0x57};
@@ -27,7 +26,6 @@ const uint8_t PKT_SHOW_ALL = 0x05;
 class BeadCraftReceiver {
 private:
     MatrixPanel_I2S_DMA* _display;
-    static MatrixPanel_I2S_DMA* _qrDisplay;
     
     // Image storage (persistent)
     uint8_t _buffer[SERIAL_IMAGE_SIZE];
@@ -117,44 +115,6 @@ private:
         }
     }
 
-    void drawQrCode(const String& payload) {
-        _qrDisplay = _display;
-        esp_qrcode_config_t cfg = ESP_QRCODE_CONFIG_DEFAULT();
-        cfg.display_func = displayQrCode;
-        cfg.max_qrcode_version = 6;
-        cfg.qrcode_ecc_level = ESP_QRCODE_ECC_LOW;
-        esp_qrcode_generate(&cfg, payload.c_str());
-    }
-
-    static void displayQrCode(esp_qrcode_handle_t qrcode) {
-        if (_qrDisplay == nullptr) {
-            return;
-        }
-
-        const int size = esp_qrcode_get_size(qrcode);
-        const int qrTop = 2;
-        const int textTop = 47;
-        const int textGap = 3;
-        const int targetSize = min(42, textTop - textGap - qrTop);
-        const int startX = (64 - targetSize) / 2;
-        const int startY = qrTop;
-        const uint16_t dark = ((255 & 0xF8) << 8) | ((255 & 0xFC) << 3) | (255 >> 3);
-
-        for (int y = 0; y < size; y++) {
-            for (int x = 0; x < size; x++) {
-                if (esp_qrcode_get_module(qrcode, x, y)) {
-                    const int x0 = startX + (x * targetSize) / size;
-                    const int y0 = startY + (y * targetSize) / size;
-                    const int x1 = startX + ((x + 1) * targetSize) / size;
-                    const int y1 = startY + ((y + 1) * targetSize) / size;
-                    const int moduleW = max(1, x1 - x0);
-                    const int moduleH = max(1, y1 - y0);
-                    _qrDisplay->fillRect(x0, y0, moduleW, moduleH, dark);
-                }
-            }
-        }
-    }
-    
 public:
     BeadCraftReceiver(MatrixPanel_I2S_DMA* display) : _display(display) {
         _hasImage = false;
@@ -260,13 +220,15 @@ public:
         }
     }
 
-    void displayPairingScreen(const String& deviceCode, const String& pairingUrl) {
+    void displayDeviceCodeScreen(const String& deviceCode) {
         _display->fillScreen(0);
-        drawQrCode(pairingUrl);
-
         const uint16_t cyan = rgbTo565(0, 200, 255);
-        drawTinyHexTextCentered(deviceCode.substring(0, 6), 47, cyan);
-        drawTinyHexTextCentered(deviceCode.substring(6), 57, cyan);
+        const uint16_t accent = rgbTo565(0, 90, 180);
+
+        _display->drawRect(8, 18, 48, 28, accent);
+        _display->drawRect(9, 19, 46, 26, accent);
+        drawTinyHexTextCentered(deviceCode.substring(0, 6), 26, cyan);
+        drawTinyHexTextCentered(deviceCode.substring(6), 35, cyan);
     }
     
     bool hasImage() const { return _hasImage; }
@@ -360,6 +322,7 @@ public:
     
     void displayStoredImage() {
         uint16_t bgColor = 0;  // Black
+        uint16_t highlightColor = rgbTo565(0, 0, 255);
         
         int idx = 0;
         for (int y = 0; y < 64; y++) {
@@ -377,7 +340,7 @@ public:
                             break;
                         }
                     }
-                    displayColor = match ? pixel : bgColor;
+                    displayColor = match ? highlightColor : bgColor;
                 }
                 
                 _display->drawPixel(x, y, displayColor);
@@ -386,5 +349,3 @@ public:
         Serial.println(_highlightMode ? "OK_HL" : "OK");
     }
 };
-
-MatrixPanel_I2S_DMA* BeadCraftReceiver::_qrDisplay = nullptr;

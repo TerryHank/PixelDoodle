@@ -34,16 +34,6 @@
           <button id="upload-btn" class="toolbar-btn" onclick="document.getElementById('file-input').click()" title="上传">
             <span class="toolbar-btn-icon">+</span>
           </button>
-          <button id="scan-btn" class="toolbar-btn" onclick="openQrScanner()" title="扫描二维码">
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <path d="M4 9V5h4"></path>
-              <path d="M20 9V5h-4"></path>
-              <path d="M4 15v4h4"></path>
-              <path d="M20 15v4h-4"></path>
-              <path d="M9 12h6"></path>
-              <path d="M12 9v6"></path>
-            </svg>
-          </button>
           <input type="file" id="file-input" class="hidden-input" accept="image/jpeg,image/png,image/gif,image/webp">
           <select id="difficulty-select" class="led-size-btn" title="难度" onchange="onDifficultyChange()">
             <option value="1.0">原</option>
@@ -71,10 +61,10 @@
         <!-- Canvas Container with Upload Area -->
         <div class="canvas-container" style="margin: 0 auto; position: relative;">
           <!-- Upload Area (default) -->
-          <div id="upload-area" class="upload-area scan-guide" onclick="openQrScanner()">
-            <div class="upload-area-icon">QR</div>
-            <div class="upload-area-text">先扫描设备二维码进行配对</div>
-            <div class="upload-area-hint">已配对后可继续上传图片；也可在设置中切换 WiFi 模式</div>
+          <div id="upload-area" class="upload-area" onclick="document.getElementById('file-input').click()">
+            <div class="upload-area-icon">+</div>
+            <div class="upload-area-text">点击上传图片</div>
+            <div class="upload-area-hint">JPG, PNG, GIF, WEBP（最大 20 MB）</div>
           </div>
           <!-- Pattern Canvas (after generate) -->
           <canvas id="pattern-canvas" style="display: none;"></canvas>
@@ -119,11 +109,10 @@
     </div>
   </div>
 
-  <script src="/static/vendor/jsQR.js"></script>
-  <script src="/static/i18n.js?v=77"></script>
-  <script src="/static/app.js?v=62647"></script>
+  <script src="/static/i18n.js?v=78"></script>
+  <script src="/static/app.js?v=62648"></script>
 
-  <!-- Serial Port Dialog (Settings) -->
+  <!-- Settings Dialog -->
   <div id="serial-settings-dialog" class="modal" style="display: none;">
     <div class="modal-content modal-content-form qr-modal-content">
       <div class="modal-header">
@@ -137,45 +126,23 @@
           <div class="mode-toggle">
             <button class="mode-btn active" data-mode="ble" onclick="setConnectionMode('ble')">蓝牙</button>
             <button class="mode-btn" data-mode="wifi" onclick="setConnectionMode('wifi')">WiFi</button>
-            <button class="mode-btn" data-mode="serial" onclick="setConnectionMode('serial')">串口</button>
           </div>
         </div>
 
         <div id="wifi-settings" class="connection-settings" style="display: none;">
           <div id="wifi-status-card" class="ble-status-card" style="display: block;">
-            请在扫码弹窗中锁定设备，并让 ESP32 扫描附近热点
+            请先通过蓝牙连接设备，WiFi 将作为同一台设备的备选发送路径
           </div>
           <div class="form-group">
-            <label class="form-label">目标设备：</label>
+            <label class="form-label">当前设备：</label>
             <select id="wifi-device-select">
-              <option value="">请在扫码弹窗中扫描设备</option>
-            </select>
-            <button class="btn btn-small" onclick="openQrScanner()">打开扫码</button>
-          </div>
-        </div>
-        
-        <!-- Serial Port Selection (default) -->
-        <div id="serial-settings" class="connection-settings">
-          <div class="form-group">
-            <label class="form-label">串口：</label>
-            <select id="serial-port-select">
-              <option value="">扫描中...</option>
-            </select>
-            <button class="btn btn-small" onclick="refreshSerialPorts()">刷新</button>
-          </div>
-          <div class="form-group">
-            <label class="form-label">波特率：</label>
-            <select id="serial-baud-select">
-              <option value="115200">115200</option>
-              <option value="230400">230400</option>
-              <option value="460800" selected>460800</option>
-              <option value="921600">921600</option>
+              <option value="">请先通过蓝牙连接设备</option>
             </select>
           </div>
         </div>
-        
+
         <!-- BLE Device Selection (hidden by default) -->
-        <div id="ble-settings" class="connection-settings" style="display: none;">
+        <div id="ble-settings" class="connection-settings">
           <div id="ble-status-card" class="ble-status-card" style="display: none;"></div>
           <div class="form-group">
             <label class="form-label">蓝牙设备：</label>
@@ -232,57 +199,6 @@
       </div>
     </div>
   </div>
-  <div id="qr-scanner-dialog" class="modal" style="display: none;">
-    <div class="modal-content modal-content-form qr-modal-content">
-      <div class="modal-header">
-        <h3>扫描二维码</h3>
-        <button class="modal-close" onclick="closeQrScanner()">&times;</button>
-      </div>
-      <div class="modal-body">
-        <div class="qr-mode-toggle">
-          <button id="qr-mode-ble-btn" class="mode-btn active" onclick="setQrScannerMode('ble')">蓝牙配对</button>
-          <button id="qr-mode-wifi-btn" class="mode-btn" onclick="setQrScannerMode('wifi')">WiFi 扫描</button>
-        </div>
-        <div id="qr-scanner-frame" class="qr-scanner-frame">
-          <video id="qr-scanner-video" autoplay playsinline muted></video>
-          <div class="qr-scanner-overlay"></div>
-        </div>
-        <div id="qr-scanner-actions" class="qr-scanner-actions">
-          <button class="btn btn-secondary" onclick="triggerQrImagePicker()">拍照/选图识别</button>
-          <input id="qr-image-input" class="hidden-input" type="file" accept="image/*" capture="environment">
-        </div>
-        <div id="qr-scanner-manual" class="qr-scanner-manual">
-          <input id="manual-uuid-input" type="text" placeholder="输入设备 UUID">
-          <button id="qr-manual-submit-btn" class="btn btn-primary" onclick="connectByManualUuid()">连接 UUID</button>
-        </div>
-        <div id="qr-wifi-panel" class="qr-wifi-panel" style="display: none;">
-          <div class="qr-wifi-panel-title">附近热点</div>
-          <div id="qr-wifi-list" class="qr-wifi-list"></div>
-          <div id="qr-wifi-connect-panel" class="qr-wifi-connect-panel" style="display: none;">
-            <div id="qr-wifi-selected" class="qr-wifi-selected"></div>
-            <input id="qr-wifi-password" type="password" placeholder="输入 WiFi 密码" autocomplete="current-password">
-            <button id="qr-wifi-connect-btn" class="btn btn-primary" onclick="connectSelectedQrWifi()">连接这个 WiFi</button>
-          </div>
-        </div>
-        <div id="qr-scanner-status" class="qr-scanner-status">正在启动摄像头...</div>
-      </div>
-      <div class="modal-footer">
-        <button class="btn btn-primary" onclick="triggerQrHotspotScan()">扫描热点</button>
-      </div>
-    </div>
-  </div>
-  <div id="ble-quick-connect" class="ble-quick-connect" style="display: none;">
-    <div class="ble-quick-connect-card">
-      <div class="ble-quick-connect-title">连接这台设备</div>
-      <div id="ble-quick-connect-text" class="ble-quick-connect-text"></div>
-      <div class="ble-quick-connect-actions">
-        <button class="btn btn-secondary" onclick="hideBleQuickConnect()">稍后</button>
-        <button class="btn btn-primary" onclick="confirmBleQuickConnect()">连接设备</button>
-      </div>
-    </div>
-  </div>
 </body>
 </html>
-
-
 
