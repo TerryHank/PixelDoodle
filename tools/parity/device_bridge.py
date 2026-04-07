@@ -48,7 +48,10 @@ def main():
             port=payload["port"],
         )
     elif command == "ble_devices":
-        response = {"devices": asyncio.run(scan_ble_devices())}
+        try:
+            response = {"devices": asyncio.run(scan_ble_devices())}
+        except Exception:
+            response = {"devices": []}
     elif command == "ble_send":
         response = send_to_esp32_ble_sync(
             pixel_matrix=payload["pixel_matrix"],
