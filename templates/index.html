@@ -10,7 +10,6 @@
 
   <!-- Toast Container -->
   <div id="toast-container" class="toast-container"></div>
-  <div class="site-version-badge">v8</div>
 
   <!-- Main Layout -->
   <div class="main-container">
@@ -18,10 +17,13 @@
     <!-- Result Area -->
     <div id="result-area" style="width: 100%; max-width: 640px; margin: 0 auto;">
 
+      <div class="site-status-header">
+        <div class="site-version-badge">v8</div>
+        <div id="ble-target-chip" class="header-status-chip" style="display: none;"></div>
+      </div>
+
       <!-- Canvas Toolbar -->
         <div class="canvas-toolbar">
-          <div style="flex: 1;"></div>
-          <div id="ble-target-chip" class="toolbar-chip" style="display: none;"></div>
           <button id="bg-toggle" class="toolbar-btn" onclick="toggleBackground()" title="自动去除背景">
             背
           </button>

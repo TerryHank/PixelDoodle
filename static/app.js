@@ -41,7 +41,6 @@ function loadPersistentState() {
     const saved = localStorage.getItem('beadcraft_state');
     if (saved) {
       const data = JSON.parse(saved);
-      if (data.targetDeviceUuid) window.appState.targetDeviceUuid = data.targetDeviceUuid;
       if (data.connectionMode === 'ble' || data.connectionMode === 'wifi') {
         window.appState.connectionMode = data.connectionMode;
       }
@@ -133,8 +132,28 @@ function deviceBrightnessToPercent(brightness) {
   return Math.round(BRIGHTNESS_PERCENT_MIN + ratio * (BRIGHTNESS_PERCENT_MAX - BRIGHTNESS_PERCENT_MIN));
 }
 
+function getConnectedBleUuid() {
+  if (!window.appState.bleDevice?.gatt?.connected) return '';
+  return normalizeBleDeviceUuid(window.appState.bleDevice?.name);
+}
+
+function rememberConnectedBleTarget() {
+  const connectedUuid = getConnectedBleUuid();
+  if (!connectedUuid) return '';
+  window.appState.targetDeviceUuid = connectedUuid;
+  syncTargetUuidToUrl(connectedUuid);
+  savePersistentState();
+  return connectedUuid;
+}
+
+function clearRememberedBleTarget() {
+  window.appState.targetDeviceUuid = null;
+  syncTargetUuidToUrl('');
+  savePersistentState();
+}
+
 function getCurrentWiFiTargetUuid() {
-  return (document.getElementById('wifi-device-select')?.value || window.appState.targetDeviceUuid || '').trim().toUpperCase();
+  return getConnectedBleUuid();
 }
 
 function canSyncBrightness() {
@@ -211,14 +230,6 @@ function clearCanvas() {
 document.addEventListener('DOMContentLoaded', () => {
   // Load persistent state first
   loadPersistentState();
-  
-  const params = new URLSearchParams(window.location.search);
-  const targetDeviceUuid = (params.get('device_uuid') || params.get('u') || '').trim().toUpperCase();
-  // URL param takes priority over saved state
-  if (targetDeviceUuid) {
-    window.appState.targetDeviceUuid = targetDeviceUuid;
-    savePersistentState();
-  }
 
   loadFullPalette();
   initUpload();
@@ -227,6 +238,7 @@ document.addEventListener('DOMContentLoaded', () => {
   updateConnectionModeQuickButton();
   setConnectionMode(window.appState.connectionMode || 'ble');
   updateBrightnessControlState();
+  promptBleConnectionOnStartup();
   
   // Auto-generate pattern when LED size changes
   const ledSizeSelect = document.getElementById('led-matrix-size');
@@ -251,6 +263,18 @@ function updateConnectionModeQuickButton() {
   const mode = window.appState.connectionMode || 'ble';
   btn.textContent = getConnectionModeLabel(mode);
   btn.title = t('ble.connection_mode', {mode: getConnectionModeLabel(mode)});
+}
+
+function promptBleConnectionOnStartup() {
+  if (window.appState.bleDevice?.gatt?.connected) return;
+  if (document.getElementById('serial-settings-dialog')?.style.display === 'flex') return;
+  setConnectionMode('ble');
+  window.setTimeout(() => {
+    if (window.appState.bleDevice?.gatt?.connected) return;
+    showSerialSettings().catch((err) => {
+      console.warn('Failed to open BLE setup on startup:', err);
+    });
+  }, 0);
 }
 
 function cycleConnectionMode() {
@@ -558,7 +582,11 @@ function connectByManualUuid() {
 
 function syncTargetUuidToUrl(uuid) {
   const targetUrl = new URL(window.location.href);
-  targetUrl.searchParams.set('u', uuid);
+  if (uuid) {
+    targetUrl.searchParams.set('u', uuid);
+  } else {
+    targetUrl.searchParams.delete('u');
+  }
   targetUrl.searchParams.delete('device_uuid');
   window.history.replaceState({}, '', targetUrl.toString());
 }
@@ -569,9 +597,7 @@ async function beginUuidPairing(uuid, tryImmediateConnect = false) {
     throw new Error(t('toast.uuid_format'));
   }
 
-  window.appState.targetDeviceUuid = normalized;
-  syncTargetUuidToUrl(normalized);
-  savePersistentState();
+  clearRememberedBleTarget();
   setConnectionMode('ble');
   renderBleStatus();
 
@@ -637,9 +663,7 @@ async function beginUuidPairing(uuid, tryImmediateConnect = false) {
     throw new Error(t('toast.uuid_format'));
   }
 
-  window.appState.targetDeviceUuid = normalized;
-  syncTargetUuidToUrl(normalized);
-  savePersistentState();
+  clearRememberedBleTarget();
   setConnectionMode('ble');
   renderBleStatus();
   hideBleQuickConnect();
@@ -856,8 +880,7 @@ async function beginUuidPairing(uuid, tryImmediateConnect = false) {
     throw new Error(t('toast.uuid_format'));
   }
 
-  window.appState.targetDeviceUuid = normalized;
-  syncTargetUuidToUrl(normalized);
+  clearRememberedBleTarget();
   renderBleStatus();
   hideBleQuickConnect();
 
@@ -970,8 +993,8 @@ function renderBleStatus() {
   const connectBtn = document.getElementById('ble-connect-btn');
   const uploadArea = document.getElementById('upload-area');
   const targetUuid = (window.appState.targetDeviceUuid || '').trim().toUpperCase();
-  const connectedUuid = normalizeBleDeviceUuid(window.appState.bleDevice?.name);
-  const isConnected = !!window.appState.bleDevice?.gatt?.connected;
+  const connectedUuid = getConnectedBleUuid();
+  const isConnected = !!connectedUuid;
 
   if (uploadArea) {
     uploadArea.className = 'upload-area';
@@ -986,10 +1009,7 @@ function renderBleStatus() {
   if (chip) {
     if (isConnected && connectedUuid) {
       chip.style.display = 'inline-flex';
-      chip.textContent = t('ble.device_connected', {uuid: connectedUuid});
-    } else if (targetUuid) {
-      chip.style.display = 'inline-flex';
-      chip.textContent = t('ble.saved_device', {uuid: targetUuid});
+      chip.textContent = t('ble.header_connected', {uuid: connectedUuid});
     } else {
       chip.style.display = 'none';
       chip.textContent = '';
@@ -1020,6 +1040,9 @@ function renderBleStatus() {
 }
 
 function onBLEDisconnected() {
+  const disconnectedUuid = window.appState.bleDevice
+    ? normalizeBleDeviceUuid(window.appState.bleDevice.name)
+    : window.appState.targetDeviceUuid;
   if (window.appState.bleCharacteristic) {
     window.appState.bleCharacteristic.removeEventListener('characteristicvaluechanged', handleBLENotification);
   }
@@ -1034,10 +1057,8 @@ function onBLEDisconnected() {
   bleAckWaiters = [];
   bleBrightnessWaiters = [];
   bleBrightnessPendingValue = null;
-  const uuid = window.appState.bleDevice
-    ? normalizeBleDeviceUuid(window.appState.bleDevice.name)
-    : window.appState.targetDeviceUuid;
-  updateBLEDeviceSelect(uuid ? `${uuid} (disconnected)` : t('toast.ble_disconnected'));
+  clearRememberedBleTarget();
+  updateBLEDeviceSelect(disconnectedUuid ? `${disconnectedUuid} (disconnected)` : t('toast.ble_disconnected'));
   renderBleStatus();
   refreshWiFiDevices();
   updateBrightnessControlState();
@@ -1427,7 +1448,7 @@ async function ensureBLECharacteristic(requestIfNeeded = false) {
   window.appState.bleCharacteristic = characteristic;
   window.appState.bleWifiScanCharacteristic = wifiScanCharacteristic;
 
-  const deviceUuid = normalizeBleDeviceUuid(window.appState.bleDevice.name);
+  const deviceUuid = rememberConnectedBleTarget() || normalizeBleDeviceUuid(window.appState.bleDevice.name);
   updateBLEDeviceSelect(deviceUuid ? `${deviceUuid} (connected)` : 'Bluetooth connected', window.appState.bleDevice.id || window.appState.bleDevice.name || '');
   renderBleStatus();
 
@@ -1750,29 +1771,31 @@ async function requestWiFiScanViaWebBluetooth(requestIfNeeded = false) {
 
 async function connectAndScanWiFiForTarget(uuid) {
   window.appState.pendingBleAction = 'wifi-scan';
-  window.appState.targetDeviceUuid = uuid;
   window.appState.wifiScanResults = [];
   bleWifiScanBuffer = '';
   bleWifiScanPendingResult = null;
   bleWifiScanPendingError = null;
   bleWifiScanWaiters = [];
-  syncTargetUuidToUrl(uuid);
-  savePersistentState();
   renderBleStatus();
   setConnectionMode('wifi');
-  const wifiSelect = document.getElementById('wifi-device-select');
-  if (wifiSelect) {
-    wifiSelect.innerHTML = `<option value="${uuid}">${uuid}</option>`;
-    wifiSelect.value = uuid;
-  }
 
   try {
     if (!hasMatchingConnectedBLEDevice(uuid)) {
       await requestBLEDevice();
     }
     await ensureBLECharacteristic(false);
+    const targetUuid = rememberConnectedBleTarget() || getConnectedBleUuid();
+    const wifiSelect = document.getElementById('wifi-device-select');
+    if (wifiSelect) {
+      if (targetUuid) {
+        wifiSelect.innerHTML = `<option value="${targetUuid}">${targetUuid}</option>`;
+        wifiSelect.value = targetUuid;
+      } else {
+        wifiSelect.innerHTML = '<option value="">' + t('wifi.select_device_hint') + '</option>';
+      }
+    }
     updateQrScannerConnectionUi();
-    setQrScannerStatus(t('ble.connecting_scan', {uuid: uuid}));
+    setQrScannerStatus(t('ble.connecting_scan', {uuid: targetUuid || uuid}));
     renderQrWifiScanResults([], t('esp32.scanning'));
     const results = await requestWiFiScanViaWebBluetooth(false);
     window.appState.wifiScanResults = results;
@@ -1781,8 +1804,8 @@ async function connectAndScanWiFiForTarget(uuid) {
     const wifiStatusCard = document.getElementById('wifi-status-card');
     if (wifiStatusCard) {
       wifiStatusCard.textContent = results.length
-        ? t('wifi.returned_results', {uuid: uuid, count: results.length})
-        : t('wifi.no_hotspots', {uuid: uuid});
+        ? t('wifi.returned_results', {uuid: targetUuid || uuid, count: results.length})
+        : t('wifi.no_hotspots', {uuid: targetUuid || uuid});
     }
     return results;
   } finally {
@@ -2680,7 +2703,10 @@ async function sendHighlightToESP32() {
     if (connectionMode !== 'wifi') return;
 
     const wifiUuid = getCurrentWiFiTargetUuid();
-    if (!wifiUuid) return;
+    if (!wifiUuid) {
+      showToast(t('wifi.no_saved_device'), true);
+      return;
+    }
     await fetch('/api/wifi/highlight', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -2885,12 +2911,11 @@ async function showSerialSettings() {
 async function refreshWiFiDevices() {
   const statusCard = document.getElementById('wifi-status-card');
   const select = document.getElementById('wifi-device-select');
-  const connectedUuid = normalizeBleDeviceUuid(window.appState.bleDevice?.name);
-  const targetUuid = (window.appState.targetDeviceUuid || connectedUuid || '').trim().toUpperCase();
+  const connectedUuid = getConnectedBleUuid();
+  const targetUuid = connectedUuid;
 
-  if (targetUuid && targetUuid !== window.appState.targetDeviceUuid) {
-    window.appState.targetDeviceUuid = targetUuid;
-    savePersistentState();
+  if (!targetUuid && window.appState.targetDeviceUuid) {
+    clearRememberedBleTarget();
   }
 
   if (select) {
@@ -2942,13 +2967,8 @@ async function connectBLEDevice() {
     updateBLEDeviceSelect('Connecting...');
     await requestBLEDevice();
     await ensureBLECharacteristic(false);
-    const uuid = normalizeBleDeviceUuid(window.appState.bleDevice?.name);
-    if (uuid) {
-      window.appState.targetDeviceUuid = uuid;
-      syncTargetUuidToUrl(uuid);
-      savePersistentState();
-      refreshWiFiDevices();
-    }
+    const uuid = rememberConnectedBleTarget() || getConnectedBleUuid();
+    if (uuid) refreshWiFiDevices();
     showToast(uuid ? t('toast.ble_connected', {uuid: uuid}) : t('toast.ble_connected_simple'));
     refreshBLEDevices();
     renderBleStatus();
