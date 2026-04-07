@@ -2466,15 +2466,27 @@ function toggleColorHighlight(code) {
 }
 
 // === Send Highlight to ESP32 ===
+function resolveHighlightSyncRgb(code) {
+  const info = window.appState.colorData[code] || window.appState.fullPalette[code];
+  if (!info?.rgb) return null;
+
+  const isPureBlack = info.hex?.toUpperCase() === '#000000' || info.rgb.every(channel => channel === 0);
+  if (!isPureBlack) return info.rgb;
+
+  const whiteEntry = Object.values(window.appState.fullPalette).find(color => color?.hex?.toUpperCase() === '#FFFFFF');
+  return whiteEntry?.rgb || [255, 255, 255];
+}
+
 async function sendHighlightToESP32() {
-  const { pixelMatrix, activeColors, connectionMode, colorData } = window.appState;
+  const { pixelMatrix, activeColors, connectionMode } = window.appState;
   if (!pixelMatrix) return;
   
   // Get RGB values for highlighted colors
   const highlightRGB = [];
   activeColors.forEach(code => {
-    if (colorData[code] && colorData[code].rgb) {
-      highlightRGB.push(colorData[code].rgb);
+    const syncRgb = resolveHighlightSyncRgb(code);
+    if (syncRgb) {
+      highlightRGB.push(syncRgb);
     }
   });
   
