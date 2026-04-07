@@ -52,14 +52,25 @@ async fn index() -> Result<Html<String>, (StatusCode, String)> {
     Ok(Html(html))
 }
 
-fn python_executable() -> &'static str {
+fn python_executable() -> String {
     if let Ok(path) = std::env::var("PYTHON_EXECUTABLE") {
-        return Box::leak(path.into_boxed_str());
+        return path;
     }
+
+    let root = repo_root();
+    let local_windows = root.join(".venv").join("Scripts").join("python.exe");
+    if local_windows.exists() {
+        return local_windows.to_string_lossy().to_string();
+    }
+    let local_unix = root.join(".venv").join("bin").join("python");
+    if local_unix.exists() {
+        return local_unix.to_string_lossy().to_string();
+    }
+
     if cfg!(windows) {
-        "python"
+        "python".to_string()
     } else {
-        "python3"
+        "python3".to_string()
     }
 }
 
@@ -311,6 +322,7 @@ async fn export_pattern_json(Json(data): Json<Value>) -> Result<impl IntoRespons
         .unwrap_or(0);
     let height = pixel_matrix.len();
 
+    let timestamp = Local::now().format("%Y%m%d_%H%M%S").to_string();
     let export_data = json!({
         "version": "1.0",
         "exported_at": Local::now().to_rfc3339(),
@@ -323,7 +335,13 @@ async fn export_pattern_json(Json(data): Json<Value>) -> Result<impl IntoRespons
     });
 
     Ok((
-        [(axum::http::header::CONTENT_TYPE, "application/json".to_string())],
+        [
+            (axum::http::header::CONTENT_TYPE, "application/json".to_string()),
+            (
+                axum::http::header::CONTENT_DISPOSITION,
+                format!("attachment; filename=beadcraft_pattern_{timestamp}.json"),
+            ),
+        ],
         serde_json::to_vec_pretty(&export_data)
             .map_err(|err| (StatusCode::INTERNAL_SERVER_ERROR, format!("JSON export failed: {err}")))?,
     ))

@@ -28,11 +28,6 @@ class ConnectedTargetMemoryTests(unittest.TestCase):
         self.assertIn("function rememberConnectedBleTarget()", self.content)
         self.assertIn("function clearRememberedBleTarget()", self.content)
 
-    def test_wifi_target_resolves_only_from_active_ble_connection(self):
-        body = get_function_body(self.content, "getCurrentWiFiTargetUuid")
-        self.assertIn("getConnectedBleUuid()", body)
-        self.assertNotIn("window.appState.targetDeviceUuid", body)
-
     def test_ble_disconnect_clears_remembered_target(self):
         body = get_function_body(self.content, "onBLEDisconnected")
         self.assertIn("clearRememberedBleTarget()", body)
@@ -41,10 +36,9 @@ class ConnectedTargetMemoryTests(unittest.TestCase):
         body = get_function_body(self.content, "ensureBLECharacteristic")
         self.assertIn("rememberConnectedBleTarget()", body)
 
-    def test_refresh_wifi_devices_requires_live_ble_connection(self):
-        body = get_function_body(self.content, "refreshWiFiDevices")
-        self.assertIn("const connectedUuid = getConnectedBleUuid();", body)
-        self.assertNotIn("window.appState.targetDeviceUuid || connectedUuid", body)
+    def test_frontend_no_longer_exposes_wifi_target_helpers(self):
+        self.assertNotIn("function getCurrentWiFiTargetUuid()", self.content)
+        self.assertNotIn("async function refreshWiFiDevices()", self.content)
 
 
 if __name__ == "__main__":

@@ -1,26 +1,28 @@
 # PixelDoodle
 
-PixelDoodle（像素豆绘）是一个“图片转拼豆图 + ESP32 点阵显示”的完整项目，包含：
+PixelDoodle（像素豆绘）是一个“图片转拼豆图 + ESP32 点阵显示”的完整项目。
 
-**Version: 6.26.47**
+**Version: v9**
 
-- Web 前端（上传、裁剪、生成、导出、扫码）
-- Python/FastAPI 后端（调色、量化、导出、串口接口）
-- ESP32 固件（BLE 接收图像、设备 UUID、二维码配对页）
+- Web 前端：上传、裁剪、生成、导出、浏览器直连蓝牙
+- Rust + Axum 主后端：静态页面、生成接口、导出接口、设备兼容接口
+- Python 基线层：保留原图像/导出/设备逻辑，用于差分测试和兼容桥
+- ESP32 固件：BLE 接收图像、设备 UUID 显示、蓝灯高亮
 
 ---
 
 ## 1. 当前能力概览
 
 - 图片生成拼豆图（颜色统计、坐标、导出 PNG/PDF/JSON）
+- 首页直接上传或选择示例图
+- 浏览器 Web Bluetooth 直连 BeadCraft 设备
 - ESP32 64x64 点阵 BLE 显示
-- 每台 ESP32 有唯一设备码（UUID，12 位 HEX）
-- 启动页后显示二维码，二维码参数为 `?u=<UUID>`
-- 前端支持：
-  - 扫码识别二维码
-  - 手动输入 UUID
-  - 自动锁定目标设备并尝试 BLE 连接
-  - 浏览器拦截自动连接时弹出“点一下连接这台设备”
+- 后端兼容接口仍保留：
+  - `GET /api/serial/ports`
+  - `POST /api/serial/send`
+  - `POST /api/serial/highlight`
+  - `GET /api/ble/devices`
+  - `POST /api/ble/send`
 
 ---
 
@@ -28,34 +30,32 @@ PixelDoodle（像素豆绘）是一个“图片转拼豆图 + ESP32 点阵显示
 
 ```text
 PixelDoodle/
-├─ main.py                    # FastAPI 入口
-├─ requirements.txt
-├─ core/                      # 图像处理、串口/BLE 后端能力
+├─ backend-rs/                # Rust + Axum 主服务
+├─ main.py                    # Python 基线入口（对照/回溯）
+├─ requirements.txt           # Python 基线依赖
+├─ core/                      # Python 图像处理、串口/BLE 基线能力
 ├─ static/                    # 前端 JS/CSS
 ├─ templates/                 # HTML 模板
 ├─ data/                      # 颜色数据
-├─ certs/                     # 本地 HTTPS 证书（可选）
+├─ tools/parity/              # Rust 调用的 Python 基线脚本
 ├─ docs/
 └─ firmware/                  # ESP32 固件（PlatformIO）
-   ├─ src/main.cpp
-   ├─ lib/beadcraft-receiver/
-   ├─ lib/ble-receiver/
-   └─ platformio.ini
 ```
 
 ---
 
 ## 3. 环境要求
 
-### 后端
+### Web 后端
 
-- Python 3.8+
+- Rust stable
+- Python 3.10+
 - Windows/macOS/Linux
 
 ### 固件
 
 - PlatformIO（CLI）
-- ESP32 开发板（当前配置：`esp32doit-devkit-v1`）
+- ESP32-S3 开发板
 - HUB75 64x64 LED 点阵
 
 ### 浏览器（Web Bluetooth）
@@ -68,24 +68,36 @@ PixelDoodle/
 
 ## 4. 本地启动（Web）
 
+### 4.1 安装 Python 基线依赖
+
 在项目根目录执行：
 
 ```bash
 pip install -r requirements.txt
-python main.py
+```
+
+### 4.2 启动 Rust 主服务
+
+```bash
+cargo run --manifest-path backend-rs/Cargo.toml
 ```
 
 默认监听：
 
-- `https://0.0.0.0:8765`（如果检测到 `certs/localhost-cert.pem` 和 `certs/localhost-key.pem`）
-- 否则回退为 HTTP
+- `0.0.0.0:8765`
 
 可选环境变量：
 
-- `PORT`（默认 `8765`）
 - `HOST`（默认 `0.0.0.0`）
-- `SSL_CERTFILE`
-- `SSL_KEYFILE`
+- `PORT`（默认 `8765`）
+- `PYTHON_EXECUTABLE`
+  - 指向带有 `requirements.txt` 依赖的 Python 解释器
+  - 未设置时，服务会优先尝试项目内 `.venv`
+
+说明：
+
+- Rust 服务负责对外 HTTP 接口和静态资源
+- Python 仅作为兼容桥和差分基线，不再作为默认线上入口
 
 ---
 
@@ -95,66 +107,57 @@ python main.py
 
 ```bash
 cd firmware
-pio run -t upload --upload-port COM4
+pio run -t upload --upload-port COM13
 ```
 
 串口查看日志：
 
 ```bash
-pio device monitor -b 115200 -p COM4
-```
-
-当前固件内关键配置在 [platformio.ini](./firmware/platformio.ini)：
-
-- `PAIRING_BASE_URL` 已配置为：
-  - `https://10.39.251.173:8765/`
-
-设备二维码最终形如：
-
-```text
-https://10.39.251.173:8765/?u=F42DC97179B4
+pio device monitor -b 115200 -p COM13
 ```
 
 ---
 
-## 6. 配对与发送流程（推荐）
+## 6. 使用流程
 
-1. ESP32 上电，显示二维码和设备 UUID。
-2. 前端点击扫码，或手动输入 UUID。
-3. 页面锁定目标设备（`?u=...`）。
-4. 前端立即尝试 BLE 连接该设备。
-5. 连接成功后，生成图案并发送到 ESP32。
-
-说明：
-
-- 浏览器安全策略下，`requestDevice()` 可能需要用户手势。
-- 若自动连接被拦截，前端会弹出简化确认层，让用户“一键连接当前设备”。
+1. 打开首页，上传图片或点击示例图。
+2. 页面生成拼豆图并显示色板。
+3. 如需发送到设备，点击工具栏蓝牙状态按钮完成连接。
+4. 连接成功后可继续高亮、导出和发送。
 
 ---
 
 ## 7. API 速览
 
-核心接口在 [main.py](./main.py)：
+Rust 主服务核心路由：
 
-- `GET /`：主页
-- `GET /api/palette`：调色板与预设
-- `POST /api/generate`：图像转拼豆图
+- `GET /`
+- `GET /api/palette`
+- `POST /api/generate`
 - `POST /api/export/png`
 - `POST /api/export/pdf`
 - `POST /api/export/json`
 - `GET /api/serial/ports`
 - `POST /api/serial/send`
 - `POST /api/serial/highlight`
-- `GET /api/ble/devices`（旧后端 BLE 扫描）
-- `POST /api/ble/send`（旧后端 BLE 发送）
+- `GET /api/ble/devices`
+- `POST /api/ble/send`
 
-备注：当前主流程已改为浏览器 Web Bluetooth 直连，`/api/ble/*` 主要用于兼容旧方案。
+说明：
+
+- 这些接口的外部形状保持与历史 FastAPI 版本兼容
+- Python `main.py` 保留，仅用于结果对照、调试和回归排查
 
 ---
 
 ## 8. 常见问题
 
-### Q1：浏览器提示“找不到兼容设备”
+### Q1：为什么还需要 Python 环境
+
+当前 `v9` 已由 Rust 接管 HTTP 服务，但为了保证结果兼容和设备接口不回退，
+仍保留 Python 基线层。`PYTHON_EXECUTABLE` 需指向已安装依赖的解释器。
+
+### Q2：浏览器提示“找不到兼容设备”
 
 排查顺序：
 
@@ -163,24 +166,17 @@ https://10.39.251.173:8765/?u=F42DC97179B4
 3. 浏览器蓝牙是否开启、系统权限是否允许
 4. 页面是否使用 `HTTPS`
 
-前端已做回退策略：精确设备名匹配失败时，会回退到 `BeadCraft-` 前缀匹配。
+### Q3：亮度控制在哪里
 
-### Q2：手机能打开网页但不能实时扫码
-
-- 手机浏览器对摄像头权限要求更严格，优先使用 HTTPS。
-- 已支持“拍照/选图识别”兜底。
-
-### Q3：扫码后为什么还要点一次连接
-
-- 受 Web Bluetooth 规范限制，部分浏览器必须用户手势触发配对。
-- 项目已将这一步最小化为单次确认按钮。
+前端亮度控件已移除。当前版本保留固件亮度能力，但网页不再暴露滑杆入口。
 
 ---
 
 ## 9. 开发建议
 
 - 前端调试：优先桌面 Chrome/Edge
-- BLE 联调：先确认设备名、再确认 GATT UUID
+- 后端调试：优先运行 `cargo test --manifest-path backend-rs/Cargo.toml`
+- 差分调试：使用 `tools/parity/` 下脚本对照 Python 基线
 - 固件改动后：务必重新烧录并观察串口日志
 
 ---

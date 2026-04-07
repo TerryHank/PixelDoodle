@@ -17,16 +17,16 @@ BLE_RECEIVER = REPO_ROOT / "firmware" / "lib" / "ble-receiver" / "BLEImageReceiv
 
 
 class BrightnessFeatureTests(unittest.TestCase):
-    def test_template_no_longer_has_brightness_slider_block(self):
+    def test_template_has_brightness_slider_block(self):
         content = INDEX_HTML.read_text(encoding="utf-8")
-        self.assertNotIn('id="brightness-slider"', content)
-        self.assertNotIn('id="brightness-value"', content)
-        self.assertNotIn('id="brightness-hint"', content)
-        self.assertNotIn('home-brightness-panel', content)
+        self.assertIn('id="brightness-slider"', content)
+        self.assertIn('id="brightness-value"', content)
+        self.assertIn('id="brightness-hint"', content)
+        self.assertRegex(content, r'id="brightness-slider"[^>]*min="10"[^>]*max="100"')
 
-    def test_frontend_no_longer_has_brightness_state_and_controls(self):
+    def test_frontend_has_brightness_state_and_protocol_constants(self):
         content = APP_JS.read_text(encoding="utf-8")
-        forbidden_snippets = [
+        required_snippets = [
             "brightnessPercent:",
             "deviceBrightnessLoaded:",
             "brightnessSyncTimer:",
@@ -38,29 +38,35 @@ class BrightnessFeatureTests(unittest.TestCase):
             "const DEVICE_BRIGHTNESS_MAX = 255;",
             "function percentToDeviceBrightness(",
             "function deviceBrightnessToPercent(",
-            "function updateBrightnessControlState(",
-            "function initBrightnessControls(",
             "async function sendBrightnessViaWebBluetooth(",
-            "async function requestBrightnessViaWebBluetooth(",
             "async function sendBrightnessToESP32(",
-            "function queueBrightnessSync(",
             "async function syncBrightnessFromCurrentDevice(",
         ]
-        for snippet in forbidden_snippets:
-            self.assertNotIn(snippet, content)
+        for snippet in required_snippets:
+            self.assertIn(snippet, content)
 
-    def test_frontend_no_longer_handles_brightness_notifications(self):
+    def test_frontend_updates_slider_from_ble_notifications(self):
         content = APP_JS.read_text(encoding="utf-8")
-        self.assertNotIn("if (code === BLE_NTF_BRIGHTNESS)", content)
-        self.assertNotIn("bleBrightnessWaiters", content)
-        self.assertNotIn("bleBrightnessPendingValue", content)
+        self.assertIn("if (code === BLE_NTF_BRIGHTNESS)", content)
+        self.assertIn("applyDeviceBrightness(", content)
+        self.assertIn("queueBrightnessSync(", content)
 
-    def test_i18n_no_longer_has_brightness_copy(self):
+    def test_frontend_hides_home_brightness_panel_until_ble_connected(self):
+        content = APP_JS.read_text(encoding="utf-8")
+        match = re.search(r"function updateBrightnessControlState\(\) \{(?P<body>.*?)\n\}", content, re.S)
+        self.assertIsNotNone(match)
+        body = match.group("body")
+        self.assertIn("const panel = document.querySelector('.home-brightness-panel');", body)
+        self.assertIn("const isConnected = canSyncBrightness();", body)
+        self.assertIn("if (panel) panel.hidden = !isConnected;", body)
+        self.assertIn("slider.disabled = !isConnected;", body)
+
+    def test_i18n_has_brightness_copy(self):
         content = I18N_JS.read_text(encoding="utf-8")
-        self.assertNotIn("'brightness.label':", content)
-        self.assertNotIn("'brightness.hint_connected':", content)
-        self.assertNotIn("'brightness.hint_disconnected':", content)
-        self.assertNotIn("'toast.brightness_sync_failed':", content)
+        self.assertIn("'brightness.label':", content)
+        self.assertIn("'brightness.hint_connected':", content)
+        self.assertIn("'brightness.hint_disconnected':", content)
+        self.assertIn("'toast.brightness_sync_failed':", content)
 
     def test_backend_no_longer_exposes_wifi_brightness_routes(self):
         routes = {

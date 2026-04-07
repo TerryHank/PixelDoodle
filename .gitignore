@@ -13,6 +13,7 @@ build/
 venv/
 env/
 .env
+.venv/
 
 # IDE
 .vscode/
@@ -36,3 +37,6 @@ uploads/
 
 # Local brainstorming artifacts
 .superpowers/
+
+# Rust build artifacts
+backend-rs/target/

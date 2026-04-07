@@ -23,41 +23,40 @@ class BleStartupPromptTests(unittest.TestCase):
         cls.index_html = INDEX_HTML.read_text(encoding="utf-8")
         cls.style_css = STYLE_CSS.read_text(encoding="utf-8")
 
-    def test_template_uses_dedicated_status_header_above_toolbar(self):
-        self.assertIn('class="site-status-header"', self.index_html)
-        self.assertRegex(
-            self.index_html,
-            re.compile(
-                r'<div class="site-status-header">.*?'
-                r'<div class="site-version-badge">v8</div>.*?'
-                r'<div id="ble-target-chip" class="header-status-chip".*?</div>.*?'
-                r'</div>\s*<!-- Canvas Toolbar -->\s*<div class="canvas-toolbar">',
-                re.S,
-            ),
-        )
-
-    def test_toolbar_no_longer_contains_ble_status_chip(self):
+    def test_toolbar_places_home_button_at_far_left(self):
         toolbar_match = re.search(r'<div class="canvas-toolbar">(?P<body>.*?)</div>\s*<!-- Canvas Container', self.index_html, re.S)
         self.assertIsNotNone(toolbar_match)
-        self.assertNotIn('ble-target-chip', toolbar_match.group('body'))
+        body = toolbar_match.group('body')
+        self.assertRegex(body, re.compile(r'<button id="home-btn".*?</button>\s*<button id="bg-toggle"', re.S))
 
-    def test_css_has_header_status_layout(self):
-        self.assertIn('.site-status-header {', self.style_css)
-        self.assertIn('.header-status-chip {', self.style_css)
+    def test_template_places_version_badge_outside_toolbar(self):
+        self.assertIn('class="site-version-badge site-version-corner">v9</div>', self.index_html)
+        toolbar_match = re.search(r'<div class="canvas-toolbar">(?P<body>.*?)</div>\s*<!-- Canvas Container', self.index_html, re.S)
+        self.assertIsNotNone(toolbar_match)
+        self.assertNotIn('site-version-badge', toolbar_match.group('body'))
 
-    def test_startup_prompt_helper_exists(self):
-        self.assertIn('function promptBleConnectionOnStartup()', self.app_js)
+    def test_template_no_longer_uses_status_header_or_chip(self):
+        self.assertNotIn('class="site-status-header"', self.index_html)
+        self.assertNotIn('ble-target-chip', self.index_html)
 
-    def test_startup_prompt_switches_to_ble_and_opens_settings(self):
-        body = get_function_body(self.app_js, 'promptBleConnectionOnStartup')
-        self.assertIn("setConnectionMode('ble')", body)
-        self.assertIn('showSerialSettings()', body)
-        self.assertIn('window.appState.bleDevice?.gatt?.connected', body)
+    def test_css_has_quick_status_button_states(self):
+        self.assertIn('.mode-quick-btn.connected {', self.style_css)
+        self.assertIn('.mode-quick-btn.disconnected {', self.style_css)
 
-    def test_dom_content_loaded_triggers_startup_prompt(self):
+    def test_dom_content_loaded_does_not_force_ble_popup(self):
         dom_ready = re.search(r"document\.addEventListener\('DOMContentLoaded', \(\) => \{(?P<body>.*?)\n\}\);", self.app_js, re.S)
         self.assertIsNotNone(dom_ready)
-        self.assertIn('promptBleConnectionOnStartup();', dom_ready.group('body'))
+        self.assertNotIn('promptBleConnectionOnStartup();', dom_ready.group('body'))
+
+    def test_quick_status_button_defaults_to_disconnected_text(self):
+        self.assertIn('未连接', self.index_html)
+        self.assertIn("function updateConnectionModeQuickButton()", self.app_js)
+
+    def test_quick_status_button_uses_ble_prefix_when_connected(self):
+        body = get_function_body(self.app_js, 'updateConnectionModeQuickButton')
+        self.assertIn("connectedUuid.slice(0, 4)", body)
+        self.assertIn("btn.classList.toggle('connected', !!connectedUuid)", body)
+        self.assertIn("btn.classList.toggle('disconnected', !connectedUuid)", body)
 
 
 if __name__ == '__main__':

@@ -2,8 +2,10 @@ services:
   - type: web
     name: beadcraft
     runtime: python
-    buildCommand: pip install -r requirements.txt
-    startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
+    buildCommand: pip install -r requirements.txt && cargo build --manifest-path backend-rs/Cargo.toml --release
+    startCommand: ./backend-rs/target/release/beadcraft-server
     envVars:
       - key: PYTHON_VERSION
         value: 3.10.0
+      - key: PYTHON_EXECUTABLE
+        value: python

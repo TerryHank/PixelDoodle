@@ -142,6 +142,9 @@ const I18N = {
     'ble.scan_hint_detail': '已配对后可继续上传图片',
     'upload.click_hint': '点击上传图片',
     'ble.locked_scan_hint': '已锁定设备 {uuid}。请在扫码弹窗中连接该设备并扫描附近热点。',
+    'brightness.label': '屏幕亮度：',
+    'brightness.hint_connected': '拖动后会立即同步到当前设备',
+    'brightness.hint_disconnected': '请先连接设备后再同步亮度',
 
     // Connection mode labels
     'ble.mode_ble': '蓝牙',
@@ -161,6 +164,7 @@ const I18N = {
     'toast.ble_uuid_mismatch': '选择了 {selected}，但目标是 {expected}',
     'toast.ble_connected': '蓝牙已连接: {uuid}',
     'toast.ble_connected_simple': '蓝牙已连接',
+    'toast.brightness_sync_failed': '亮度同步失败',
   },
 
   en: {
@@ -304,6 +308,9 @@ const I18N = {
     'ble.scan_hint_detail': 'After pairing, upload images',
     'upload.click_hint': 'Click to upload image',
     'ble.locked_scan_hint': 'Device {uuid} locked. Connect and scan hotspots in scanner popup.',
+    'brightness.label': 'Display brightness:',
+    'brightness.hint_connected': 'Drag to sync brightness to the current device immediately',
+    'brightness.hint_disconnected': 'Connect a device before syncing brightness',
 
     // Connection mode labels
     'ble.mode_ble': 'BLE',
@@ -323,6 +330,7 @@ const I18N = {
     'toast.ble_uuid_mismatch': 'Selected {selected}, but expected {expected}',
     'toast.ble_connected': 'Bluetooth connected: {uuid}',
     'toast.ble_connected_simple': 'Bluetooth connected',
+    'toast.brightness_sync_failed': 'Brightness sync failed',
   }
 };
 
