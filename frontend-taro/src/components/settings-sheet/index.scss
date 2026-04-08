@@ -18,10 +18,12 @@
 
 .settings-sheet__panel {
   position: relative;
-  width: min(420px, 100%);
+  width: 100%;
+  max-width: 460px;
   border-radius: 24px;
   overflow: hidden;
-  background: linear-gradient(180deg, rgba(255, 255, 255, 0.98), rgba(248, 250, 252, 0.98));
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.98), rgba(248, 250, 252, 0.98));
   border: 1px solid rgba(148, 163, 184, 0.2);
   box-shadow: 0 28px 80px rgba(15, 23, 42, 0.24);
 }
@@ -33,13 +35,13 @@
 }
 
 .settings-sheet__header {
-  padding-top: 20px;
-  padding-bottom: 16px;
-  border-bottom: 1px solid rgba(226, 232, 240, 0.9);
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 12px;
+  padding-top: 20px;
+  padding-bottom: 16px;
+  border-bottom: 1px solid rgba(226, 232, 240, 0.9);
 }
 
 .settings-sheet__title {
@@ -57,17 +59,17 @@
 }
 
 .settings-sheet__close {
-  min-width: 68px;
+  width: 36px;
   height: 36px;
-  padding: 0 12px;
   border-radius: 999px;
-  border: 1px solid rgba(148, 163, 184, 0.2);
-  background: rgba(148, 163, 184, 0.08);
+  border: 1px solid rgba(148, 163, 184, 0.18);
+  background: rgba(148, 163, 184, 0.12);
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 12px;
   color: var(--text-secondary);
+  font-size: 18px;
+  line-height: 1;
 }
 
 .settings-sheet__body {
@@ -75,16 +77,16 @@
   padding-bottom: 22px;
   display: flex;
   flex-direction: column;
-  gap: 14px;
+  gap: 12px;
 }
 
 .settings-sheet__mode-switch {
-  display: flex;
-  gap: 10px;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
 }
 
 .settings-sheet__mode-pill {
-  flex: 1;
   height: 40px;
   border-radius: 14px;
   border: 1px solid rgba(191, 219, 254, 0.85);
@@ -92,22 +94,22 @@
   display: flex;
   align-items: center;
   justify-content: center;
+  color: var(--text-secondary);
   font-size: 13px;
   font-weight: 600;
-  color: var(--text-secondary);
 }
 
 .settings-sheet__mode-pill--active {
   background: linear-gradient(135deg, #2563eb, #1d4ed8);
-  color: #ffffff;
   border-color: transparent;
+  color: #ffffff;
 }
 
 .settings-sheet__summary {
   padding: 14px 16px;
-  border-radius: 18px;
-  background: rgba(248, 250, 252, 0.92);
-  border: 1px solid rgba(226, 232, 240, 0.9);
+  border-radius: 14px;
+  background: #f8fafc;
+  border: 1px solid rgba(148, 163, 184, 0.2);
 }
 
 .settings-sheet__summary-line,
@@ -167,7 +169,7 @@
   }
 
   .settings-sheet__panel {
-    width: 100%;
+    max-width: none;
     border-radius: 24px 24px 18px 18px;
   }
 

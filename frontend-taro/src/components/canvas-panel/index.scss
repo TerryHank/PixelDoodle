@@ -1,85 +1,151 @@
-.canvas-panel {
+.canvas-container {
+  position: relative;
+  max-width: none;
+  max-height: 640px;
   width: 100%;
-  max-width: 600px;
+  display: flex;
+  justify-content: center;
+  align-items: center;
   margin: 0 auto;
 }
 
-.canvas-panel__guide,
-.canvas-panel__preview {
-  width: 100%;
-  min-height: 220px;
-  border-radius: var(--card-radius);
-  padding: 28px 20px;
+.upload-area {
+  border: 2px dashed var(--border);
+  border-radius: 12px;
+  padding: 32px 20px;
+  text-align: center;
+  box-sizing: border-box;
+  background: var(--bg);
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  text-align: center;
+  min-height: 200px;
+  width: 100%;
 }
 
-.canvas-panel__guide {
-  border: 2px solid var(--border-strong);
-  background: linear-gradient(180deg, #f8fbff, #eef6ff);
+.upload-area:hover {
+  background: #f0f7ff;
+  border-color: var(--accent);
 }
 
-.canvas-panel__guide-icon {
-  font-size: 24px;
+.upload-area-icon {
+  font-size: 22px;
   font-weight: 700;
   color: #1d4ed8;
   letter-spacing: 0.08em;
   margin-bottom: 12px;
 }
 
-.canvas-panel__guide-title,
-.canvas-panel__preview-title {
-  font-size: 15px;
-  font-weight: 600;
-  color: var(--text-primary);
-}
-
-.canvas-panel__guide-desc,
-.canvas-panel__preview-desc {
-  margin-top: 6px;
-  font-size: 12px;
+.upload-area-icon--plus {
+  font-size: 30px;
+  line-height: 1;
+  letter-spacing: 0;
   color: var(--text-secondary);
-  max-width: 360px;
 }
 
-.canvas-panel__device-chip {
-  margin-top: 14px;
-  padding: 8px 12px;
-  border-radius: 999px;
-  background: rgba(255, 255, 255, 0.88);
-  border: 1px solid rgba(147, 197, 253, 0.72);
-  color: #1d4ed8;
-  font-size: 11px;
-  font-weight: 700;
+.upload-area-text {
+  font-size: 14px;
+  color: var(--text-primary);
+  font-weight: 600;
 }
 
-.canvas-panel__preview {
-  border: 1px solid var(--border);
-  background: rgba(255, 255, 255, 0.88);
-  box-shadow: var(--shadow-soft);
+.upload-area-hint {
+  font-size: 12px;
+  color: #999;
+  margin-top: 10px;
+  line-height: 1.45;
 }
 
-.canvas-panel__preview-image {
+.scan-guide {
+  border-style: solid;
+  border-color: #bfdbfe;
+  background: linear-gradient(180deg, #f8fbff, #eef6ff);
+}
+
+.preview-section {
   width: 100%;
-  max-width: 560px;
-  max-height: 560px;
-  border-radius: 10px;
-  border: 1px solid rgba(226, 232, 240, 0.9);
-  background: #ffffff;
+  height: 100%;
+  display: flex;
+  justify-content: center;
+  align-items: center;
 }
 
-.canvas-panel__preview-grid {
-  width: min(280px, 70vw);
-  aspect-ratio: 1;
-  border-radius: 14px;
-  border: 1px solid rgba(191, 219, 254, 0.9);
-  background:
-    linear-gradient(90deg, rgba(191, 219, 254, 0.42) 1px, transparent 1px),
-    linear-gradient(rgba(191, 219, 254, 0.42) 1px, transparent 1px),
-    linear-gradient(180deg, rgba(248, 250, 252, 0.9), rgba(239, 246, 255, 0.9));
-  background-size: 12.5% 12.5%;
-  margin-bottom: 16px;
+.pattern-canvas {
+  display: block;
+  background: #ffffff;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.pattern-grid {
+  position: relative;
+  background: #ffffff;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  overflow: hidden;
+  display: block;
+  max-width: 100%;
+}
+
+.pattern-cell {
+  position: absolute;
+  box-sizing: border-box;
+  border-style: solid;
+  border-color: rgba(0, 0, 0, 0.08);
+}
+
+.pattern-cell--transparent {
+  background-color: #dcdcdc;
+  background-image:
+    linear-gradient(45deg, rgba(180, 180, 180, 0.9) 25%, transparent 25%),
+    linear-gradient(-45deg, rgba(180, 180, 180, 0.9) 25%, transparent 25%),
+    linear-gradient(45deg, transparent 75%, rgba(180, 180, 180, 0.9) 75%),
+    linear-gradient(-45deg, transparent 75%, rgba(180, 180, 180, 0.9) 75%);
+  background-size: 8px 8px;
+  background-position: 0 0, 0 4px, 4px -4px, -4px 0;
+}
+
+.pattern-cell__mask {
+  position: absolute;
+  inset: 0;
+  background: rgba(255, 255, 255, 0.72);
+}
+
+.preview-image {
+  max-width: 100%;
+  max-height: 640px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  object-fit: contain;
+  display: block;
+}
+
+@media (max-width: 768px) {
+  .canvas-container {
+    max-height: none;
+  }
+
+  .upload-area {
+    min-height: 280px;
+    padding: 26px 16px;
+  }
+
+  .upload-area-icon {
+    font-size: 32px;
+  }
+
+  .upload-area-icon--plus {
+    font-size: 38px;
+  }
+
+  .upload-area-text {
+    font-size: 18px;
+  }
+
+  .upload-area-hint {
+    font-size: 13px;
+    margin-top: 8px;
+  }
 }

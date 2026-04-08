@@ -81,9 +81,10 @@ export const useDeviceStore = create<DeviceState>((set, get) => ({
     })),
   toggleHighlightCode: (code) => {
     const current = get().activeHighlightCodes
-    const next = current.includes(code)
-      ? current.filter((item) => item !== code)
-      : [...current, code]
+    const next =
+      current.length === 1 && current[0] === code
+        ? []
+        : [code]
 
     set(() => ({
       activeHighlightCodes: next

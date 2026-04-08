@@ -1,0 +1,131 @@
+.canvas-toolbar {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-bottom: 12px;
+  width: 100%;
+  max-width: 600px;
+  align-items: center;
+}
+
+.toolbar-chip {
+  max-width: 220px;
+  padding: 0 12px;
+  height: 36px;
+  border-radius: 999px;
+  border: 1px solid #bfdbfe;
+  background: #eff6ff;
+  color: #1d4ed8;
+  display: inline-flex;
+  align-items: center;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.toolbar-btn,
+.led-size-btn {
+  font-family: inherit;
+  outline: none;
+}
+
+.toolbar-btn {
+  width: 36px;
+  height: 36px;
+  border: 2px dashed var(--border);
+  border-radius: 6px;
+  background: transparent;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.15s ease;
+  color: var(--text-secondary);
+  font-size: 14px;
+  line-height: 1;
+  padding: 0;
+}
+
+.toolbar-btn:hover {
+  background: #f0f7ff;
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.toolbar-btn--active {
+  background: #f0f7ff;
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.toolbar-btn-icon {
+  font-size: 20px;
+  line-height: 1;
+}
+
+.toolbar-btn svg {
+  display: block;
+}
+
+.mode-quick-btn {
+  width: auto;
+  min-width: 56px;
+  padding: 0 10px;
+  font-size: 12px;
+  font-weight: 700;
+  border-style: solid;
+}
+
+.mode-quick-btn--connected {
+  border-color: #2563eb;
+  background: #2563eb;
+  color: #fff;
+}
+
+.mode-quick-btn--disconnected {
+  border-color: #cbd5e1;
+  background: #e5e7eb;
+  color: #475569;
+}
+
+.led-size-btn {
+  width: 36px;
+  height: 36px;
+  border: 2px dashed var(--border);
+  border-radius: 6px;
+  background: transparent;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  text-align: center;
+  padding: 0;
+  transition: all 0.15s ease;
+  appearance: none;
+  -webkit-appearance: none;
+}
+
+.led-size-btn:hover {
+  background: #f0f7ff;
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.led-size-btn option {
+  background: white;
+  color: var(--text-primary);
+}
+
+@media (max-width: 768px) {
+  .canvas-toolbar {
+    gap: 6px;
+    flex-wrap: wrap;
+    justify-content: flex-start;
+  }
+}

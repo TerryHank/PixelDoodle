@@ -1,72 +1,79 @@
-.example-gallery__grid {
-  display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 8px;
-}
-
-.example-gallery__item {
-  padding: 8px;
-  border-radius: 10px;
-  border: 1px solid rgba(226, 232, 240, 0.9);
-  background: rgba(255, 255, 255, 0.9);
-  box-shadow: var(--shadow-soft);
-}
-
-.example-gallery__thumb {
-  aspect-ratio: 1;
-  border-radius: 8px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  margin-bottom: 8px;
-}
-
-.example-gallery__image {
+.section {
+  margin-top: 20px;
+  padding-top: 20px;
+  border-top: 1px solid var(--border);
   width: 100%;
-  aspect-ratio: 1;
-  border-radius: 8px;
-  margin-bottom: 8px;
-  background: #f8fafc;
 }
 
-.example-gallery__thumb--ink {
-  background: linear-gradient(135deg, #111827, #60a5fa);
-}
-
-.example-gallery__thumb--rose {
-  background: linear-gradient(135deg, #f9a8d4, #fde68a);
-}
-
-.example-gallery__thumb--sky {
-  background: linear-gradient(135deg, #38bdf8, #818cf8);
-}
-
-.example-gallery__thumb--mint {
-  background: linear-gradient(135deg, #a7f3d0, #bfdbfe);
-}
-
-.example-gallery__thumb-label {
-  font-size: 18px;
-  font-weight: 700;
-  color: rgba(255, 255, 255, 0.92);
-}
-
-.example-gallery__name {
-  display: block;
-  font-size: 12px;
+.section-title {
+  font-size: 13px;
   font-weight: 600;
-  color: var(--text-primary);
+  color: var(--text-secondary);
+  margin-bottom: 12px;
+  display: block;
 }
 
-.example-gallery__subtitle {
+.examples-section {
+  margin-top: 12px;
+  padding-top: 10px;
+}
+
+.examples-gallery {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 8px;
+  width: 100%;
+}
+
+.example-item {
+  position: relative;
+  border-radius: 8px;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  background: var(--bg-secondary);
+  display: flex;
+  flex-direction: column;
+}
+
+.example-thumb-frame {
+  position: relative;
+  width: 100%;
+  padding-top: 100%;
+  overflow: hidden;
+  background: #f7f7f7;
+}
+
+.example-thumb {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
   display: block;
-  margin-top: 2px;
+}
+
+.example-name {
   font-size: 11px;
   color: var(--text-secondary);
+  text-align: center;
+  padding: 6px 2px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  display: block;
+  background: rgba(255, 255, 255, 0.55);
 }
 
 @media (max-width: 768px) {
-  .example-gallery__grid {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+  .section {
+    margin-top: 10px;
+  }
+
+  .section-title {
+    margin-bottom: 10px;
+  }
+
+  .examples-gallery {
+    gap: 6px;
   }
 }

@@ -1,3 +1,5 @@
-export function isRnEnv(env?: string) {
-  return env === 'rn'
+import { normalizeRuntimeEnv } from './runtime-env'
+
+export function isRnEnv(env?: string | null) {
+  return normalizeRuntimeEnv(env) === 'rn'
 }

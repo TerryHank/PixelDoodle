@@ -17,28 +17,23 @@ export interface ExampleGalleryProps {
 
 export function ExampleGallery({ items, onSelectExample }: ExampleGalleryProps) {
   return (
-    <View className='example-gallery section-block'>
-      <Text className='section-block__title'>示例图片</Text>
-      <View className='example-gallery__grid'>
+    <View className='section examples-section'>
+      <Text className='section-title'>示例图片</Text>
+      <View className='examples-gallery'>
         {items.map((item) => (
           <View
             key={item.id}
-            className='example-gallery__item'
+            className='example-item'
             onClick={() => onSelectExample?.(item)}
           >
-            {item.thumbnailUrl ? (
+            <View className='example-thumb-frame'>
               <Image
-                className='example-gallery__image'
+                className='example-thumb'
                 mode='aspectFill'
-                src={item.thumbnailUrl}
+                src={item.thumbnailUrl || ''}
               />
-            ) : (
-              <View className={`example-gallery__thumb example-gallery__thumb--${item.tone}`}>
-                <Text className='example-gallery__thumb-label'>{item.title.slice(0, 2)}</Text>
-              </View>
-            )}
-            <Text className='example-gallery__name'>{item.title}</Text>
-            <Text className='example-gallery__subtitle'>{item.subtitle}</Text>
+            </View>
+            <Text className='example-name'>{item.title}</Text>
           </View>
         ))}
       </View>

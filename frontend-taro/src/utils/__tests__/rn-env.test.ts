@@ -1,4 +1,16 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
+
+vi.mock('@tarojs/taro', () => ({
+  default: {
+    ENV_TYPE: {
+      WEB: 'WEB',
+      WEAPP: 'WEAPP',
+      RN: 'RN'
+    },
+    getEnv: () => 'WEB'
+  }
+}))
+
 import packageJson from '../../../package.json'
 import rnConfig from '../../../config/rn'
 import { getApiBaseUrlByEnv } from '../../services/env'

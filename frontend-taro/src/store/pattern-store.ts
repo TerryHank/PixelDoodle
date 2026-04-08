@@ -1,7 +1,11 @@
 import { create } from 'zustand'
-import Taro from '@tarojs/taro'
 import { DEFAULT_PALETTE_PRESET } from '../constants/examples'
-import { fetchPalette, generatePattern, buildGenerateFields } from '../services/pattern-service'
+import {
+  fetchPalette,
+  generatePattern,
+  buildGenerateFields,
+  type GeneratePatternOutcome
+} from '../services/pattern-service'
 import type {
   ColorSummaryItem,
   GeneratePatternResponse,
@@ -12,14 +16,14 @@ import type {
 } from '../types/api'
 
 const DEFAULT_DIFFICULTY = 0.125
+const ORIGINAL_IMAGE_DIMENSION_FALLBACK = 512
 
-async function resolveGridSize(filePath: string, difficulty: number) {
-  const imageInfo = await Taro.getImageInfo({ src: filePath })
+function resolveGridSizeLikeOriginal(difficulty: number) {
   const scale = Number.isFinite(difficulty) && difficulty > 0 ? difficulty : DEFAULT_DIFFICULTY
 
   return {
-    width: Math.max(16, Math.round(imageInfo.width * scale)),
-    height: Math.max(16, Math.round(imageInfo.height * scale))
+    width: Math.max(16, Math.round(ORIGINAL_IMAGE_DIMENSION_FALLBACK * scale)),
+    height: Math.max(16, Math.round(ORIGINAL_IMAGE_DIMENSION_FALLBACK * scale))
   }
 }
 
@@ -40,10 +44,13 @@ export interface PatternState {
   ledSize: number
   difficulty: number
   isGenerating: boolean
+  lastGenerationMode: GeneratePatternOutcome['mode'] | null
   clear: () => void
   loadPalette: () => Promise<void>
   setExampleImage: (exampleImage: string | null) => void
   setOriginalImage: (filePath: string | null) => void
+  setLedSize: (ledSize: number) => void
+  setDifficulty: (difficulty: number) => void
   toggleRemoveBackground: () => void
   generateFromFile: (
     filePath: string,
@@ -52,6 +59,8 @@ export interface PatternState {
       palettePreset?: string
       removeBackground?: boolean
       ledSize?: number
+      mode?: 'fixed_grid' | 'pixel_size'
+      pixelSize?: number
     }
   ) => Promise<GeneratePatternResponse>
 }
@@ -76,6 +85,7 @@ export const usePatternStore = create<PatternState>((set, get) => ({
   ledSize: 64,
   difficulty: DEFAULT_DIFFICULTY,
   isGenerating: false,
+  lastGenerationMode: null,
   clear: () =>
     set(() => ({
       originalImage: null,
@@ -89,7 +99,8 @@ export const usePatternStore = create<PatternState>((set, get) => ({
         height: 0
       },
       totalBeads: 0,
-      isGenerating: false
+      isGenerating: false,
+      lastGenerationMode: null
     })),
   loadPalette: async () => {
     const response = await fetchPalette()
@@ -116,6 +127,14 @@ export const usePatternStore = create<PatternState>((set, get) => ({
       originalImage: filePath,
       exampleImage: null
     })),
+  setLedSize: (ledSize) =>
+    set(() => ({
+      ledSize
+    })),
+  setDifficulty: (difficulty) =>
+    set(() => ({
+      difficulty
+    })),
   toggleRemoveBackground: () =>
     set((state) => ({
       removeBackground: !state.removeBackground
@@ -128,16 +147,20 @@ export const usePatternStore = create<PatternState>((set, get) => ({
 
     try {
       const state = get()
-      const gridSize = await resolveGridSize(filePath, state.difficulty)
+      const mode = options.mode ?? 'fixed_grid'
+      const fixedGridSize = resolveGridSizeLikeOriginal(state.difficulty)
       const fields = buildGenerateFields({
-        gridWidth: gridSize.width,
-        gridHeight: gridSize.height,
+        mode,
+        gridWidth: fixedGridSize.width,
+        gridHeight: fixedGridSize.height,
         ledSize: options.ledSize ?? state.ledSize,
+        pixelSize: options.pixelSize ?? 8,
         palettePreset: options.palettePreset ?? state.palettePreset,
         removeBackground: options.removeBackground ?? state.removeBackground
       })
 
-      const response = await generatePattern(filePath, fields, options.fileName)
+      const outcome = await generatePattern(filePath, fields, options.fileName)
+      const response = outcome.response
 
       set(() => ({
         originalImage: filePath,
@@ -148,7 +171,8 @@ export const usePatternStore = create<PatternState>((set, get) => ({
         palettePreset: response.palette_preset,
         previewImage: response.preview_image,
         sessionId: response.session_id,
-        isGenerating: false
+        isGenerating: false,
+        lastGenerationMode: outcome.mode
       }))
 
       return response

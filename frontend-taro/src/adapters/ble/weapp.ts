@@ -40,6 +40,11 @@ interface PendingWaiter<TValue> {
 let wifiScanWaiters: PendingWaiter<WifiScanResult[]>[] = []
 let wifiConnectWaiters: PendingWaiter<string>[] = []
 
+function normalizeBleDeviceUuid(name?: string | null) {
+  const match = name?.match(/BeadCraft-([0-9A-F]{12})/i)
+  return match?.[1]?.toUpperCase() || ''
+}
+
 function toArrayBuffer(bytes: Uint8Array) {
   return bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength)
 }
@@ -342,6 +347,10 @@ export const weappBleAdapter: BleAdapter = {
       deviceId: currentDeviceId
     })
     await enableNotifications(currentDeviceId)
+    return (
+      normalizeBleDeviceUuid(targetDevice.name || targetDevice.localName || '') ||
+      null
+    )
   },
 
   async sendImage(payload) {

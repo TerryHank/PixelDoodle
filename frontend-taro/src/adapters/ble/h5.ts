@@ -21,7 +21,7 @@ import {
   decodeUtf8,
   parseWifiScanResult
 } from '@/utils/ble-packet'
-import type { BleAdapter } from './types'
+import type { BleAdapter, BleKnownDevice } from './types'
 
 interface AckWaiter {
   timer: ReturnType<typeof setTimeout>
@@ -45,6 +45,44 @@ function wait(ms: number) {
 function normalizeBleDeviceUuid(name?: string | null) {
   const match = name?.match(/BeadCraft-([0-9A-F]{12})/i)
   return match?.[1]?.toUpperCase() || ''
+}
+
+function isWebBluetoothAvailable() {
+  return typeof navigator !== 'undefined' && !!navigator.bluetooth
+}
+
+function getBleDeviceKey(device?: BluetoothDevice | null) {
+  if (!device) {
+    return ''
+  }
+
+  return device.id || normalizeBleDeviceUuid(device.name) || device.name || ''
+}
+
+function isBeadCraftDevice(
+  device?: Pick<BluetoothDevice, 'name'> | null
+): device is BluetoothDevice {
+  return !!device?.name?.startsWith('BeadCraft-')
+}
+
+function mergeKnownBleDevices(devices: BluetoothDevice[] = []) {
+  const merged = new Map<string, BluetoothDevice>()
+  ;[...devices, bleDevice].filter(isBeadCraftDevice).forEach((device) => {
+    const key = getBleDeviceKey(device)
+    if (!key || merged.has(key)) {
+      return
+    }
+    merged.set(key, device)
+  })
+  return Array.from(merged.values())
+}
+
+function serializeKnownDevice(device: BluetoothDevice): BleKnownDevice {
+  return {
+    key: getBleDeviceKey(device),
+    name: device.name || 'BeadCraft',
+    uuid: normalizeBleDeviceUuid(device.name)
+  }
 }
 
 function isMatchingConnectedDevice(uuid?: string) {
@@ -147,13 +185,20 @@ function readWifiValue(
   }
 }
 
-async function requestBleDevice(uuid?: string) {
-  if (!navigator.bluetooth) {
+async function requestBleDevice(uuid?: string, forcePicker = false) {
+  if (!isWebBluetoothAvailable()) {
     throw new Error('当前浏览器不支持 Web Bluetooth')
   }
 
-  if (isMatchingConnectedDevice(uuid)) {
+  if (!forcePicker && isMatchingConnectedDevice(uuid)) {
     return bleDevice
+  }
+
+  if (!forcePicker && bleDevice) {
+    const currentUuid = normalizeBleDeviceUuid(bleDevice.name)
+    if (!uuid || currentUuid === uuid) {
+      return bleDevice
+    }
   }
 
   const exactFilters = uuid
@@ -191,6 +236,45 @@ async function requestBleDevice(uuid?: string) {
   resetBluetoothState()
 
   return bleDevice
+}
+
+async function getAuthorizedBluetoothDevices() {
+  if (!isWebBluetoothAvailable()) {
+    return []
+  }
+
+  let devices: BluetoothDevice[] = []
+  if (typeof navigator.bluetooth.getDevices === 'function') {
+    try {
+      devices = await navigator.bluetooth.getDevices()
+    } catch (error) {
+      console.warn('Failed to load authorized Bluetooth devices:', error)
+    }
+  }
+
+  return mergeKnownBleDevices(devices.filter(isBeadCraftDevice))
+}
+
+async function connectKnownAuthorizedDevice(deviceKey: string) {
+  if (!deviceKey) {
+    throw new Error('缺少蓝牙设备标识')
+  }
+
+  const devices = await getAuthorizedBluetoothDevices()
+  const matchedDevice = devices.find((device) => getBleDeviceKey(device) === deviceKey)
+  if (!matchedDevice) {
+    throw new Error('未找到已授权的 BeadCraft 设备')
+  }
+
+  if (bleDevice) {
+    bleDevice.removeEventListener('gattserverdisconnected', handleBluetoothDisconnect)
+  }
+
+  bleDevice = matchedDevice
+  bleDevice.addEventListener('gattserverdisconnected', handleBluetoothDisconnect)
+  resetBluetoothState()
+  await ensureCharacteristics(normalizeBleDeviceUuid(bleDevice.name) || undefined)
+  return normalizeBleDeviceUuid(bleDevice.name) || null
 }
 
 async function ensureCharacteristics(uuid?: string) {
@@ -245,6 +329,22 @@ async function ensureCharacteristics(uuid?: string) {
 export const h5BleAdapter: BleAdapter = {
   async connectTargetDevice(uuid) {
     await ensureCharacteristics(uuid)
+    return normalizeBleDeviceUuid(bleDevice?.name) || null
+  },
+
+  async addTargetDevice() {
+    await requestBleDevice(undefined, true)
+    await ensureCharacteristics(normalizeBleDeviceUuid(bleDevice?.name) || undefined)
+    return normalizeBleDeviceUuid(bleDevice?.name) || null
+  },
+
+  async getAuthorizedDevices() {
+    const devices = await getAuthorizedBluetoothDevices()
+    return devices.map(serializeKnownDevice)
+  },
+
+  async connectKnownDevice(deviceKey) {
+    return await connectKnownAuthorizedDevice(deviceKey)
   },
 
   async sendImage(payload) {

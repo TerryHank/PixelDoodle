@@ -4,8 +4,21 @@ import type {
   PaletteResponse
 } from '../types/api'
 import { getApiBaseUrl } from './env'
+import { getRuntimeEnv } from '@/utils/runtime-env'
+import {
+  generatePatternLocally,
+  isLocalGenerationAvailable,
+  normalizeGeneratePatternResponse,
+  type GenerateTransportMode
+} from './local-generation'
 
 export type ExportKind = 'png' | 'pdf' | 'json'
+const GENERATE_TIMEOUT_MS = 180000
+
+export interface GeneratePatternOutcome {
+  mode: GenerateTransportMode
+  response: GeneratePatternResponse
+}
 
 export interface GeneratePatternInput {
   gridWidth: number
@@ -47,6 +60,27 @@ function parseJsonResponse<TResponse>(raw: string, statusCode: number) {
   return data as TResponse
 }
 
+function normalizeUploadError(error: unknown) {
+  if (error instanceof Error) {
+    if (error.message.toLowerCase().includes('timeout')) {
+      return new Error('生成超时，请确认小程序网络可访问后端服务')
+    }
+    return error
+  }
+
+  if (error && typeof error === 'object' && 'errMsg' in error) {
+    const errMsg = String((error as { errMsg?: unknown }).errMsg || '')
+    if (errMsg.toLowerCase().includes('timeout')) {
+      return new Error('生成超时，请确认小程序网络可访问后端服务')
+    }
+    if (errMsg) {
+      return new Error(errMsg)
+    }
+  }
+
+  return new Error('图案生成失败')
+}
+
 export function buildGenerateFields(input: GeneratePatternInput) {
   return {
     mode: input.mode ?? 'fixed_grid',
@@ -74,23 +108,103 @@ export async function generatePattern(
   filePath: string,
   fields: Record<string, string>,
   fileName?: string
-) {
+) : Promise<GeneratePatternOutcome> {
+  if (getRuntimeEnv() === 'h5') {
+    if (isLocalGenerationAvailable()) {
+      try {
+        return {
+          mode: 'local-wasm',
+          response: await generatePatternLocally(filePath, fields)
+        }
+      } catch (error) {
+        console.warn('Local generation failed, falling back to /api/generate:', error)
+      }
+    }
+
+    return {
+      mode: 'server-http',
+      response: await generatePatternViaServer(filePath, fields, fileName)
+    }
+  }
+
   const Taro = (await import('@tarojs/taro')).default
-  const response = await Taro.uploadFile({
-    url: `${getApiBaseUrl()}/api/generate`,
-    filePath,
-    fileName,
-    name: 'file',
-    formData: fields
+  try {
+    const response = await Taro.uploadFile({
+      url: `${getApiBaseUrl()}/api/generate`,
+      filePath,
+      fileName,
+      name: 'file',
+      formData: fields,
+      timeout: GENERATE_TIMEOUT_MS
+    })
+
+    return {
+      mode: 'server-http',
+      response: normalizeGeneratePatternResponse(
+        parseJsonResponse<GeneratePatternResponse>(
+          response.data,
+          response.statusCode
+        ),
+        fields.palette_preset ?? '221'
+      )
+    }
+  } catch (error) {
+    throw normalizeUploadError(error)
+  }
+}
+
+async function generatePatternViaServer(
+  filePath: string,
+  fields: Record<string, string>,
+  fileName?: string
+) {
+  const formData = new FormData()
+  Object.entries(fields).forEach(([key, value]) => {
+    formData.append(key, value)
   })
 
-  return parseJsonResponse<GeneratePatternResponse>(
-    response.data,
-    response.statusCode
+  const fileResponse = await fetch(filePath)
+  if (!fileResponse.ok) {
+    throw new Error('图片读取失败')
+  }
+
+  const fileBlob = await fileResponse.blob()
+  formData.append('file', fileBlob, fileName || `upload-${Date.now()}.png`)
+
+  const response = await fetch(`${getApiBaseUrl()}/api/generate`, {
+    method: 'POST',
+    body: formData
+  })
+  const raw = await response.text()
+
+  return normalizeGeneratePatternResponse(
+    parseJsonResponse<GeneratePatternResponse>(raw, response.status),
+    fields.palette_preset ?? '221'
   )
 }
 
 export async function exportPattern(kind: ExportKind, payload: unknown) {
+  if (getRuntimeEnv() === 'h5') {
+    const response = await fetch(`${getApiBaseUrl()}/api/export/${kind}`, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json'
+      },
+      body: JSON.stringify(payload)
+    })
+
+    if (!response.ok) {
+      const raw = await response.text()
+      let data: unknown = raw
+      try {
+        data = JSON.parse(raw)
+      } catch {}
+      throw new Error(getErrorMessage(response.status, data))
+    }
+
+    return response.arrayBuffer()
+  }
+
   const Taro = (await import('@tarojs/taro')).default
   const response = await Taro.request<ArrayBuffer | ApiErrorResponse>({
     url: `${getApiBaseUrl()}/api/export/${kind}`,

@@ -1,66 +1,139 @@
+import Taro from '@tarojs/taro'
 import { Text, View } from '@tarojs/components'
+import type { ToolbarProps } from './types'
 import './index.scss'
 
-export interface ToolbarProps {
-  targetDeviceUuid?: string
-  removeBackground?: boolean
-  difficultyLabel: string
-  ledSizeLabel: string
-  connectionModeLabel: string
-  onToggleBackground?: () => void
-  onClear?: () => void
-  onPickImage?: () => void
-  onOpenPairSheet?: () => void
-  onOpenSettings?: () => void
+type ToolbarIconKind = 'home' | 'export'
+
+function ToolbarIcon({ kind }: { kind: ToolbarIconKind }) {
+  if (kind === 'home') {
+    return (
+      <View className='toolbar-icon toolbar-icon--home'>
+        <View className='toolbar-icon__home-roof-left' />
+        <View className='toolbar-icon__home-roof-right' />
+        <View className='toolbar-icon__home-body' />
+        <View className='toolbar-icon__home-door' />
+      </View>
+    )
+  }
+
+  return (
+    <View className='toolbar-icon toolbar-icon--export'>
+      <View className='toolbar-icon__export-arrow' />
+      <View className='toolbar-icon__export-head-left' />
+      <View className='toolbar-icon__export-head-right' />
+      <View className='toolbar-icon__export-base' />
+    </View>
+  )
 }
 
 export function Toolbar({
-  targetDeviceUuid,
   removeBackground = false,
   difficultyLabel,
   ledSizeLabel,
-  connectionModeLabel,
+  modeQuickLabel,
+  modeQuickConnected = false,
+  difficultyValue = '0.125',
+  ledSizeValue = 64,
   onToggleBackground,
   onClear,
   onPickImage,
   onOpenPairSheet,
-  onOpenSettings
+  onOpenSettings,
+  onChangeDifficulty,
+  onChangeLedSize
 }: ToolbarProps) {
+  const difficultyOptions = [
+    { label: '原', value: '1' },
+    { label: '难', value: '0.25' },
+    { label: '中', value: '0.125' },
+    { label: '易', value: '0.0625' }
+  ] as const
+
+  const matrixOptions = [16, 32, 52, 64] as const
+
+  async function handlePickDifficulty() {
+    if (!onChangeDifficulty) return
+
+    const currentIndex = Math.max(
+      0,
+      difficultyOptions.findIndex((item) => item.value === difficultyValue)
+    )
+
+    try {
+      const result = await Taro.showActionSheet({
+        itemList: difficultyOptions.map((item) => item.label),
+        alertText: '选择难度'
+      })
+      onChangeDifficulty(difficultyOptions[result.tapIndex].value)
+    } catch (error) {
+      if (
+        error &&
+        typeof error === 'object' &&
+        'errMsg' in error &&
+        String(error.errMsg).includes('cancel')
+      ) {
+        return
+      }
+      onChangeDifficulty(difficultyOptions[currentIndex].value)
+    }
+  }
+
+  async function handlePickMatrixSize() {
+    if (!onChangeLedSize) return
+
+    const currentIndex = Math.max(
+      0,
+      matrixOptions.findIndex((item) => item === ledSizeValue)
+    )
+
+    try {
+      const result = await Taro.showActionSheet({
+        itemList: matrixOptions.map((item) => String(item)),
+        alertText: '选择尺寸'
+      })
+      onChangeLedSize(matrixOptions[result.tapIndex])
+    } catch (error) {
+      if (
+        error &&
+        typeof error === 'object' &&
+        'errMsg' in error &&
+        String(error.errMsg).includes('cancel')
+      ) {
+        return
+      }
+      onChangeLedSize(matrixOptions[currentIndex])
+    }
+  }
+
   return (
-    <View className='toolbar'>
-      <View className='toolbar__spacer' />
-      {targetDeviceUuid ? (
-        <View className='toolbar__chip'>
-          <Text className='toolbar__chip-label'>设备</Text>
-          <Text className='toolbar__chip-value'>{targetDeviceUuid}</Text>
-        </View>
-      ) : null}
+    <View className='canvas-toolbar'>
+      <View className='toolbar-btn' onClick={onClear}>
+        <ToolbarIcon kind='home' />
+      </View>
       <View
-        className={`toolbar__button ${removeBackground ? 'toolbar__button--active' : ''}`}
+        className={`toolbar-btn toolbar-btn--label ${removeBackground ? 'toolbar-btn--active' : ''}`}
         onClick={onToggleBackground}
       >
-        <Text>背</Text>
+        <Text className='toolbar-btn__label-text'>背</Text>
       </View>
-      <View className='toolbar__button' onClick={onClear}>
-        <Text>清</Text>
+      <View className='toolbar-btn' onClick={onPickImage}>
+        <Text className='toolbar-btn-icon'>+</Text>
       </View>
-      <View className='toolbar__button' onClick={onPickImage}>
-        <Text className='toolbar__button-plus'>+</Text>
-      </View>
-      <View className='toolbar__button' onClick={onOpenPairSheet}>
-        <Text>扫</Text>
-      </View>
-      <View className='toolbar__button toolbar__button--compact'>
+      <View className='led-size-btn' onClick={handlePickDifficulty}>
         <Text>{difficultyLabel}</Text>
       </View>
-      <View className='toolbar__button toolbar__button--compact'>
+      <View className='led-size-btn' onClick={handlePickMatrixSize}>
         <Text>{ledSizeLabel}</Text>
       </View>
-      <View className='toolbar__button toolbar__button--wide'>
-        <Text>{connectionModeLabel}</Text>
+      <View
+        className={`toolbar-btn mode-quick-btn ${modeQuickConnected ? 'mode-quick-btn--connected' : 'mode-quick-btn--disconnected'}`}
+        onClick={onOpenPairSheet}
+      >
+        <Text>{modeQuickLabel}</Text>
       </View>
-      <View className='toolbar__button' onClick={onOpenSettings}>
-        <Text>设</Text>
+      <View className='toolbar-btn' onClick={onOpenSettings}>
+        <ToolbarIcon kind='export' />
       </View>
     </View>
   )

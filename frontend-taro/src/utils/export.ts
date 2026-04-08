@@ -39,3 +39,29 @@ export function buildColorHexMap(
 
   return colorMap
 }
+
+export function buildPaletteLookup(
+  pixelMatrix: PixelMatrix,
+  colorSummary: ColorSummaryItem[],
+  fullPalette: Record<string, PaletteColor>
+) {
+  const paletteLookup: Record<string, PaletteColor> = {
+    ...fullPalette
+  }
+
+  colorSummary.forEach((item) => {
+    paletteLookup[item.code] = item
+  })
+
+  pixelMatrix.forEach((row) => {
+    row.forEach((code) => {
+      if (!code || paletteLookup[code] || !fullPalette[code]) {
+        return
+      }
+
+      paletteLookup[code] = fullPalette[code]
+    })
+  })
+
+  return paletteLookup
+}

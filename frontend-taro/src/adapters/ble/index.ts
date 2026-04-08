@@ -1,8 +1,10 @@
 import { resolveAdapterRuntime } from '@/adapters/runtime'
+import { getRuntimeEnv } from '@/utils/runtime-env'
 import { h5BleAdapter } from './h5'
 import { rnBleAdapter } from './rn'
 import { weappBleAdapter } from './weapp'
-const runtime = resolveAdapterRuntime(process.env.TARO_ENV)
+
+const runtime = resolveAdapterRuntime(getRuntimeEnv())
 
 export const bleAdapter =
   runtime === 'rn'

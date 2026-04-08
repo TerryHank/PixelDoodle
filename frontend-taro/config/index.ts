@@ -1,4 +1,5 @@
 import path from 'node:path'
+import pkg from '../package.json'
 
 import { defineConfig, type UserConfigExport } from '@tarojs/cli'
 import TsconfigPathsPlugin from 'tsconfig-paths-webpack-plugin'
@@ -8,6 +9,8 @@ import prodConfig from './prod'
 
 // https://taro-docs.jd.com/docs/next/config#defineconfig-辅助函数
 export default defineConfig<'webpack5'>(async (merge) => {
+  const assetVersion = `v${pkg.version}`
+  const outputRoot = process.env.TARO_OUTPUT_ROOT || 'dist'
   const baseConfig: UserConfigExport<'webpack5'> = {
     projectName: 'frontend-taro',
     date: '2026-3-31',
@@ -19,9 +22,21 @@ export default defineConfig<'webpack5'>(async (merge) => {
       828: 1.81 / 2
     },
     sourceRoot: 'src',
-    outputRoot: 'dist',
+    outputRoot,
+    copy: {
+      patterns: [
+        {
+          from: 'static',
+          to: `${outputRoot}/static`
+        }
+      ],
+      options: {}
+    },
     framework: 'react',
     compiler: 'webpack5',
+    cache: {
+      enable: true
+    },
     alias: {
       '@': path.resolve(__dirname, '..', 'src')
     },
@@ -49,19 +64,20 @@ export default defineConfig<'webpack5'>(async (merge) => {
       publicPath: '/',
       staticDirectory: 'static',
       output: {
-        filename: 'js/[name].[hash:8].js',
-        chunkFilename: 'js/[name].[chunkhash:8].js'
+        filename: `js/[name].${assetVersion}.[hash:8].js`,
+        chunkFilename: `js/[name].${assetVersion}.[chunkhash:8].js`
       },
       miniCssExtractPluginOption: {
         ignoreOrder: true,
-        filename: 'css/[name].[hash].css',
-        chunkFilename: 'css/[name].[chunkhash].css'
+        filename: `css/[name].${assetVersion}.[hash].css`,
+        chunkFilename: `css/[name].${assetVersion}.[chunkhash].css`
       },
       postcss: {
         autoprefixer: {
           enable: true,
           config: {}
         },
+        // H5 首页还原样式通过文件头注释单独关闭 pxtransform。
         cssModules: {
           enable: false, // 默认为 false，如需使用 css modules 功能，则设为 true
           config: {
