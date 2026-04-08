@@ -6,7 +6,7 @@ PixelDoodle（像素豆绘）是一个“图片转拼豆图 + ESP32 点阵显示
 
 - Web 前端：上传、裁剪、生成、导出、浏览器直连蓝牙
 - Rust + Axum 主后端：静态页面、生成接口、导出接口、设备兼容接口
-- Python 基线层：保留原图像/导出/设备逻辑，用于差分测试和兼容桥
+- Python 基线层：仅保留为差分测试与问题回溯，不参与生产运行时
 - ESP32 固件：BLE 接收图像、设备 UUID 显示、蓝灯高亮
 
 ---
@@ -31,13 +31,13 @@ PixelDoodle（像素豆绘）是一个“图片转拼豆图 + ESP32 点阵显示
 ```text
 PixelDoodle/
 ├─ backend-rs/                # Rust + Axum 主服务
-├─ main.py                    # Python 基线入口（对照/回溯）
-├─ requirements.txt           # Python 基线依赖
-├─ core/                      # Python 图像处理、串口/BLE 基线能力
+├─ main.py                    # Python 基线入口（仅对照/回溯）
+├─ requirements.txt           # Python 基线依赖（仅测试/回归需要）
+├─ core/                      # Python 基线图像处理与设备能力
 ├─ static/                    # 前端 JS/CSS
 ├─ templates/                 # HTML 模板
 ├─ data/                      # 颜色数据
-├─ tools/parity/              # Rust 调用的 Python 基线脚本
+├─ tools/parity/              # Rust 测试对照用 Python 基线脚本
 ├─ docs/
 └─ firmware/                  # ESP32 固件（PlatformIO）
 ```
@@ -49,8 +49,12 @@ PixelDoodle/
 ### Web 后端
 
 - Rust stable
-- Python 3.10+
 - Windows/macOS/Linux
+
+### 差分测试（可选）
+
+- Python 3.10+
+- `requirements.txt` 中的依赖
 
 ### 固件
 
@@ -68,15 +72,7 @@ PixelDoodle/
 
 ## 4. 本地启动（Web）
 
-### 4.1 安装 Python 基线依赖
-
-在项目根目录执行：
-
-```bash
-pip install -r requirements.txt
-```
-
-### 4.2 启动 Rust 主服务
+### 4.1 启动 Rust 主服务
 
 ```bash
 cargo run --manifest-path backend-rs/Cargo.toml
@@ -90,14 +86,19 @@ cargo run --manifest-path backend-rs/Cargo.toml
 
 - `HOST`（默认 `0.0.0.0`）
 - `PORT`（默认 `8765`）
-- `PYTHON_EXECUTABLE`
-  - 指向带有 `requirements.txt` 依赖的 Python 解释器
-  - 未设置时，服务会优先尝试项目内 `.venv`
 
 说明：
 
 - Rust 服务负责对外 HTTP 接口和静态资源
-- Python 仅作为兼容桥和差分基线，不再作为默认线上入口
+- Python 不再参与生产运行时，仅用于 parity 测试和问题回溯
+
+### 4.2 安装可选 Python 基线环境
+
+只有在运行 parity 测试或需要对照旧结果时才需要：
+
+```bash
+pip install -r requirements.txt
+```
 
 ---
 
@@ -146,16 +147,17 @@ Rust 主服务核心路由：
 说明：
 
 - 这些接口的外部形状保持与历史 FastAPI 版本兼容
+- 浏览器侧蓝牙发送仍优先走 Web Bluetooth
 - Python `main.py` 保留，仅用于结果对照、调试和回归排查
 
 ---
 
 ## 8. 常见问题
 
-### Q1：为什么还需要 Python 环境
+### Q1：为什么仓库里还保留 Python
 
-当前 `v9` 已由 Rust 接管 HTTP 服务，但为了保证结果兼容和设备接口不回退，
-仍保留 Python 基线层。`PYTHON_EXECUTABLE` 需指向已安装依赖的解释器。
+当前 `v9` 的生产 HTTP 服务已经完全由 Rust 负责。仓库里保留 Python，
+是为了做结果差分、回归排查和旧逻辑回溯，不再是运行时依赖。
 
 ### Q2：浏览器提示“找不到兼容设备”
 

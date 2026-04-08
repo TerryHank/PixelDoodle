@@ -15,6 +15,13 @@ path = "src/main.rs"
 axum = { version = "0.8", features = ["multipart"] }
 base64 = "0.22"
 chrono = { version = "0.4", features = ["clock"] }
+crc32fast = "1"
+font8x8 = "0.3"
+image = { version = "0.25", default-features = false, features = ["gif", "jpeg", "png", "webp"] }
+mozjpeg = "0.10"
+printpdf = { version = "0.8", features = ["png"] }
+rayon = "1.10"
+serialport = "4.7"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tokio = { version = "1", features = ["full"] }

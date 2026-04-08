@@ -1,5 +1,3 @@
-use std::env;
-
 use axum::http::StatusCode;
 use http_body_util::BodyExt;
 use serde_json::Value;
@@ -7,10 +5,6 @@ use tower::ServiceExt;
 
 #[tokio::test]
 async fn serial_ports_route_returns_ports_array() {
-    env::set_var(
-        "PYTHON_EXECUTABLE",
-        "D:\\Workspace\\PixelDoodle-web\\.venv\\Scripts\\python.exe",
-    );
     let app = backend_rs::app::build_app().await;
     let response = app
         .oneshot(
