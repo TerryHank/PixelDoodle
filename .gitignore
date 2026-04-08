@@ -13,6 +13,7 @@ build/
 venv/
 env/
 .env
+.venv/
 
 # IDE
 .vscode/
@@ -36,3 +37,13 @@ uploads/
 
 # Local brainstorming artifacts
 .superpowers/
+
+# Rust build artifacts
+backend-rs/target/
+wasm-engine/target/
+
+# Node / browser-local build workspace
+node_modules/
+
+# Local scratch files
+.tmp-serial-monitor.py

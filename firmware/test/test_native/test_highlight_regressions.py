@@ -51,11 +51,12 @@ class HighlightRegressionTests(unittest.TestCase):
             r"if \(code === null\) \{\s*rgb565 = backgroundFillRgb565;",
         )
 
-    def test_auto_send_does_not_request_ble_device_picker(self):
+    def test_auto_send_only_runs_when_ble_is_connected(self):
         content = APP_JS.read_text(encoding="utf-8")
         match = re.search(r"async function autoSendToESP32\(\) \{(?P<body>.*?)\n\}", content, re.S)
         self.assertIsNotNone(match, "autoSendToESP32 function not found")
         body = match.group("body")
+        self.assertIn("if (!window.appState.bleDevice?.gatt?.connected)", body)
         self.assertIn("sendMatrixViaCurrentMode(pixelMatrix, bgRgb, false);", body)
 
     def test_firmware_receivers_treat_transparent_marker_as_background(self):

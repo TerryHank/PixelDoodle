@@ -1,0 +1,193 @@
+﻿<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>BeadCraft - Perler Bead Pattern Generator</title>
+  <link rel="stylesheet" href="/static/style.css?v=v8">
+</head>
+<body>
+
+  <!-- Toast Container -->
+  <div id="toast-container" class="toast-container"></div>
+
+  <!-- Main Layout -->
+  <div class="main-container">
+
+    <!-- Result Area -->
+    <div id="result-area" style="width: 100%; max-width: 640px; margin: 0 auto;">
+
+      <!-- Canvas Toolbar -->
+        <div class="canvas-toolbar">
+          <button id="home-btn" class="toolbar-btn" onclick="goHome()" title="回到主页">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M3 10.5 12 3l9 7.5"></path>
+              <path d="M5 9.5V21h14V9.5"></path>
+              <path d="M9 21v-6h6v6"></path>
+            </svg>
+          </button>
+          <button id="bg-toggle" class="toolbar-btn" onclick="toggleBackground()" title="自动去除背景">
+            背
+          </button>
+          <button id="upload-btn" class="toolbar-btn" onclick="document.getElementById('file-input').click()" title="上传">
+            <span class="toolbar-btn-icon">+</span>
+          </button>
+          <input type="file" id="file-input" class="hidden-input" accept="image/jpeg,image/png,image/gif,image/webp">
+          <select id="difficulty-select" class="led-size-btn" title="难度" onchange="onDifficultyChange()">
+            <option value="1.0">原</option>
+            <option value="0.25">难</option>
+            <option value="0.125" selected>中</option>
+            <option value="0.0625">易</option>
+            <option value="custom">自</option>
+          </select>
+          <select id="led-matrix-size" class="led-size-btn" onchange="updateLedSizeDisplay()">
+            <option value="16">16</option>
+            <option value="32">32</option>
+            <option value="52">52</option>
+            <option value="64" selected>64</option>
+          </select>
+          <button id="mode-quick-btn" class="toolbar-btn mode-quick-btn disconnected" onclick="handleQuickBleAction()" title="蓝牙连接状态">
+            未连接
+          </button>
+          <button id="export-btn" class="toolbar-btn" onclick="showExportDialog()" title="导出">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M12 3v12"></path>
+              <path d="m7 10 5 5 5-5"></path>
+              <path d="M5 21h14"></path>
+            </svg>
+          </button>
+        </div>
+        <!-- Canvas Container with Upload Area -->
+        <div class="canvas-container" style="margin: 0 auto; position: relative;">
+          <!-- Upload Area (default) -->
+          <div id="upload-area" class="upload-area" onclick="document.getElementById('file-input').click()">
+            <div class="upload-area-icon">+</div>
+            <div class="upload-area-text">点击上传图片</div>
+            <div class="upload-area-hint">JPG, PNG, GIF, WEBP（最大 20 MB）</div>
+          </div>
+          <!-- Pattern Canvas (after generate) -->
+          <canvas id="pattern-canvas" style="display: none;"></canvas>
+        </div>
+
+        <!-- Example Images Gallery (shown when no image) -->
+        <div id="examples-container" class="section examples-section" style="margin-top: 12px;">
+          <div class="section-title" data-i18n="examples.title">示例图片</div>
+          <div class="examples-gallery">
+            <div class="example-item" onclick="loadExampleImage('luoxiaohei')">
+              <img src="/examples/luoxiaohei_thumb.png" alt="Luo Xiaohei" class="example-thumb">
+              <div class="example-name">Luo Xiaohei</div>
+            </div>
+            <div class="example-item" onclick="loadExampleImage('meili')">
+              <img src="/examples/meili_thumb.png" alt="Meili" class="example-thumb">
+              <div class="example-name">Meili</div>
+            </div>
+            <div class="example-item" onclick="loadExampleImage('pony')">
+              <img src="/examples/pony_thumb.png" alt="Pony" class="example-thumb">
+              <div class="example-name">Pony</div>
+            </div>
+            <div class="example-item" onclick="loadExampleImage('usachi')">
+              <img src="/examples/usachi_thumb.png" alt="Usachi" class="example-thumb">
+              <div class="example-name">Usachi</div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Color Panel -->
+        <div class="color-panel" id="color-panel" style="display: none; flex-direction: column; align-items: flex-start;">
+          <!-- Custom Size Slider (horizontal, above color list) -->
+          <div id="custom-slider-container" style="display: none; position: relative; width: 640px; margin-bottom: 8px;">
+            <input type="range" id="custom-pixel-slider" min="4" max="32" value="8" style="width: 100%; height: 4px;" oninput="updateCustomPixelValue()" onchange="onCustomSliderRelease()">
+            <span id="custom-pixel-value" style="position: absolute; top: -18px; font-size: 12px; transform: translateX(-50%); pointer-events: none;"></span>
+          </div>
+          <div style="display: flex; flex-direction: column; flex: 1; width: 100%;">
+            <div id="color-list" class="color-list"></div>
+            <div id="color-total" class="color-total"></div>
+          </div>
+        </div>
+
+        <div class="home-brightness-panel">
+          <div class="home-brightness-meta">
+            <span class="home-brightness-label" data-i18n="brightness.label">屏幕亮度：</span>
+            <span id="brightness-value" class="brightness-value">25%</span>
+          </div>
+          <input type="range" id="brightness-slider" min="10" max="100" value="25">
+          <div id="brightness-hint" class="form-hint">请先连接设备后再同步亮度</div>
+        </div>
+
+    </div>
+  </div>
+
+  <script src="/static/i18n.js?v=v8"></script>
+  <script src="/static/app.js?v=v8"></script>
+
+  <!-- BLE Connection Dialog -->
+  <div id="serial-settings-dialog" class="modal" style="display: none;">
+    <div class="modal-content modal-content-form qr-modal-content">
+      <div class="modal-header">
+        <h3>蓝牙连接</h3>
+        <button class="modal-close" onclick="hideSerialSettings()">&times;</button>
+      </div>
+      <div class="modal-body">
+        <div id="ble-settings" class="connection-settings">
+          <div id="ble-status-card" class="ble-status-card" style="display: none;"></div>
+          <div class="form-group">
+            <label class="form-label">蓝牙设备：</label>
+            <div id="ble-device-list" class="ble-device-list" role="radiogroup" aria-label="已授权蓝牙设备"></div>
+            <button id="ble-add-device-btn" class="btn btn-primary btn-small ble-add-device-btn" onclick="addBLEDevice()">添加设备</button>
+          </div>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-primary" onclick="hideSerialSettings()">关闭</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Export Dialog -->
+  <div id="export-dialog" class="modal" style="display: none;">
+    <div class="modal-content modal-content-form">
+      <div class="modal-header">
+        <h3>导出</h3>
+        <button class="modal-close" onclick="hideExportDialog()">&times;</button>
+      </div>
+      <div class="modal-body">
+        <div class="form-group">
+          <label class="form-label">选择格式：</label>
+          <div style="display: flex; flex-wrap: wrap; gap: 8px;">
+            <button class="btn btn-secondary" onclick="exportPNG(); hideExportDialog()">导出PNG</button>
+            <button class="btn btn-secondary" onclick="exportPDF(); hideExportDialog()">导出PDF</button>
+            <button class="btn btn-secondary" onclick="exportJSON(); hideExportDialog()">导出JSON</button>
+          </div>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-primary" onclick="hideExportDialog()">关闭</button>
+      </div>
+    </div>
+  </div>
+  
+  <!-- Serial Status Toast -->
+  <div id="serial-toast" class="serial-toast" style="display: none;"></div>
+  
+  <!-- Image Crop Dialog -->
+  <div id="crop-dialog" class="modal" style="display: none;">
+    <div class="modal-content modal-content-crop" style="width: auto; max-width: 80vw; max-height: 85vh;">
+      <div class="modal-header">
+        <h3>裁剪图像</h3>
+        <button class="modal-close" onclick="cancelCrop()">&times;</button>
+      </div>
+      <div class="modal-body modal-body-crop" style="padding: 10px; display: flex; justify-content: center; align-items: center; overflow: auto;">
+        <div id="crop-container" class="crop-surface" style="position: relative; display: inline-block;">
+          <img id="crop-image" style="max-width: 100%; max-height: 70vh; display: block;">
+          <div id="crop-box" style="position: absolute; border: 2px dashed #fff; box-shadow: 0 0 0 9999px rgba(0,0,0,0.5); cursor: move;"></div>
+        </div>
+      </div>
+      <div class="modal-footer modal-footer-split" style="display: flex; gap: 0;">
+        <button class="btn btn-secondary" onclick="cancelCrop()" style="flex: 1; border-radius: 0;">取消</button>
+        <button class="btn btn-primary" onclick="confirmCrop()" style="flex: 1; border-radius: 0;">确认裁剪</button>
+      </div>
+    </div>
+  </div>
+  <div class="site-version-badge site-version-corner">v8</div>
+</body>
+</html>

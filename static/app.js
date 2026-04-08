@@ -3,6 +3,7 @@
 // Global state
 window.appState = {
   originalImage: null,
+  originalImageSize: null,
   pixelMatrix: null,
   colorData: {},
   colorSummary: [],
@@ -17,50 +18,22 @@ window.appState = {
   totalBeads: 0,
   targetDeviceUuid: null,
   bleDevice: null,
+  bleKnownDevices: [],
   bleServer: null,
   bleCharacteristic: null,
-  bleWifiScanCharacteristic: null,
   bleNotifyReady: false,
-  bleWifiScanNotifyReady: false,
-  connectionMode: 'ble',
-  qrScannerMode: 'ble',
-  wifiScanResults: [],
-  pendingBleAction: null,
-  selectedWifiNetwork: null,
-  wifiDeviceIp: null,
-  brightnessPercent: 25,
-  deviceBrightnessLoaded: false,
-  brightnessSyncTimer: null,
-  isSyncingBrightness: false,
   isSending: false,        // Lock to prevent concurrent sends
+  isGenerating: false,
+  lastGenerationMode: null,
+  localGenerationWorker: null,
+  localGenerationRequests: new Map(),
 };
 
 // === Persistent State (localStorage) ===
-function loadPersistentState() {
-  try {
-    const saved = localStorage.getItem('beadcraft_state');
-    if (saved) {
-      const data = JSON.parse(saved);
-      if (data.connectionMode === 'ble' || data.connectionMode === 'wifi') {
-        window.appState.connectionMode = data.connectionMode;
-      }
-      if (data.qrScannerMode) window.appState.qrScannerMode = data.qrScannerMode;
-      if (Number.isFinite(data.brightnessPercent)) {
-        window.appState.brightnessPercent = Math.min(100, Math.max(10, Math.round(data.brightnessPercent)));
-      }
-    }
-  } catch (e) {
-    console.warn('Failed to load persistent state:', e);
-  }
-}
-
 function savePersistentState() {
   try {
     const data = {
       targetDeviceUuid: window.appState.targetDeviceUuid,
-      connectionMode: window.appState.connectionMode,
-      qrScannerMode: window.appState.qrScannerMode,
-      brightnessPercent: window.appState.brightnessPercent,
     };
     localStorage.setItem('beadcraft_state', JSON.stringify(data));
   } catch (e) {
@@ -70,66 +43,29 @@ function savePersistentState() {
 
 const BLE_SERVICE_UUID = '4fafc201-1fb5-459e-8fcc-c5c9c331914b';
 const BLE_CHARACTERISTIC_UUID = 'beb5483e-36e1-4688-b7f5-ea0734b3e6c1';
-const BLE_WIFI_SCAN_CHARACTERISTIC_UUID = '9f6b2a1d-6a52-4f4e-93c7-8d9c6d41e7a1';
 const BLE_IMAGE_SIZE = 8192;
 const BLE_CHUNK_SIZE = 19;
 const BLE_ACK_TIMEOUT_MS = 5000;
 const BLE_SEND_MAX_RETRIES = 3;
 const BLE_PACKET_GAP_MS = 8;
-const BLE_WIFI_SCAN_TIMEOUT_MS = 15000;
-const BLE_PKT_WIFI_SCAN = 0x07;
-const BLE_PKT_WIFI_CONNECT = 0x08;
-const BLE_PKT_SET_BRIGHTNESS = 0x09;
-const BLE_PKT_GET_BRIGHTNESS = 0x0A;
 const RGB565_BLACK = 0x0000;
 const RGB565_TRANSPARENT_MARKER = 0x0001;
-const BLE_NTF_WIFI_SCAN_BEGIN = 0x21;
-const BLE_NTF_WIFI_SCAN_DATA = 0x22;
-const BLE_NTF_WIFI_SCAN_END = 0x23;
-const BLE_NTF_WIFI_SCAN_ERROR = 0x24;
-const BLE_NTF_BRIGHTNESS = 0x26;
-const DEVICE_BRIGHTNESS_MIN = 26;
-const DEVICE_BRIGHTNESS_MAX = 255;
-const BRIGHTNESS_PERCENT_MIN = 10;
-const BRIGHTNESS_PERCENT_MAX = 100;
-const BRIGHTNESS_SYNC_DEBOUNCE_MS = 120;
+const LOCAL_GENERATION_TIMEOUT_MS = 60000;
+const LOCAL_GENERATION_WORKER_URL = '/static/local-processing/wasm-worker.js';
 
 let bleAckWaiters = [];
-let bleWifiScanWaiters = [];
-let bleWifiScanBuffer = '';
-let bleWifiScanPendingResult = null;
-let bleWifiScanPendingError = null;
-let bleWifiConnectWaiters = [];
-let bleWifiConnectPendingResult = null;
-let bleWifiConnectPendingError = null;
-let bleBrightnessWaiters = [];
-let bleBrightnessPendingValue = null;
 
-let qrScannerState = {
-  stream: null,
-  detector: null,
-  intervalId: null,
-  active: false,
-  canvas: null,
-  context: null,
-};
+function createSessionId() {
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+    return crypto.randomUUID();
+  }
+  return `local-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+}
 
 function clampNumber(value, min, max) {
   const numeric = Number(value);
   if (!Number.isFinite(numeric)) return min;
   return Math.min(max, Math.max(min, numeric));
-}
-
-function percentToDeviceBrightness(percent) {
-  const clampedPercent = clampNumber(percent, BRIGHTNESS_PERCENT_MIN, BRIGHTNESS_PERCENT_MAX);
-  const ratio = (clampedPercent - BRIGHTNESS_PERCENT_MIN) / (BRIGHTNESS_PERCENT_MAX - BRIGHTNESS_PERCENT_MIN);
-  return Math.round(DEVICE_BRIGHTNESS_MIN + ratio * (DEVICE_BRIGHTNESS_MAX - DEVICE_BRIGHTNESS_MIN));
-}
-
-function deviceBrightnessToPercent(brightness) {
-  const clampedBrightness = clampNumber(brightness, DEVICE_BRIGHTNESS_MIN, DEVICE_BRIGHTNESS_MAX);
-  const ratio = (clampedBrightness - DEVICE_BRIGHTNESS_MIN) / (DEVICE_BRIGHTNESS_MAX - DEVICE_BRIGHTNESS_MIN);
-  return Math.round(BRIGHTNESS_PERCENT_MIN + ratio * (BRIGHTNESS_PERCENT_MAX - BRIGHTNESS_PERCENT_MIN));
 }
 
 function getConnectedBleUuid() {
@@ -152,60 +88,11 @@ function clearRememberedBleTarget() {
   savePersistentState();
 }
 
-function getCurrentWiFiTargetUuid() {
-  return getConnectedBleUuid();
-}
-
-function canSyncBrightness() {
-  if (window.appState.bleDevice?.gatt?.connected) return true;
-  return window.appState.connectionMode === 'wifi' && !!getCurrentWiFiTargetUuid();
-}
-
-function applyDeviceBrightness(brightness) {
-  const percent = deviceBrightnessToPercent(brightness);
-  window.appState.brightnessPercent = percent;
-  window.appState.deviceBrightnessLoaded = true;
-  savePersistentState();
-  updateBrightnessControlState();
-  return percent;
-}
-
-function updateBrightnessControlState() {
-  const slider = document.getElementById('brightness-slider');
-  const value = document.getElementById('brightness-value');
-  const hint = document.getElementById('brightness-hint');
-  if (!slider || !value || !hint) return;
-
-  const percent = clampNumber(window.appState.brightnessPercent, BRIGHTNESS_PERCENT_MIN, BRIGHTNESS_PERCENT_MAX);
-  slider.value = String(percent);
-  slider.disabled = !canSyncBrightness();
-  value.textContent = `${percent}%`;
-  hint.textContent = slider.disabled ? t('brightness.hint_disconnected') : t('brightness.hint_connected');
-}
-
-function handleBrightnessSliderInput(event) {
-  const percent = clampNumber(event?.target?.value ?? window.appState.brightnessPercent, BRIGHTNESS_PERCENT_MIN, BRIGHTNESS_PERCENT_MAX);
-  window.appState.brightnessPercent = percent;
-  savePersistentState();
-  updateBrightnessControlState();
-  queueBrightnessSync(percent);
-}
-
-function initBrightnessControls() {
-  const slider = document.getElementById('brightness-slider');
-  if (!slider) return;
-  if (!slider.dataset.bound) {
-    slider.addEventListener('input', handleBrightnessSliderInput);
-    slider.addEventListener('change', handleBrightnessSliderInput);
-    slider.dataset.bound = '1';
-  }
-  updateBrightnessControlState();
-}
-
 // === Clear Canvas ===
 function clearCanvas() {
   // Reset state
   window.appState.originalImage = null;
+  window.appState.originalImageSize = null;
   window.appState.pixelMatrix = null;
   window.appState.colorData = {};
   window.appState.colorSummary = [];
@@ -226,53 +113,50 @@ function clearCanvas() {
   ctx.clearRect(0, 0, canvas.width, canvas.height);
 }
 
+function goHome() {
+  clearCanvas();
+}
+
+async function setOriginalImageFile(file, dimensions = null) {
+  window.appState.originalImage = file;
+  window.appState.originalImageSize = dimensions;
+}
+
 // === Initialization ===
 document.addEventListener('DOMContentLoaded', () => {
-  // Load persistent state first
-  loadPersistentState();
-
   loadFullPalette();
   initUpload();
   applyTranslations();
-  initBrightnessControls();
   updateConnectionModeQuickButton();
-  setConnectionMode(window.appState.connectionMode || 'ble');
-  updateBrightnessControlState();
-  promptBleConnectionOnStartup();
+  setConnectionMode('ble');
 });
-
-function getConnectionModeLabel(mode) {
-  if (mode === 'ble') return t('ble.mode_ble');
-  if (mode === 'wifi') return 'WiFi';
-  return t('ble.mode_default');
-}
 
 function updateConnectionModeQuickButton() {
   const btn = document.getElementById('mode-quick-btn');
   if (!btn) return;
-  const mode = window.appState.connectionMode || 'ble';
-  btn.textContent = getConnectionModeLabel(mode);
-  btn.title = t('ble.connection_mode', {mode: getConnectionModeLabel(mode)});
+  const connectedUuid = getConnectedBleUuid();
+  const shortUuid = connectedUuid ? connectedUuid.slice(0, 4) : '未连接';
+  btn.textContent = shortUuid;
+  btn.title = connectedUuid ? t('ble.header_connected', {uuid: connectedUuid}) : '未连接蓝牙';
+  btn.classList.toggle('connected', !!connectedUuid);
+  btn.classList.toggle('disconnected', !connectedUuid);
 }
 
-function promptBleConnectionOnStartup() {
-  if (window.appState.bleDevice?.gatt?.connected) return;
-  if (document.getElementById('serial-settings-dialog')?.style.display === 'flex') return;
-  setConnectionMode('ble');
-  window.setTimeout(() => {
-    if (window.appState.bleDevice?.gatt?.connected) return;
-    showSerialSettings().catch((err) => {
-      console.warn('Failed to open BLE setup on startup:', err);
-    });
-  }, 0);
+async function cycleConnectionMode() {
+  await showSerialSettings();
 }
 
-function cycleConnectionMode() {
-  const modes = ['ble', 'wifi'];
-  const current = window.appState.connectionMode || 'ble';
-  const index = modes.indexOf(current);
-  const next = modes[(index + 1) % modes.length];
-  setConnectionMode(next);
+async function handleQuickBleAction() {
+  await refreshBLEDevices();
+  if (window.appState.bleDevice?.gatt?.connected) {
+    await showSerialSettings();
+    return;
+  }
+  if ((window.appState.bleKnownDevices || []).length === 0) {
+    await addBLEDevice();
+    return;
+  }
+  await showSerialSettings();
 }
 
 // === Load Example Image ===
@@ -289,7 +173,7 @@ async function loadExampleImage(name) {
     const file = new File([blob], `${name}_original.jpg`, { type: 'image/jpeg' });
 
     // Set as original image and generate directly
-    window.appState.originalImage = file;
+    await setOriginalImageFile(file);
     document.getElementById('upload-area').style.display = 'none';
     document.getElementById('examples-container').style.display = 'none';
     
@@ -332,242 +216,16 @@ function showToast(message, isError = false) {
   }, 3000);
 }
 
-function setQrScannerStatus(message, isError = false) {
-  const status = document.getElementById('qr-scanner-status');
-  if (!status) return;
-  status.textContent = message;
-  status.style.color = isError ? 'var(--danger)' : 'var(--text-secondary)';
-}
-
-function updateQrScannerConnectionUi() {
-  const hidePairing = window.appState.qrScannerMode === 'wifi' && hasMatchingConnectedBLEDevice();
-  const frame = document.getElementById('qr-scanner-frame');
-  const actions = document.getElementById('qr-scanner-actions');
-  const manual = document.getElementById('qr-scanner-manual');
-  if (frame) frame.style.display = hidePairing ? 'none' : '';
-  if (actions) actions.style.display = hidePairing ? 'none' : '';
-  if (manual) manual.style.display = hidePairing ? 'none' : '';
-}
-
-function renderQrWifiSelection() {
-  const panel = document.getElementById('qr-wifi-connect-panel');
-  const selected = document.getElementById('qr-wifi-selected');
-  const password = document.getElementById('qr-wifi-password');
-  const button = document.getElementById('qr-wifi-connect-btn');
-  const network = window.appState.selectedWifiNetwork;
-  if (!panel || !selected || !password || !button) return;
-
-  if (!network) {
-    panel.style.display = 'none';
-    selected.textContent = '';
-    password.value = '';
-    return;
+function setGenerationLoading(isLoading) {
+  const overlay = document.getElementById('generation-loading-overlay');
+  const text = document.getElementById('generation-loading-text');
+  window.appState.isGenerating = isLoading;
+  if (!overlay) return;
+  overlay.classList.toggle('visible', isLoading);
+  overlay.setAttribute('aria-hidden', isLoading ? 'false' : 'true');
+  if (text) {
+    text.textContent = t('toast.generating_image');
   }
-
-  panel.style.display = 'flex';
-  selected.textContent = t('wifi.selected_network', {ssid: network.ssid});
-  password.style.display = network.secured ? '' : 'none';
-  password.placeholder = t('wifi.password_for', {ssid: network.ssid});
-  if (!network.secured) {
-    password.value = '';
-  } else {
-    setTimeout(() => password.focus(), 0);
-  }
-  button.textContent = network.secured ? t('wifi.connect_with_password') : t('wifi.connect_open');
-}
-
-function selectQrWifiNetwork(ssid) {
-  const normalized = (ssid || '').trim();
-  window.appState.selectedWifiNetwork = window.appState.wifiScanResults.find(item => item.ssid === normalized) || null;
-  document.querySelectorAll('.qr-wifi-item').forEach((row) => {
-    row.classList.toggle('selected', row.dataset.ssid === normalized);
-  });
-  renderQrWifiSelection();
-}
-
-function renderQrWifiScanResults(results = [], emptyMessage = t('wifi.scan_results_placeholder')) {
-  const panel = document.getElementById('qr-wifi-panel');
-  const list = document.getElementById('qr-wifi-list');
-  if (!panel || !list) return;
-
-  panel.style.display = window.appState.qrScannerMode === 'wifi' ? 'block' : 'none';
-  list.innerHTML = '';
-  window.appState.selectedWifiNetwork = null;
-  renderQrWifiSelection();
-
-  if (!results.length) {
-    const empty = document.createElement('div');
-    empty.className = 'qr-wifi-empty';
-    empty.textContent = emptyMessage;
-    list.appendChild(empty);
-    return;
-  }
-
-  results.forEach((item) => {
-    const row = document.createElement('div');
-    row.className = 'qr-wifi-item';
-    row.dataset.ssid = item.ssid;
-    row.innerHTML = `
-      <div class="qr-wifi-item-main">
-        <div class="qr-wifi-item-ssid">${item.ssid}</div>
-        <div class="qr-wifi-item-meta">${t('wifi.signal')} ${item.rssi} dBm</div>
-      </div>
-      <div class="qr-wifi-item-lock">${item.secured ? t('wifi.secured') : t('wifi.open')}</div>
-    `;
-    row.addEventListener('click', () => selectQrWifiNetwork(item.ssid));
-    list.appendChild(row);
-  });
-}
-
-function updateQrScannerModeUi() {
-  const mode = window.appState.qrScannerMode || 'ble';
-  const bleBtn = document.getElementById('qr-mode-ble-btn');
-  const wifiBtn = document.getElementById('qr-mode-wifi-btn');
-  const submitBtn = document.getElementById('qr-manual-submit-btn');
-  const input = document.getElementById('manual-uuid-input');
-
-  if (bleBtn) bleBtn.classList.toggle('active', mode === 'ble');
-  if (wifiBtn) wifiBtn.classList.toggle('active', mode === 'wifi');
-  if (submitBtn) submitBtn.textContent = mode === 'wifi' ? t('wifi.scan_hotspots') : t('wifi.connect_uuid');
-  if (input) input.placeholder = mode === 'wifi' ? 'Enter device UUID then scan hotspots' : 'Enter device UUID';
-  updateQrScannerConnectionUi();
-
-  if (mode === 'wifi') {
-    renderQrWifiScanResults(window.appState.wifiScanResults, t('wifi.scan_hint'));
-  } else {
-    renderQrWifiScanResults([], t('wifi.scan_results_placeholder'));
-  }
-}
-
-function setQrScannerMode(mode) {
-  if (mode !== 'ble' && mode !== 'wifi') return;
-  window.appState.qrScannerMode = mode;
-  setConnectionMode(mode);
-  updateQrScannerModeUi();
-  setQrScannerStatus(mode === 'wifi'
-    ? 'Scan device QR first, then connect ESP32 over Bluetooth and start WiFi scan'
-    : t('qr.scan_hint'));
-}
-
-function stopQrScannerLoop() {
-  if (qrScannerState.intervalId) {
-    clearInterval(qrScannerState.intervalId);
-    qrScannerState.intervalId = null;
-  }
-}
-
-function stopQrScannerStream() {
-  if (qrScannerState.stream) {
-    qrScannerState.stream.getTracks().forEach(track => track.stop());
-    qrScannerState.stream = null;
-  }
-
-  const video = document.getElementById('qr-scanner-video');
-  if (video) {
-    video.srcObject = null;
-  }
-}
-
-function closeQrScanner() {
-  qrScannerState.active = false;
-  stopQrScannerLoop();
-  stopQrScannerStream();
-  const dialog = document.getElementById('qr-scanner-dialog');
-  if (dialog) {
-    dialog.style.display = 'none';
-  }
-
-  const qrImageInput = document.getElementById('qr-image-input');
-  if (qrImageInput) {
-    qrImageInput.value = '';
-  }
-
-  const manualUuidInput = document.getElementById('manual-uuid-input');
-  if (manualUuidInput) {
-    manualUuidInput.value = '';
-  }
-
-  window.appState.wifiScanResults = [];
-  renderQrWifiScanResults([], t('wifi.scan_results_placeholder'));
-}
-
-function showBleQuickConnect(uuid) {
-  const container = document.getElementById('ble-quick-connect');
-  const text = document.getElementById('ble-quick-connect-text');
-  if (!container || !text) return;
-
-  const mode = window.appState.pendingBleAction === 'wifi-scan' ? t('ble.scan_nearby') : t('ble.connect_esp32');
-  text.textContent = t('ble.target_locked', {uuid: uuid, mode: mode});
-  container.style.display = 'block';
-}
-
-function hideBleQuickConnect() {
-  const container = document.getElementById('ble-quick-connect');
-  if (container) {
-    container.style.display = 'none';
-  }
-}
-
-async function confirmBleQuickConnect() {
-  hideBleQuickConnect();
-  if (!window.appState.targetDeviceUuid) return;
-
-  const mode = window.appState.pendingBleAction === 'wifi-scan' ? ' and scan hotspots' : '';
-  showToast(t('ble.connecting_to', {uuid: window.appState.targetDeviceUuid, mode: mode}));
-  try {
-    if (window.appState.pendingBleAction === 'wifi-scan') {
-      await connectAndScanWiFiForTarget(window.appState.targetDeviceUuid);
-    } else {
-      await connectBLEDevice();
-    }
-  } catch (err) {
-    const message = err?.name === 'NotFoundError'
-      ? t('ble.no_device')
-      : (err?.message || t('ble.connect_failed'));
-    showToast(message, true);
-  } finally {
-    window.appState.pendingBleAction = null;
-  }
-}
-
-function handleQrScanResult(rawValue) {
-  if (!rawValue) return;
-
-  closeQrScanner();
-
-  try {
-    const normalizedValue = /^[a-zA-Z][a-zA-Z\d+\-.]*:\/\//.test(rawValue)
-      ? rawValue
-      : `https://${rawValue}`;
-    const scannedUrl = new URL(normalizedValue, window.location.origin);
-    window.location.href = scannedUrl.toString();
-  } catch (err) {
-    const manualUuid = rawValue.trim().toUpperCase();
-    if (/^[0-9A-F]{12}$/.test(manualUuid)) {
-      applyManualUuid(manualUuid);
-      return;
-    }
-    showToast(t('qr.invalid_content'), true);
-  }
-}
-
-function applyManualUuid(uuid) {
-  const normalized = (uuid || '').trim().toUpperCase();
-  if (!/^[0-9A-F]{12}$/.test(normalized)) {
-    showToast(t('toast.uuid_format'), true);
-    return;
-  }
-
-  const targetUrl = new URL(window.location.href);
-  targetUrl.searchParams.set('u', normalized);
-  targetUrl.searchParams.delete('device_uuid');
-  window.location.href = targetUrl.toString();
-}
-
-function connectByManualUuid() {
-  const input = document.getElementById('manual-uuid-input');
-  if (!input) return;
-  applyManualUuid(input.value);
 }
 
 function syncTargetUuidToUrl(uuid) {
@@ -581,381 +239,6 @@ function syncTargetUuidToUrl(uuid) {
   window.history.replaceState({}, '', targetUrl.toString());
 }
 
-async function beginUuidPairing(uuid, tryImmediateConnect = false) {
-  const normalized = (uuid || '').trim().toUpperCase();
-  if (!/^[0-9A-F]{12}$/.test(normalized)) {
-    throw new Error(t('toast.uuid_format'));
-  }
-
-  clearRememberedBleTarget();
-  setConnectionMode('ble');
-  renderBleStatus();
-
-  if (!tryImmediateConnect) {
-    return;
-  }
-
-  try {
-    await connectBLEDevice();
-  } catch (err) {
-    const message = err?.name === 'SecurityError'
-      ? 'Browser blocked auto Bluetooth connect. Tap Connect Device to continue'
-      : (err?.name === 'NotFoundError'
-          ? t('ble.no_device')
-          : (err?.message || t('ble.connect_failed')));
-    showToast(message, true);
-  }
-}
-
-async function handleQrScanResult(rawValue) {
-  if (!rawValue) return;
-
-  closeQrScanner();
-
-  try {
-    const normalizedValue = /^[a-zA-Z][a-zA-Z\d+\-.]*:\/\//.test(rawValue)
-      ? rawValue
-      : `https://${rawValue}`;
-    const scannedUrl = new URL(normalizedValue, window.location.origin);
-    const scannedUuid = (scannedUrl.searchParams.get('u') || scannedUrl.searchParams.get('device_uuid') || '').trim().toUpperCase();
-    if (scannedUuid) {
-      await beginUuidPairing(scannedUuid, true);
-      return;
-    }
-    window.location.href = scannedUrl.toString();
-  } catch (err) {
-    const manualUuid = rawValue.trim().toUpperCase();
-    if (/^[0-9A-F]{12}$/.test(manualUuid)) {
-      await beginUuidPairing(manualUuid, true);
-      return;
-    }
-    showToast(t('qr.invalid_content'), true);
-  }
-}
-
-async function applyManualUuid(uuid, tryImmediateConnect = false) {
-  try {
-    await beginUuidPairing(uuid, tryImmediateConnect);
-  } catch (err) {
-    showToast(err.message || t('uuid.invalid'), true);
-  }
-}
-
-async function connectByManualUuid() {
-  const input = document.getElementById('manual-uuid-input');
-  if (!input) return;
-  await applyManualUuid(input.value, true);
-}
-
-async function beginUuidPairing(uuid, tryImmediateConnect = false) {
-  const normalized = (uuid || '').trim().toUpperCase();
-  if (!/^[0-9A-F]{12}$/.test(normalized)) {
-    throw new Error(t('toast.uuid_format'));
-  }
-
-  clearRememberedBleTarget();
-  setConnectionMode('ble');
-  renderBleStatus();
-  hideBleQuickConnect();
-
-  if (!tryImmediateConnect) {
-    return;
-  }
-
-  showToast(t('ble.connecting_to', {uuid: normalized, mode: ''}));
-  try {
-    await connectBLEDevice();
-  } catch (err) {
-    if (err?.name === 'SecurityError') {
-      showBleQuickConnect(normalized);
-      return;
-    }
-
-    const message = err?.name === 'NotFoundError'
-      ? t('ble.no_device')
-      : (err?.message || t('ble.connect_failed'));
-    showToast(message, true);
-  }
-}
-
-async function handleQrScanResult(rawValue) {
-  if (!rawValue) return;
-
-  closeQrScanner();
-
-  try {
-    const normalizedValue = /^[a-zA-Z][a-zA-Z\d+\-.]*:\/\//.test(rawValue)
-      ? rawValue
-      : `https://${rawValue}`;
-    const scannedUrl = new URL(normalizedValue, window.location.origin);
-    const scannedUuid = (scannedUrl.searchParams.get('u') || scannedUrl.searchParams.get('device_uuid') || '').trim().toUpperCase();
-    if (scannedUuid) {
-      await beginUuidPairing(scannedUuid, true);
-      return;
-    }
-    window.location.href = scannedUrl.toString();
-  } catch (err) {
-    const manualUuid = rawValue.trim().toUpperCase();
-    if (/^[0-9A-F]{12}$/.test(manualUuid)) {
-      await beginUuidPairing(manualUuid, true);
-      return;
-    }
-    showToast(t('qr.invalid_content'), true);
-  }
-}
-
-async function applyManualUuid(uuid, tryImmediateConnect = false) {
-  try {
-    await beginUuidPairing(uuid, tryImmediateConnect);
-  } catch (err) {
-    showToast(err.message || t('uuid.invalid'), true);
-  }
-}
-
-async function connectByManualUuid() {
-  const input = document.getElementById('manual-uuid-input');
-  if (!input) return;
-  await applyManualUuid(input.value, true);
-}
-
-async function scanCurrentQrFrame() {
-  if (!qrScannerState.active) return;
-
-  const video = document.getElementById('qr-scanner-video');
-  if (!video || video.readyState < 2) return;
-
-  try {
-    if (qrScannerState.detector) {
-      const barcodes = await qrScannerState.detector.detect(video);
-      if (barcodes && barcodes.length > 0) {
-        handleQrScanResult(barcodes[0].rawValue);
-        return;
-      }
-    }
-
-    if (typeof window.jsQR === 'function') {
-      const width = video.videoWidth;
-      const height = video.videoHeight;
-      if (!width || !height) return;
-
-      if (!qrScannerState.canvas) {
-        qrScannerState.canvas = document.createElement('canvas');
-        qrScannerState.context = qrScannerState.canvas.getContext('2d', { willReadFrequently: true });
-      }
-
-      qrScannerState.canvas.width = width;
-      qrScannerState.canvas.height = height;
-      qrScannerState.context.drawImage(video, 0, 0, width, height);
-      const imageData = qrScannerState.context.getImageData(0, 0, width, height);
-      const code = window.jsQR(imageData.data, width, height);
-      if (code?.data) {
-        handleQrScanResult(code.data);
-      }
-    }
-  } catch (err) {
-    setQrScannerStatus('QR decode failed', true);
-    stopQrScannerLoop();
-  }
-}
-
-async function openQrScanner() {
-  if (typeof BarcodeDetector === 'undefined' && typeof window.jsQR !== 'function') {
-    showToast(t('toast.browser_no_qr'), true);
-    return;
-  }
-
-  const dialog = document.getElementById('qr-scanner-dialog');
-  const video = document.getElementById('qr-scanner-video');
-  if (!dialog || !video) return;
-
-  qrScannerState.detector = typeof BarcodeDetector !== 'undefined'
-    ? new BarcodeDetector({ formats: ['qr_code'] })
-    : null;
-  qrScannerState.active = true;
-  dialog.style.display = 'flex';
-  window.appState.qrScannerMode = window.appState.connectionMode === 'wifi' ? 'wifi' : 'ble';
-  window.appState.wifiScanResults = [];
-  updateQrScannerModeUi();
-  setQrScannerStatus(window.appState.qrScannerMode === 'wifi'
-    ? 'Scan device QR first, then connect ESP32 over Bluetooth and start WiFi scan'
-    : 'Place QR code in frame, or upload an image if camera is unavailable');
-
-  if (!navigator.mediaDevices?.getUserMedia) {
-    setQrScannerStatus(t('camera.unavailable'), true);
-    return;
-  }
-
-  try {
-    qrScannerState.stream = await navigator.mediaDevices.getUserMedia({
-      video: { facingMode: 'environment' },
-      audio: false,
-    });
-    video.srcObject = qrScannerState.stream;
-    await video.play();
-    stopQrScannerLoop();
-    qrScannerState.intervalId = setInterval(() => {
-      scanCurrentQrFrame();
-    }, 300);
-  } catch (err) {
-    stopQrScannerStream();
-    stopQrScannerLoop();
-    if (!window.isSecureContext) {
-      setQrScannerStatus('Mobile browsers usually block camera scan on HTTP. Use photo scan instead.', true);
-    } else {
-      setQrScannerStatus('Cannot access camera. Check permissions or use photo scan.', true);
-    }
-  }
-}
-
-function triggerQrImagePicker() {
-  const input = document.getElementById('qr-image-input');
-  if (input) {
-    input.click();
-  }
-}
-
-async function triggerQrHotspotScan() {
-  if (window.appState.qrScannerMode !== 'wifi') {
-    closeQrScanner();
-    return;
-  }
-
-  const targetUuid = window.appState.targetDeviceUuid;
-  if (!targetUuid) {
-    setQrScannerStatus(t('qr.scan_device_first'), true);
-    return;
-  }
-
-  try {
-    await connectAndScanWiFiForTarget(targetUuid);
-  } catch (err) {
-    setQrScannerStatus(err.message || t('wifi.scan_failed'), true);
-  }
-}
-
-async function handleQrImageSelection(event) {
-  const file = event.target.files?.[0];
-  if (!file) return;
-
-  if (typeof window.jsQR !== 'function') {
-    showToast(t('toast.qr_unavailable'), true);
-    return;
-  }
-
-  try {
-    setQrScannerStatus(t('qr.recognizing'));
-    const imageBitmap = await createImageBitmap(file);
-    const canvas = document.createElement('canvas');
-    canvas.width = imageBitmap.width;
-    canvas.height = imageBitmap.height;
-    const context = canvas.getContext('2d', { willReadFrequently: true });
-    context.drawImage(imageBitmap, 0, 0);
-    const imageData = context.getImageData(0, 0, canvas.width, canvas.height);
-    const code = window.jsQR(imageData.data, canvas.width, canvas.height);
-
-    if (code?.data) {
-      handleQrScanResult(code.data);
-      return;
-    }
-
-    setQrScannerStatus('QR code not detected. Retake a clearer photo.', true);
-  } catch (err) {
-    setQrScannerStatus(t('qr.recognize_failed'), true);
-  }
-}
-
-async function beginUuidPairing(uuid, tryImmediateConnect = false) {
-  const normalized = (uuid || '').trim().toUpperCase();
-  if (!/^[0-9A-F]{12}$/.test(normalized)) {
-    throw new Error(t('toast.uuid_format'));
-  }
-
-  clearRememberedBleTarget();
-  renderBleStatus();
-  hideBleQuickConnect();
-
-  if (window.appState.qrScannerMode === 'wifi') {
-    setConnectionMode('wifi');
-    stopQrScannerLoop();
-    stopQrScannerStream();
-    setQrScannerStatus(t('ble.connecting_scan', {uuid: normalized}));
-    renderQrWifiScanResults([], t('esp32.scanning'));
-    try {
-      await connectAndScanWiFiForTarget(normalized);
-    } catch (err) {
-      if (err?.name === 'SecurityError') {
-        window.appState.pendingBleAction = 'wifi-scan';
-        showBleQuickConnect(normalized);
-        setQrScannerStatus('Browser requires one more tap to continue Bluetooth flow.', true);
-        return;
-      }
-      throw err;
-    }
-    return;
-  }
-
-  setConnectionMode('ble');
-  if (!tryImmediateConnect) return;
-
-  showToast(t('ble.connecting_to', {uuid: normalized, mode: ''}));
-  try {
-    await connectBLEDevice();
-  } catch (err) {
-    if (err?.name === 'SecurityError') {
-      window.appState.pendingBleAction = 'ble-connect';
-      showBleQuickConnect(normalized);
-      return;
-    }
-    throw err;
-  }
-}
-
-async function applyManualUuid(uuid, tryImmediateConnect = false) {
-  try {
-    await beginUuidPairing(uuid, tryImmediateConnect);
-  } catch (err) {
-    showToast(err.message || t('uuid.invalid'), true);
-    setQrScannerStatus(err.message || t('uuid.invalid'), true);
-  }
-}
-
-async function connectByManualUuid() {
-  const input = document.getElementById('manual-uuid-input');
-  if (!input) return;
-  await applyManualUuid(input.value, true);
-}
-
-async function handleQrScanResult(rawValue) {
-  if (!rawValue) return;
-
-  try {
-    const normalizedValue = /^[a-zA-Z][a-zA-Z\d+\-.]*:\/\//.test(rawValue)
-      ? rawValue
-      : `https://${rawValue}`;
-    const scannedUrl = new URL(normalizedValue, window.location.origin);
-    const scannedUuid = (scannedUrl.searchParams.get('u') || scannedUrl.searchParams.get('device_uuid') || '').trim().toUpperCase();
-    if (scannedUuid) {
-      if (window.appState.qrScannerMode === 'ble') {
-        closeQrScanner();
-      }
-      await beginUuidPairing(scannedUuid, true);
-      return;
-    }
-    window.location.href = scannedUrl.toString();
-  } catch (err) {
-    const manualUuid = rawValue.trim().toUpperCase();
-    if (/^[0-9A-F]{12}$/.test(manualUuid)) {
-      if (window.appState.qrScannerMode === 'ble') {
-        closeQrScanner();
-      }
-      await beginUuidPairing(manualUuid, true);
-      return;
-    }
-    showToast(t('qr.invalid_content'), true);
-    setQrScannerStatus(t('qr.invalid_content'), true);
-  }
-}
-
 function isWebBluetoothAvailable() {
   return typeof navigator !== 'undefined' && !!navigator.bluetooth;
 }
@@ -965,30 +248,187 @@ function normalizeBleDeviceUuid(name) {
   return name.slice('BeadCraft-'.length).trim().toUpperCase();
 }
 
-function updateBLEDeviceSelect(label, value = '') {
-  const select = document.getElementById('ble-device-select');
-  if (!select) return;
+function getBleDeviceKey(device) {
+  if (!device) return '';
+  return device.id || normalizeBleDeviceUuid(device.name) || device.name || '';
+}
 
-  select.innerHTML = '';
-  const opt = document.createElement('option');
-  opt.value = value;
-  opt.textContent = label;
-  select.appendChild(opt);
-  select.value = value;
+function mergeKnownBleDevices(devices = []) {
+  const merged = new Map();
+  [...devices, window.appState.bleDevice].filter(Boolean).forEach((device) => {
+    const key = getBleDeviceKey(device);
+    if (!key || merged.has(key)) return;
+    merged.set(key, device);
+  });
+  return Array.from(merged.values());
+}
+
+async function getAuthorizedBLEDevices() {
+  if (!isWebBluetoothAvailable()) return [];
+
+  let devices = [];
+  if (typeof navigator.bluetooth.getDevices === 'function') {
+    try {
+      devices = await navigator.bluetooth.getDevices();
+    } catch (err) {
+      console.warn('Failed to load authorized Bluetooth devices:', err);
+    }
+  }
+
+  return mergeKnownBleDevices(
+    devices.filter((device) => device?.name?.startsWith('BeadCraft-'))
+  );
+}
+
+function renderBleDeviceList() {
+  const list = document.getElementById('ble-device-list');
+  const addBtn = document.getElementById('ble-add-device-btn');
+  if (!list) return;
+
+  const connectedUuid = getConnectedBleUuid();
+  const targetUuid = (window.appState.targetDeviceUuid || '').trim().toUpperCase();
+  const currentKey = getBleDeviceKey(window.appState.bleDevice);
+  const devices = [...(window.appState.bleKnownDevices || [])];
+  const hasRememberedRow = !!targetUuid && devices.some((device) => normalizeBleDeviceUuid(device.name) === targetUuid);
+
+  list.innerHTML = '';
+
+  if (addBtn) {
+    addBtn.textContent = t('ble.add_device');
+    addBtn.disabled = !isWebBluetoothAvailable();
+  }
+
+  if (!isWebBluetoothAvailable()) {
+    const unavailable = document.createElement('div');
+    unavailable.className = 'ble-device-empty';
+    unavailable.textContent = t('ble.bluetooth_unavailable');
+    list.appendChild(unavailable);
+    return;
+  }
+
+  if (!devices.length && !targetUuid) {
+    const empty = document.createElement('div');
+    empty.className = 'ble-device-empty';
+    empty.textContent = t('ble.no_device_hint');
+    list.appendChild(empty);
+    return;
+  }
+
+  devices.forEach((device) => {
+    const deviceKey = getBleDeviceKey(device);
+    const deviceUuid = normalizeBleDeviceUuid(device.name);
+    const isConnected = !!currentKey && currentKey === deviceKey && !!window.appState.bleDevice?.gatt?.connected;
+    const isRemembered = !!deviceUuid && deviceUuid === targetUuid;
+
+    const row = document.createElement('button');
+    row.type = 'button';
+    row.className = `ble-device-option${isConnected ? ' connected' : ''}${isRemembered ? ' remembered' : ''}`;
+    row.setAttribute('role', 'radio');
+    row.setAttribute('aria-checked', isConnected ? 'true' : 'false');
+    row.dataset.deviceKey = deviceKey;
+    row.addEventListener('click', () => {
+      connectKnownBLEDevice(deviceKey);
+    });
+
+    const radio = document.createElement('span');
+    radio.className = 'ble-device-radio';
+    row.appendChild(radio);
+
+    const info = document.createElement('span');
+    info.className = 'ble-device-info';
+
+    const title = document.createElement('span');
+    title.className = 'ble-device-title';
+    title.textContent = deviceUuid || device.name || 'BeadCraft';
+    info.appendChild(title);
+
+    const meta = document.createElement('span');
+    meta.className = 'ble-device-meta';
+    if (isConnected && (connectedUuid || deviceUuid)) {
+      meta.textContent = t('ble.device_connected', {uuid: connectedUuid || deviceUuid});
+    } else if (isRemembered && deviceUuid) {
+      meta.textContent = t('ble.saved_device', {uuid: deviceUuid});
+    } else {
+      meta.textContent = t('ble.authorized_device');
+    }
+    info.appendChild(meta);
+
+    row.appendChild(info);
+    list.appendChild(row);
+  });
+
+  if (targetUuid && !hasRememberedRow) {
+    const row = document.createElement('button');
+    row.type = 'button';
+    row.className = 'ble-device-option remembered';
+    row.setAttribute('role', 'radio');
+    row.setAttribute('aria-checked', 'false');
+    row.addEventListener('click', () => {
+      addBLEDevice();
+    });
+
+    const radio = document.createElement('span');
+    radio.className = 'ble-device-radio';
+    row.appendChild(radio);
+
+    const info = document.createElement('span');
+    info.className = 'ble-device-info';
+
+    const title = document.createElement('span');
+    title.className = 'ble-device-title';
+    title.textContent = targetUuid;
+    info.appendChild(title);
+
+    const meta = document.createElement('span');
+    meta.className = 'ble-device-meta';
+    meta.textContent = t('ble.remembered_device_needs_pair', {uuid: targetUuid});
+    info.appendChild(meta);
+
+    row.appendChild(info);
+    list.appendChild(row);
+  }
+}
+
+function resetBleTransportState() {
+  if (window.appState.bleCharacteristic) {
+    window.appState.bleCharacteristic.removeEventListener('characteristicvaluechanged', handleBLENotification);
+  }
+  window.appState.bleServer = null;
+  window.appState.bleCharacteristic = null;
+  window.appState.bleNotifyReady = false;
+  bleAckWaiters = [];
+}
+
+function setActiveBleDevice(device) {
+  if (!device) return;
+  if (window.appState.bleDevice && getBleDeviceKey(window.appState.bleDevice) !== getBleDeviceKey(device)) {
+    const previousDevice = window.appState.bleDevice;
+    previousDevice.removeEventListener('gattserverdisconnected', onBLEDisconnected);
+    if (previousDevice.gatt?.connected) {
+      try {
+        previousDevice.gatt.disconnect();
+      } catch (err) {
+        console.warn('Failed to disconnect previous Bluetooth device:', err);
+      }
+    }
+    resetBleTransportState();
+  }
+  window.appState.bleDevice = device;
+  window.appState.bleKnownDevices = mergeKnownBleDevices(window.appState.bleKnownDevices);
+  device.removeEventListener('gattserverdisconnected', onBLEDisconnected);
+  device.addEventListener('gattserverdisconnected', onBLEDisconnected);
 }
 
 function renderBleStatus() {
-  const chip = document.getElementById('ble-target-chip');
   const card = document.getElementById('ble-status-card');
-  const connectBtn = document.getElementById('ble-connect-btn');
   const uploadArea = document.getElementById('upload-area');
   const targetUuid = (window.appState.targetDeviceUuid || '').trim().toUpperCase();
   const connectedUuid = getConnectedBleUuid();
   const isConnected = !!connectedUuid;
+  const knownCount = (window.appState.bleKnownDevices || []).length;
 
   if (uploadArea) {
     uploadArea.className = 'upload-area';
-    uploadArea.onclick = () => document.getElementById('file-input').click();
     uploadArea.innerHTML = `
       <div class="upload-area-icon">+</div>
       <div class="upload-area-text">${t('upload.click_hint')}</div>
@@ -996,21 +436,19 @@ function renderBleStatus() {
     `;
   }
 
-  if (chip) {
-    if (isConnected && connectedUuid) {
-      chip.style.display = 'inline-flex';
-      chip.textContent = t('ble.header_connected', {uuid: connectedUuid});
-    } else {
-      chip.style.display = 'none';
-      chip.textContent = '';
-    }
-  }
-
   if (card) {
     if (isConnected && connectedUuid) {
       card.style.display = 'block';
       card.className = 'ble-status-card connected';
       card.textContent = t('ble.device_connected', {uuid: connectedUuid});
+    } else if (!isWebBluetoothAvailable()) {
+      card.style.display = 'block';
+      card.className = 'ble-status-card';
+      card.textContent = t('ble.bluetooth_unavailable');
+    } else if (knownCount > 0) {
+      card.style.display = 'block';
+      card.className = 'ble-status-card ready';
+      card.textContent = t('ble.authorized_list_hint', {count: knownCount});
     } else if (targetUuid) {
       card.style.display = 'block';
       card.className = 'ble-status-card ready';
@@ -1022,36 +460,14 @@ function renderBleStatus() {
     }
   }
 
-  if (connectBtn) {
-    connectBtn.textContent = isConnected ? t('ble.reconnect') : (targetUuid ? t('ble.connect_target', {uuid: targetUuid}) : t('ble.connect_device'));
-  }
-
-  updateBrightnessControlState();
+  updateConnectionModeQuickButton();
 }
 
 function onBLEDisconnected() {
-  const disconnectedUuid = window.appState.bleDevice
-    ? normalizeBleDeviceUuid(window.appState.bleDevice.name)
-    : window.appState.targetDeviceUuid;
-  if (window.appState.bleCharacteristic) {
-    window.appState.bleCharacteristic.removeEventListener('characteristicvaluechanged', handleBLENotification);
-  }
-  if (window.appState.bleWifiScanCharacteristic) {
-    window.appState.bleWifiScanCharacteristic.removeEventListener('characteristicvaluechanged', handleBLEWiFiScanNotification);
-  }
-  window.appState.bleServer = null;
-  window.appState.bleCharacteristic = null;
-  window.appState.bleWifiScanCharacteristic = null;
-  window.appState.bleNotifyReady = false;
-  window.appState.bleWifiScanNotifyReady = false;
-  bleAckWaiters = [];
-  bleBrightnessWaiters = [];
-  bleBrightnessPendingValue = null;
+  resetBleTransportState();
   clearRememberedBleTarget();
-  updateBLEDeviceSelect(disconnectedUuid ? `${disconnectedUuid} (disconnected)` : t('toast.ble_disconnected'));
+  refreshBLEDevices();
   renderBleStatus();
-  refreshWiFiDevices();
-  updateBrightnessControlState();
   showToast(t('toast.ble_disconnected'), true);
 }
 
@@ -1066,159 +482,6 @@ function handleBLENotification(event) {
       waiter.resolve(code);
     }
     return;
-  }
-
-  if (code === BLE_NTF_BRIGHTNESS) {
-    const brightness = dataView.byteLength >= 2 ? dataView.getUint8(1) : DEVICE_BRIGHTNESS_MIN;
-    applyDeviceBrightness(brightness);
-    const waiter = bleBrightnessWaiters.shift();
-    if (waiter) {
-      waiter.resolve(brightness);
-    } else {
-      bleBrightnessPendingValue = brightness;
-    }
-    return;
-  }
-
-  if (code === BLE_NTF_WIFI_SCAN_BEGIN) {
-    bleWifiScanBuffer = '';
-    bleWifiScanPendingResult = null;
-    bleWifiScanPendingError = null;
-    return;
-  }
-
-  if (code === BLE_NTF_WIFI_SCAN_DATA) {
-    const bytes = new Uint8Array(dataView.buffer, dataView.byteOffset + 1, dataView.byteLength - 1);
-    bleWifiScanBuffer += new TextDecoder().decode(bytes);
-    return;
-  }
-
-  if (code === BLE_NTF_WIFI_SCAN_END) {
-    const results = parseWifiScanText(bleWifiScanBuffer);
-    const waiter = bleWifiScanWaiters.shift();
-    if (waiter) {
-      waiter.resolve(results);
-    } else {
-      bleWifiScanPendingResult = results;
-    }
-    bleWifiScanBuffer = '';
-    return;
-  }
-
-  if (code === BLE_NTF_WIFI_SCAN_ERROR) {
-    const waiter = bleWifiScanWaiters.shift();
-    if (waiter) {
-      waiter.reject(new Error(t('esp32.wifi_scan_failed')));
-    } else {
-      bleWifiScanPendingError = new Error(t('esp32.wifi_scan_failed'));
-    }
-    bleWifiScanBuffer = '';
-    return;
-  }
-
-  const status = String.fromCharCode(code);
-  if (status === 'B') {
-    bleWifiScanBuffer = '';
-    bleWifiScanPendingResult = null;
-    bleWifiScanPendingError = null;
-    return;
-  }
-
-  if (status === 'D') {
-    const bytes = new Uint8Array(dataView.buffer, dataView.byteOffset + 1, dataView.byteLength - 1);
-    const results = parseWifiScanText(new TextDecoder().decode(bytes));
-    const waiter = bleWifiScanWaiters.shift();
-    if (waiter) {
-      waiter.resolve(results);
-    } else {
-      bleWifiScanPendingResult = results;
-    }
-    return;
-  }
-
-  if (status === 'E') {
-    const bytes = new Uint8Array(dataView.buffer, dataView.byteOffset + 1, dataView.byteLength - 1);
-    const err = new Error(new TextDecoder().decode(bytes) || 'ESP32 WiFi scan failed');
-    const waiter = bleWifiScanWaiters.shift();
-    if (waiter) {
-      waiter.reject(err);
-    } else {
-      bleWifiScanPendingError = err;
-    }
-  }
-}
-
-function handleBLEWiFiScanNotification(event) {
-  const dataView = event.target?.value;
-  if (!dataView || dataView.byteLength < 1) return;
-
-  const bytes = new Uint8Array(dataView.buffer, dataView.byteOffset, dataView.byteLength);
-  const code = bytes[0];
-  const status = String.fromCharCode(code);
-  const payload = new TextDecoder().decode(bytes.slice(1));
-  console.log('[BLE][wifi-notify]', code, status, payload.slice(0, 80));
-
-  if (status === 'B') {
-    bleWifiScanBuffer = '';
-    bleWifiScanPendingResult = null;
-    bleWifiScanPendingError = null;
-    return;
-  }
-
-  if (code === BLE_NTF_WIFI_SCAN_BEGIN) {
-    bleWifiScanBuffer = '';
-    bleWifiScanPendingResult = null;
-    bleWifiScanPendingError = null;
-    return;
-  }
-
-  if (code === BLE_NTF_WIFI_SCAN_DATA) {
-    bleWifiScanBuffer += payload;
-    return;
-  }
-
-  if (code === BLE_NTF_WIFI_SCAN_END) {
-    const results = parseWifiScanText(bleWifiScanBuffer);
-    const waiter = bleWifiScanWaiters.shift();
-    if (waiter) {
-      waiter.resolve(results);
-    } else {
-      bleWifiScanPendingResult = results;
-    }
-    bleWifiScanBuffer = '';
-    return;
-  }
-
-  if (code === BLE_NTF_WIFI_SCAN_ERROR || status === 'E') {
-    const err = new Error(payload || 'ESP32 WiFi scan failed');
-    const waiter = bleWifiScanWaiters.shift();
-    if (waiter) {
-      waiter.reject(err);
-    } else {
-      bleWifiScanPendingError = err;
-    }
-    bleWifiScanBuffer = '';
-    return;
-  }
-
-  if (status === 'C') {
-    const waiter = bleWifiConnectWaiters.shift();
-    if (waiter) {
-      waiter.resolve(payload);
-    } else {
-      bleWifiConnectPendingResult = payload;
-    }
-    return;
-  }
-
-  if (status === 'F') {
-    const err = new Error(payload || 'ESP32 WiFi connect failed');
-    const waiter = bleWifiConnectWaiters.shift();
-    if (waiter) {
-      waiter.reject(err);
-    } else {
-      bleWifiConnectPendingError = err;
-    }
   }
 }
 
@@ -1239,120 +502,6 @@ function waitForBLEAck(timeoutMs = BLE_ACK_TIMEOUT_MS) {
   });
 }
 
-function waitForBLEBrightness(timeoutMs = 3000) {
-  return new Promise((resolve, reject) => {
-    if (bleBrightnessPendingValue !== null) {
-      const brightness = bleBrightnessPendingValue;
-      bleBrightnessPendingValue = null;
-      resolve(brightness);
-      return;
-    }
-
-    const timer = setTimeout(() => {
-      const idx = bleBrightnessWaiters.findIndex(item => item.resolve === resolve);
-      if (idx >= 0) bleBrightnessWaiters.splice(idx, 1);
-      reject(new Error('BLE brightness timeout'));
-    }, timeoutMs);
-
-    bleBrightnessWaiters.push({
-      resolve: (brightness) => {
-        clearTimeout(timer);
-        resolve(brightness);
-      },
-      reject: (err) => {
-        clearTimeout(timer);
-        reject(err);
-      },
-    });
-  });
-}
-
-function parseWifiScanText(rawText) {
-  return (rawText || '')
-    .split('\n')
-    .map(line => line.trim())
-    .filter(Boolean)
-    .map(line => {
-      const [ssid = '', rssi = '', secured = '0'] = line.split('\t');
-      return {
-        ssid: ssid || '(Hidden SSID)',
-        rssi: Number.parseInt(rssi, 10) || 0,
-        secured: secured === '1',
-      };
-    })
-    .sort((a, b) => b.rssi - a.rssi);
-}
-
-function waitForBLEWiFiScan(timeoutMs = BLE_WIFI_SCAN_TIMEOUT_MS) {
-  return new Promise((resolve, reject) => {
-    if (bleWifiScanPendingError) {
-      const err = bleWifiScanPendingError;
-      bleWifiScanPendingError = null;
-      reject(err);
-      return;
-    }
-
-    if (bleWifiScanPendingResult) {
-      const result = bleWifiScanPendingResult;
-      bleWifiScanPendingResult = null;
-      resolve(result);
-      return;
-    }
-
-    const timer = setTimeout(() => {
-      const idx = bleWifiScanWaiters.findIndex(item => item.resolve === resolve);
-      if (idx >= 0) bleWifiScanWaiters.splice(idx, 1);
-      reject(new Error(t('wifi.scan_timeout')));
-    }, timeoutMs);
-
-    bleWifiScanWaiters.push({
-      resolve: (results) => {
-        clearTimeout(timer);
-        resolve(results);
-      },
-      reject: (err) => {
-        clearTimeout(timer);
-        reject(err);
-      },
-    });
-  });
-}
-
-function waitForBLEWiFiConnect(timeoutMs = 20000) {
-  return new Promise((resolve, reject) => {
-    if (bleWifiConnectPendingError) {
-      const err = bleWifiConnectPendingError;
-      bleWifiConnectPendingError = null;
-      reject(err);
-      return;
-    }
-
-    if (bleWifiConnectPendingResult) {
-      const result = bleWifiConnectPendingResult;
-      bleWifiConnectPendingResult = null;
-      resolve(result);
-      return;
-    }
-
-    const timer = setTimeout(() => {
-      const idx = bleWifiConnectWaiters.findIndex(item => item.resolve === resolve);
-      if (idx >= 0) bleWifiConnectWaiters.splice(idx, 1);
-      reject(new Error('WiFi connect timeout'));
-    }, timeoutMs);
-
-    bleWifiConnectWaiters.push({
-      resolve: (result) => {
-        clearTimeout(timer);
-        resolve(result);
-      },
-      reject: (err) => {
-        clearTimeout(timer);
-        reject(err);
-      },
-    });
-  });
-}
-
 function checksum16(bytes) {
   let sum = 0;
   for (let i = 0; i < bytes.length; i++) {
@@ -1361,18 +510,14 @@ function checksum16(bytes) {
   return sum;
 }
 
-async function requestBLEDevice() {
+async function requestBLEDevice(forcePicker = false) {
   if (!isWebBluetoothAvailable()) {
     throw new Error('This browser does not support Web Bluetooth');
   }
 
   const targetUuid = window.appState.targetDeviceUuid;
-  if (hasMatchingConnectedBLEDevice(targetUuid)) {
-    const deviceUuid = normalizeBleDeviceUuid(window.appState.bleDevice?.name);
-    updateBLEDeviceSelect(
-      deviceUuid ? `${deviceUuid} (connected)` : 'Bluetooth connected',
-      window.appState.bleDevice?.id || window.appState.bleDevice?.name || ''
-    );
+  if (!forcePicker && hasMatchingConnectedBLEDevice(targetUuid)) {
+    renderBleDeviceList();
     renderBleStatus();
     return window.appState.bleDevice;
   }
@@ -1382,15 +527,8 @@ async function requestBLEDevice() {
     optionalServices: [BLE_SERVICE_UUID],
   });
 
-  if (window.appState.bleDevice) {
-    window.appState.bleDevice.removeEventListener('gattserverdisconnected', onBLEDisconnected);
-  }
-
-  window.appState.bleDevice = device;
-  device.addEventListener('gattserverdisconnected', onBLEDisconnected);
-
-  const deviceUuid = normalizeBleDeviceUuid(device.name);
-  updateBLEDeviceSelect(deviceUuid ? `${deviceUuid} (${device.name})` : device.name || 'Bluetooth device', device.id || device.name || '');
+  setActiveBleDevice(device);
+  await refreshBLEDevices();
   renderBleStatus();
   return device;
 }
@@ -1415,31 +553,24 @@ async function ensureBLECharacteristic(requestIfNeeded = false) {
     throw new Error('Selected Bluetooth device does not expose GATT');
   }
 
-  if (window.appState.bleCharacteristic && window.appState.bleWifiScanCharacteristic && window.appState.bleDevice.gatt.connected) {
+  if (window.appState.bleCharacteristic && window.appState.bleDevice.gatt.connected) {
     return window.appState.bleCharacteristic;
   }
 
   const server = await window.appState.bleDevice.gatt.connect();
   const service = await server.getPrimaryService(BLE_SERVICE_UUID);
   const characteristic = await service.getCharacteristic(BLE_CHARACTERISTIC_UUID);
-  const wifiScanCharacteristic = await service.getCharacteristic(BLE_WIFI_SCAN_CHARACTERISTIC_UUID);
   if (!window.appState.bleNotifyReady) {
     await characteristic.startNotifications();
     characteristic.addEventListener('characteristicvaluechanged', handleBLENotification);
     window.appState.bleNotifyReady = true;
   }
-  if (!window.appState.bleWifiScanNotifyReady) {
-    await wifiScanCharacteristic.startNotifications();
-    wifiScanCharacteristic.addEventListener('characteristicvaluechanged', handleBLEWiFiScanNotification);
-    window.appState.bleWifiScanNotifyReady = true;
-  }
 
   window.appState.bleServer = server;
   window.appState.bleCharacteristic = characteristic;
-  window.appState.bleWifiScanCharacteristic = wifiScanCharacteristic;
 
-  const deviceUuid = rememberConnectedBleTarget() || normalizeBleDeviceUuid(window.appState.bleDevice.name);
-  updateBLEDeviceSelect(deviceUuid ? `${deviceUuid} (connected)` : 'Bluetooth connected', window.appState.bleDevice.id || window.appState.bleDevice.name || '');
+  rememberConnectedBleTarget();
+  renderBleDeviceList();
   renderBleStatus();
 
   return characteristic;
@@ -1619,299 +750,6 @@ async function sendHighlightViaWebBluetooth(highlightRGB) {
   await writeBLEPacket(characteristic, packet);
 }
 
-async function sendBrightnessViaWebBluetooth(brightness) {
-  const characteristic = await ensureBLECharacteristic(false);
-  const waitTask = waitForBLEBrightness();
-  await writeBLEPacket(characteristic, new Uint8Array([BLE_PKT_SET_BRIGHTNESS, brightness]));
-  return await waitTask;
-}
-
-async function requestBrightnessViaWebBluetooth() {
-  const characteristic = await ensureBLECharacteristic(false);
-  const waitTask = waitForBLEBrightness();
-  await writeBLEPacket(characteristic, new Uint8Array([BLE_PKT_GET_BRIGHTNESS]));
-  return await waitTask;
-}
-
-async function sendBrightnessToESP32(percent = window.appState.brightnessPercent) {
-  const normalizedPercent = clampNumber(percent, BRIGHTNESS_PERCENT_MIN, BRIGHTNESS_PERCENT_MAX);
-  const deviceBrightness = percentToDeviceBrightness(normalizedPercent);
-  if (window.appState.isSyncingBrightness) {
-    return null;
-  }
-
-  window.appState.isSyncingBrightness = true;
-  try {
-    if (window.appState.bleDevice?.gatt?.connected) {
-      const brightness = await sendBrightnessViaWebBluetooth(deviceBrightness);
-      applyDeviceBrightness(brightness);
-      return brightness;
-    }
-
-    if (window.appState.connectionMode !== 'wifi') {
-      return null;
-    }
-
-    const wifiUuid = getCurrentWiFiTargetUuid();
-    if (!wifiUuid) {
-      return null;
-    }
-
-    const result = await postJsonOrThrow('/api/wifi/brightness', {
-      device_uuid: wifiUuid,
-      brightness: deviceBrightness,
-    }, t('toast.brightness_sync_failed'));
-    if (Number.isFinite(result.brightness)) {
-      applyDeviceBrightness(result.brightness);
-      return result.brightness;
-    }
-    return deviceBrightness;
-  } finally {
-    window.appState.isSyncingBrightness = false;
-    updateBrightnessControlState();
-  }
-}
-
-function queueBrightnessSync(percent = window.appState.brightnessPercent) {
-  window.appState.brightnessPercent = clampNumber(percent, BRIGHTNESS_PERCENT_MIN, BRIGHTNESS_PERCENT_MAX);
-  updateBrightnessControlState();
-
-  if (window.appState.brightnessSyncTimer) {
-    clearTimeout(window.appState.brightnessSyncTimer);
-  }
-
-  if (!canSyncBrightness()) {
-    return;
-  }
-
-  window.appState.brightnessSyncTimer = setTimeout(async () => {
-    window.appState.brightnessSyncTimer = null;
-    if (window.appState.isSyncingBrightness) {
-      queueBrightnessSync(window.appState.brightnessPercent);
-      return;
-    }
-
-    try {
-      await sendBrightnessToESP32(window.appState.brightnessPercent);
-    } catch (err) {
-      console.error('ESP32 brightness sync failed:', err);
-      showToast(t('toast.brightness_sync_failed'), true);
-    }
-  }, BRIGHTNESS_SYNC_DEBOUNCE_MS);
-}
-
-async function syncBrightnessFromCurrentDevice() {
-  updateBrightnessControlState();
-  try {
-    if (window.appState.bleDevice?.gatt?.connected) {
-      const brightness = await requestBrightnessViaWebBluetooth();
-      applyDeviceBrightness(brightness);
-      return brightness;
-    }
-
-    if (window.appState.connectionMode !== 'wifi') {
-      return null;
-    }
-
-    const wifiUuid = getCurrentWiFiTargetUuid();
-    if (!wifiUuid) {
-      return null;
-    }
-
-    const response = await fetch(`/api/wifi/brightness?device_uuid=${encodeURIComponent(wifiUuid)}`);
-    const result = await response.json().catch(() => ({}));
-    if (!response.ok || !result.success) {
-      throw new Error(result.detail || result.message || t('toast.brightness_sync_failed'));
-    }
-    if (Number.isFinite(result.brightness)) {
-      applyDeviceBrightness(result.brightness);
-      return result.brightness;
-    }
-  } catch (err) {
-    console.error('ESP32 brightness read failed:', err);
-  } finally {
-    updateBrightnessControlState();
-  }
-  return null;
-}
-
-async function requestWiFiScanViaWebBluetooth(requestIfNeeded = false) {
-  const characteristic = await ensureBLECharacteristic(requestIfNeeded);
-  await writeBLEPacket(characteristic, new Uint8Array([BLE_PKT_WIFI_SCAN]));
-  const deadline = Date.now() + BLE_WIFI_SCAN_TIMEOUT_MS;
-
-  while (Date.now() < deadline) {
-    const value = await characteristic.readValue();
-    const bytes = new Uint8Array(value.buffer, value.byteOffset, value.byteLength);
-    if (bytes.length > 0) {
-      const status = String.fromCharCode(bytes[0]);
-      const payload = new TextDecoder().decode(bytes.slice(1));
-      if (status === 'D') {
-        return parseWifiScanText(payload);
-      }
-      if (status === 'E') {
-        throw new Error(payload || t('esp32.wifi_scan_failed'));
-      }
-    }
-    await new Promise(resolve => setTimeout(resolve, 250));
-  }
-
-  throw new Error(t('wifi.scan_timeout'));
-}
-
-async function connectAndScanWiFiForTarget(uuid) {
-  window.appState.pendingBleAction = 'wifi-scan';
-  window.appState.wifiScanResults = [];
-  bleWifiScanBuffer = '';
-  bleWifiScanPendingResult = null;
-  bleWifiScanPendingError = null;
-  bleWifiScanWaiters = [];
-  renderBleStatus();
-  setConnectionMode('wifi');
-
-  try {
-    if (!hasMatchingConnectedBLEDevice(uuid)) {
-      await requestBLEDevice();
-    }
-    await ensureBLECharacteristic(false);
-    const targetUuid = rememberConnectedBleTarget() || getConnectedBleUuid();
-    const wifiSelect = document.getElementById('wifi-device-select');
-    if (wifiSelect) {
-      if (targetUuid) {
-        wifiSelect.innerHTML = `<option value="${targetUuid}">${targetUuid}</option>`;
-        wifiSelect.value = targetUuid;
-      } else {
-        wifiSelect.innerHTML = '<option value="">' + t('wifi.select_device_hint') + '</option>';
-      }
-    }
-    updateQrScannerConnectionUi();
-    setQrScannerStatus(t('ble.connecting_scan', {uuid: targetUuid || uuid}));
-    renderQrWifiScanResults([], t('esp32.scanning'));
-    const results = await requestWiFiScanViaWebBluetooth(false);
-    window.appState.wifiScanResults = results;
-    renderQrWifiScanResults(results, t('wifi.no_results'));
-    setQrScannerStatus(results.length ? t('wifi.found_count', {count: results.length}) : t('wifi.no_results'));
-    const wifiStatusCard = document.getElementById('wifi-status-card');
-    if (wifiStatusCard) {
-      wifiStatusCard.textContent = results.length
-        ? t('wifi.returned_results', {uuid: targetUuid || uuid, count: results.length})
-        : t('wifi.no_hotspots', {uuid: targetUuid || uuid});
-    }
-    return results;
-  } finally {
-    window.appState.pendingBleAction = null;
-  }
-}
-
-async function requestWiFiScanViaWebBluetooth(requestIfNeeded = false) {
-  await ensureBLECharacteristic(requestIfNeeded);
-  const characteristic = window.appState.bleWifiScanCharacteristic;
-  const commandCharacteristic = window.appState.bleCharacteristic;
-  if (!characteristic || !commandCharacteristic) {
-    throw new Error('WiFi scan characteristic unavailable');
-  }
-  const waitTask = waitForBLEWiFiScan(BLE_WIFI_SCAN_TIMEOUT_MS);
-  await writeBLEPacket(commandCharacteristic, new Uint8Array([BLE_PKT_WIFI_SCAN]));
-
-  const pollTask = (async () => {
-    const deadline = Date.now() + BLE_WIFI_SCAN_TIMEOUT_MS;
-    let pollBuffer = '';
-    while (Date.now() < deadline) {
-      const value = await characteristic.readValue();
-      const bytes = new Uint8Array(value.buffer, value.byteOffset, value.byteLength);
-      if (bytes.length > 0) {
-        const code = bytes[0];
-        const status = String.fromCharCode(code);
-        const payload = new TextDecoder().decode(bytes.slice(1));
-        console.log('[BLE][readValue]', code, status, payload.slice(0, 80));
-        if (status === 'B' || code === BLE_NTF_WIFI_SCAN_BEGIN) {
-          if (code === BLE_NTF_WIFI_SCAN_BEGIN) pollBuffer = '';
-        } else if (code === BLE_NTF_WIFI_SCAN_DATA) {
-          pollBuffer += payload;
-        } else if (code === BLE_NTF_WIFI_SCAN_END) {
-          return parseWifiScanText(pollBuffer);
-        } else if (status === 'D') {
-          return parseWifiScanText(payload);
-        }
-        if (code === BLE_NTF_WIFI_SCAN_ERROR || status === 'E') {
-          throw new Error(payload || 'ESP32 WiFi scan failed');
-        }
-      }
-      await new Promise(resolve => setTimeout(resolve, 250));
-    }
-    throw new Error('WiFi scan timeout');
-  })();
-
-  const results = await Promise.allSettled([waitTask, pollTask]);
-  const success = results.find(item => item.status === 'fulfilled');
-  if (success) {
-    return success.value;
-  }
-  throw results[0]?.reason || results[1]?.reason || new Error('WiFi scan failed');
-}
-
-async function connectSelectedQrWifi() {
-  const network = window.appState.selectedWifiNetwork;
-  if (!network) {
-    showToast(t('wifi.select_first'), true);
-    return;
-  }
-
-  const password = document.getElementById('qr-wifi-password')?.value || '';
-  if (network.secured && !password) {
-    showToast(t('wifi.enter_password'), true);
-    return;
-  }
-
-  await ensureBLECharacteristic(false);
-  const commandCharacteristic = window.appState.bleCharacteristic;
-  if (!commandCharacteristic) {
-    showToast(t('toast.ble_not_ready'), true);
-    return;
-  }
-
-  const ssidBytes = new TextEncoder().encode(network.ssid);
-  const passwordBytes = new TextEncoder().encode(password);
-  if (ssidBytes.length > 60 || passwordBytes.length > 60) {
-    showToast(t('toast.wifi_credentials_long'), true);
-    return;
-  }
-
-  bleWifiConnectPendingResult = null;
-  bleWifiConnectPendingError = null;
-  bleWifiConnectWaiters = [];
-
-  const packet = new Uint8Array(3 + ssidBytes.length + passwordBytes.length);
-  packet[0] = BLE_PKT_WIFI_CONNECT;
-  packet[1] = ssidBytes.length;
-  packet[2] = passwordBytes.length;
-  packet.set(ssidBytes, 3);
-  packet.set(passwordBytes, 3 + ssidBytes.length);
-
-  setQrScannerStatus(t('wifi.connecting', {ssid: network.ssid}));
-  await writeBLEPacket(commandCharacteristic, packet);
-  try {
-    const result = await waitForBLEWiFiConnect();
-    window.appState.wifiDeviceIp = result || null;
-    if (window.appState.targetDeviceUuid && result) {
-      await fetch('/api/wifi/register', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          device_uuid: window.appState.targetDeviceUuid,
-          ip: result,
-        }),
-      });
-    }
-    setQrScannerStatus(result ? t('wifi.connected', {ssid: result}) : t('wifi.connected', {ssid: network.ssid}));
-    showToast(t('wifi.connected', {ssid: network.ssid}));
-    closeQrScanner();
-  } catch (err) {
-    setQrScannerStatus(err.message || t('wifi.connect_failed'), true);
-    showToast(err.message || t('wifi.connect_failed'), true);
-  }
-}
-
 // === File Upload ===
 function initUpload() {
   const input = document.getElementById('file-input');
@@ -2084,9 +922,9 @@ function confirmCrop() {
   ctx.drawImage(img, box.x, box.y, box.size, box.size, 0, 0, box.size, box.size);
   
   // Convert to blob
-  canvas.toBlob((blob) => {
+  canvas.toBlob(async (blob) => {
     const croppedFile = new File([blob], cropState.file.name, { type: 'image/jpeg' });
-    window.appState.originalImage = croppedFile;
+    await setOriginalImageFile(croppedFile, { width: box.size, height: box.size });
     
     // Close dialog
     cancelCrop();
@@ -2142,114 +980,224 @@ function updateLedSizeDisplay() {
   }
 }
 
-// === Generate Pattern ===
-async function generatePattern() {
-  if (!window.appState.originalImage) {
-    showToast(t('toast.upload_first'), true);
-    return;
-  }
-
-  // Build form data
-  const formData = new FormData();
-  formData.append('file', window.appState.originalImage);
-
-  // Check if custom size mode
+function collectGenerateOptions() {
   const difficultySelect = document.getElementById('difficulty-select');
+  const options = {
+    mode: 'fixed_grid',
+    grid_width: 48,
+    grid_height: 48,
+    led_size: 64,
+    pixel_size: 8,
+    use_dithering: false,
+    palette_preset: window.appState.palettePreset,
+    max_colors: 0,
+    similarity_threshold: 0,
+    remove_bg: backgroundRemovalEnabled,
+    contrast: 0,
+    saturation: 0,
+    sharpness: 0,
+  };
+
   if (difficultySelect.value === 'custom') {
-    const pixelSize = parseInt(document.getElementById('custom-pixel-slider')?.value) || 8;
-    formData.append('mode', 'pixel_size');
-    formData.append('pixel_size', pixelSize);
+    options.mode = 'pixel_size';
+    options.pixel_size = parseInt(document.getElementById('custom-pixel-slider')?.value) || 8;
   } else {
-    // Get difficulty scale from toolbar button
     const scale = parseFloat(difficultySelect.value) || 0.125;
-    
-    // Get original image dimensions
     const img = window.appState.originalImage;
-    const imgWidth = img.width || img.naturalWidth || 512;
-    const imgHeight = img.height || img.naturalHeight || 512;
-    
-    // Calculate grid size based on original image and difficulty
+    const imgWidth = img?.width || img?.naturalWidth || 512;
+    const imgHeight = img?.height || img?.naturalHeight || 512;
     const gridWidth = Math.max(16, Math.round(imgWidth * scale));
     const gridHeight = Math.max(16, Math.round(imgHeight * scale));
-    
-    formData.append('mode', 'fixed_grid');
-    formData.append('grid_width', gridWidth);
-    formData.append('grid_height', gridHeight);
+    options.grid_width = gridWidth;
+    options.grid_height = gridHeight;
   }
-  
-  // LED size for ESP32 display
-  const ledSize = parseInt(document.getElementById('led-matrix-size').value) || 64;
-  formData.append('led_size', ledSize);
 
-  // Dithering (disabled by default)
-  const dithering = document.getElementById('dithering-checkbox')?.checked || false;
-  formData.append('use_dithering', dithering);
+  options.led_size = parseInt(document.getElementById('led-matrix-size').value) || 64;
+  options.use_dithering = document.getElementById('dithering-checkbox')?.checked || false;
+  options.palette_preset = window.appState.palettePreset;
 
-  // Palette preset
-  formData.append('palette_preset', window.appState.palettePreset);
-
-  // Max colors (0 = unlimited)
   const maxColorsSlider = document.getElementById('max-colors-slider');
-  const maxColors = maxColorsSlider ? parseInt(maxColorsSlider.value) : 0;
-  formData.append('max_colors', maxColors);
+  options.max_colors = maxColorsSlider ? parseInt(maxColorsSlider.value) : 0;
 
-  // Similarity threshold (0 = disabled)
   const simSlider = document.getElementById('similarity-slider');
-  const simThreshold = simSlider ? parseInt(simSlider.value) : 0;
-  formData.append('similarity_threshold', simThreshold);
+  options.similarity_threshold = simSlider ? parseInt(simSlider.value) : 0;
+  options.remove_bg = backgroundRemovalEnabled;
 
-  // Background removal
-  formData.append('remove_bg', backgroundRemovalEnabled);
+  options.contrast = Number(document.getElementById('contrast-slider')?.value || 0);
+  options.saturation = Number(document.getElementById('saturation-slider')?.value || 0);
+  options.sharpness = Number(document.getElementById('sharpness-slider')?.value || 0);
 
-  // Image adjustments
-  const contrastVal = document.getElementById('contrast-slider')?.value || 0;
-  formData.append('contrast', contrastVal);
-  const saturationVal = document.getElementById('saturation-slider')?.value || 0;
-  formData.append('saturation', saturationVal);
-  const sharpnessVal = document.getElementById('sharpness-slider')?.value || 0;
-  formData.append('sharpness', sharpnessVal);
+  return options;
+}
+
+function buildGenerateFormData(options) {
+  const formData = new FormData();
+  formData.append('file', window.appState.originalImage);
+  Object.entries(options).forEach(([key, value]) => {
+    formData.append(key, String(value));
+  });
+  return formData;
+}
+
+function normalizeGridSize(gridSize) {
+  return {
+    height: Number(gridSize?.height ?? 0),
+    width: Number(gridSize?.width ?? 0),
+  };
+}
+
+function normalizePixelMatrixNulls(pixelMatrix) {
+  return (pixelMatrix || []).map((row) => (row || []).map((cell) => cell ?? null));
+}
+
+function normalizeColorSummary(colorSummary) {
+  return (colorSummary || []).map((entry) => ({
+    code: entry?.code ?? '',
+    count: Number(entry?.count ?? 0),
+    hex: entry?.hex ?? '',
+    name: entry?.name ?? '',
+    name_zh: entry?.name_zh ?? '',
+    rgb: Array.isArray(entry?.rgb) ? entry.rgb : [0, 0, 0],
+  }));
+}
+
+function applyGeneratedPattern(data) {
+  const normalizedGridSize = normalizeGridSize(data.grid_size);
+  const normalizedColorSummary = normalizeColorSummary(data.color_summary);
+
+  window.appState.sessionId = data.session_id || createSessionId();
+  window.appState.pixelMatrix = normalizePixelMatrixNulls(data.pixel_matrix);
+  window.appState.gridSize = normalizedGridSize;
+  window.appState.colorSummary = normalizedColorSummary;
+  window.appState.totalBeads = data.total_beads;
+  window.appState.activeColors = new Set();
+  window.appState.editMode = false;
+  window.appState.palettePreset = data.palette_preset || window.appState.palettePreset || '221';
+
+  window.appState.colorData = {};
+  normalizedColorSummary.forEach(c => {
+    window.appState.colorData[c.code] = c;
+  });
+
+  document.getElementById('upload-area').style.display = 'none';
+  document.getElementById('pattern-canvas').style.display = 'block';
+  document.getElementById('color-panel').style.display = 'block';
+  renderCanvas();
+  renderColorPanel();
+}
+
+function isLocalGenerationAvailable() {
+  return typeof Worker !== 'undefined' && typeof WebAssembly !== 'undefined';
+}
+
+function ensureLocalGenerationWorker() {
+  if (!isLocalGenerationAvailable()) {
+    throw new Error('Local generation is unavailable');
+  }
+
+  if (window.appState.localGenerationWorker) {
+    return window.appState.localGenerationWorker;
+  }
+
+  const worker = new Worker(LOCAL_GENERATION_WORKER_URL, { type: 'module' });
+  worker.addEventListener('message', (event) => {
+    const { id, ok, result, error } = event.data || {};
+    const pending = window.appState.localGenerationRequests.get(id);
+    if (!pending) return;
+    window.appState.localGenerationRequests.delete(id);
+    if (pending.timeoutId) {
+      clearTimeout(pending.timeoutId);
+    }
+    if (!ok) {
+      pending.reject(new Error(error || 'Local generation failed'));
+      return;
+    }
+    pending.resolve(result);
+  });
+  worker.addEventListener('error', (event) => {
+    console.error('Local generation worker crashed:', event);
+  });
+  window.appState.localGenerationWorker = worker;
+  return worker;
+}
+
+async function generatePatternLocally(options) {
+  const worker = ensureLocalGenerationWorker();
+  const bytes = await window.appState.originalImage.arrayBuffer();
+  const requestId = createSessionId();
+  return await new Promise((resolve, reject) => {
+    const timeoutId = setTimeout(() => {
+      window.appState.localGenerationRequests.delete(requestId);
+      reject(new Error('Local generation timed out'));
+    }, LOCAL_GENERATION_TIMEOUT_MS);
+
+    window.appState.localGenerationRequests.set(requestId, { resolve, reject, timeoutId });
+    worker.postMessage({
+      id: requestId,
+      bytes,
+      options,
+    }, [bytes]);
+  });
+}
+
+async function generatePatternViaServer(options) {
+  const formData = buildGenerateFormData(options);
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), LOCAL_GENERATION_TIMEOUT_MS);
 
   try {
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 60000);
-
     const response = await fetch('/api/generate', {
       method: 'POST',
       body: formData,
       signal: controller.signal,
     });
 
-    clearTimeout(timeoutId);
-
     if (!response.ok) {
-      const err = await response.json();
+      const err = await response.json().catch(() => ({}));
       throw new Error(err.detail || 'Generation failed');
     }
 
-    const data = await response.json();
+    return await response.json();
+  } finally {
+    clearTimeout(timeoutId);
+  }
+}
 
-    // Update state
-    window.appState.sessionId = data.session_id;
-    window.appState.pixelMatrix = data.pixel_matrix;
-    window.appState.gridSize = data.grid_size;
-    window.appState.colorSummary = data.color_summary;
-    window.appState.totalBeads = data.total_beads;
-    window.appState.activeColors = new Set();
-    window.appState.editMode = false;
-    window.appState.palettePreset = data.palette_preset || '221';
+async function runPatternGeneration(options) {
+  if (isLocalGenerationAvailable()) {
+    try {
+      const localResult = await generatePatternLocally(options);
+      window.appState.lastGenerationMode = 'local-wasm';
+      return {
+        ...localResult,
+        session_id: createSessionId(),
+        palette_preset: options.palette_preset,
+      };
+    } catch (err) {
+      console.warn('Local generation failed, falling back to server:', err);
+    }
+  }
 
-    // Build colorData lookup (include fullPalette fallback)
-    window.appState.colorData = {};
-    data.color_summary.forEach(c => {
-      window.appState.colorData[c.code] = c;
-    });
+  window.appState.lastGenerationMode = 'server-http';
+  return await generatePatternViaServer(options);
+}
 
-    // Render result: show canvas, hide upload-area, show color panel
-    document.getElementById('upload-area').style.display = 'none';
-    document.getElementById('pattern-canvas').style.display = 'block';
-    document.getElementById('color-panel').style.display = 'block';
-    renderCanvas();
-    renderColorPanel();
+// === Generate Pattern ===
+async function generatePattern() {
+  if (!window.appState.originalImage) {
+    showToast(t('toast.upload_first'), true);
+    return;
+  }
+  if (window.appState.isGenerating) {
+    return;
+  }
+
+  const options = collectGenerateOptions();
+
+  try {
+    setGenerationLoading(true);
+    const data = await runPatternGeneration(options);
+    applyGeneratedPattern(data);
 
     showToast(t('toast.pattern_result', { w: data.grid_size.width, h: data.grid_size.height, c: data.color_summary.length }));
 
@@ -2262,6 +1210,8 @@ async function generatePattern() {
     } else {
       showToast(err.message, true);
     }
+  } finally {
+    setGenerationLoading(false);
   }
 }
 
@@ -2282,59 +1232,27 @@ async function postJsonOrThrow(url, payload, fallbackMessage) {
 }
 
 async function sendMatrixViaCurrentMode(pixelMatrix, bgRgb, requestIfNeeded = true) {
-  const { connectionMode } = window.appState;
-  if (connectionMode === 'ble') {
-    return await sendImageViaWebBluetooth(pixelMatrix, bgRgb, requestIfNeeded);
-  }
-  if (connectionMode === 'wifi') {
-    const targetSize = getTargetLedSize();
-    // Scale to LED size, then center in 64x64 canvas
-    const mappedMatrix = scaleAndCenterImage(pixelMatrix, targetSize);
-    const wifiUuid = getCurrentWiFiTargetUuid();
-    if (!wifiUuid) throw new Error(t('wifi.no_saved_device'));
-    
-    try {
-      return await postJsonOrThrow('/api/wifi/send', {
-        pixel_matrix: mappedMatrix,
-        device_uuid: wifiUuid,
-        background_color: bgRgb,
-      }, 'WiFi send failed');
-    } catch (err) {
-      if (err.message && err.message.includes('is not registered')) {
-        throw new Error(t('wifi.device_not_registered', {uuid: wifiUuid}));
-      }
-      throw err;
-    }
-  }
-  throw new Error('Unsupported connection mode');
+  return await sendImageViaWebBluetooth(pixelMatrix, bgRgb, requestIfNeeded);
 }
 
 // === Auto Send to ESP32 after generation ===
 async function autoSendToESP32() {
-  const { pixelMatrix, connectionMode, isSending } = window.appState;
+  const { pixelMatrix, isSending } = window.appState;
   if (!pixelMatrix) return;
   if (isSending) {
     console.log('[ESP32] Send already in progress, skipping');
     return;
   }
-  if (connectionMode === 'ble' && !window.appState.bleDevice) {
+  if (!window.appState.bleDevice?.gatt?.connected) {
     return;
   }
   window.appState.isSending = true;
-
-  const bgColor = document.getElementById('serial-bg-color')?.value || '#000000';
-  const bgRgb = [
-    parseInt(bgColor.slice(1, 3), 16),
-    parseInt(bgColor.slice(3, 5), 16),
-    parseInt(bgColor.slice(5, 7), 16),
-  ];
+  const bgRgb = [0, 0, 0];
 
   // Show toast
   const toast = document.getElementById('serial-toast');
   if (toast) {
-    toast.textContent = connectionMode === 'ble'
-      ? (window.appState.bleDevice?.gatt?.connected ? 'Sending via Bluetooth...' : 'Reconnecting Bluetooth...')
-      : 'Sending via server relay...';
+    toast.textContent = 'Sending via Bluetooth...';
     toast.className = 'serial-toast';
     toast.style.display = 'block';
   }
@@ -2347,10 +1265,7 @@ async function autoSendToESP32() {
         toast.textContent = `Sent ${result.bytes_sent} bytes in ${result.duration_ms}ms`;
         toast.className = 'serial-toast success';
       }
-      const okMsg = connectionMode === 'ble'
-        ? 'Image sent via Bluetooth!'
-        : 'Image sent via server relay!';
-      showToast(okMsg);
+      showToast('Image sent via Bluetooth!');
     } else {
       if (toast) {
         toast.textContent = result.message;
@@ -2674,7 +1589,7 @@ function toggleColorHighlight(code) {
 
 // === Send Highlight to ESP32 ===
 async function sendHighlightToESP32() {
-  const { pixelMatrix, activeColors, connectionMode, colorData, fullPalette } = window.appState;
+  const { pixelMatrix, activeColors, colorData, fullPalette } = window.appState;
   if (!pixelMatrix) return;
   
   const highlightRGB = [];
@@ -2688,23 +1603,7 @@ async function sendHighlightToESP32() {
   try {
     if (window.appState.bleCharacteristic && window.appState.bleDevice?.gatt?.connected) {
       await sendHighlightViaWebBluetooth(highlightRGB);
-      return;
     }
-    if (connectionMode !== 'wifi') return;
-
-    const wifiUuid = getCurrentWiFiTargetUuid();
-    if (!wifiUuid) {
-      showToast(t('wifi.no_saved_device'), true);
-      return;
-    }
-    await fetch('/api/wifi/highlight', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        highlight_colors: highlightRGB,
-        device_uuid: wifiUuid,
-      }),
-    });
   } catch (err) {
     console.error('ESP32 highlight sync failed:', err);
   }
@@ -2851,120 +1750,92 @@ async function exportJSON() {
 }
 
 // === Connection Settings Dialog ===
-window.appState.connectionMode = 'ble';  // 'ble' | 'wifi'
-
-function setConnectionMode(mode) {
-  const normalizedMode = mode === 'wifi' ? 'wifi' : 'ble';
-  window.appState.connectionMode = normalizedMode;
-  savePersistentState();
-  
-  // Update button states
-  document.querySelectorAll('.mode-btn').forEach(btn => {
-    btn.classList.toggle('active', btn.dataset.mode === normalizedMode);
-  });
-  
-  // Toggle visibility
-  document.getElementById('ble-settings').style.display = normalizedMode === 'ble' ? 'block' : 'none';
-  const wifiSettings = document.getElementById('wifi-settings');
-  if (wifiSettings) wifiSettings.style.display = normalizedMode === 'wifi' ? 'block' : 'none';
+function setConnectionMode() {
+  const bleSettings = document.getElementById('ble-settings');
+  if (bleSettings) bleSettings.style.display = 'block';
   updateConnectionModeQuickButton();
   renderBleStatus();
-  
-  if (normalizedMode === 'ble') {
-    refreshBLEDevices();
-    updateBrightnessControlState();
-    if (document.getElementById('serial-settings-dialog')?.style.display === 'flex') {
-      syncBrightnessFromCurrentDevice();
-    }
-    return;
-  }
-  refreshWiFiDevices();
-  updateBrightnessControlState();
-  if (document.getElementById('serial-settings-dialog')?.style.display === 'flex') {
-    syncBrightnessFromCurrentDevice();
-  }
 }
 
 async function showSerialSettings() {
   document.getElementById('serial-settings-dialog').style.display = 'flex';
-  updateBrightnessControlState();
-  
-  if (window.appState.connectionMode === 'ble') {
-    await refreshBLEDevices();
-    await syncBrightnessFromCurrentDevice();
-    return;
-  }
-  await refreshWiFiDevices();
-  await syncBrightnessFromCurrentDevice();
-}
-
-async function refreshWiFiDevices() {
-  const statusCard = document.getElementById('wifi-status-card');
-  const select = document.getElementById('wifi-device-select');
-  const connectedUuid = getConnectedBleUuid();
-  const targetUuid = connectedUuid;
-
-  if (!targetUuid && window.appState.targetDeviceUuid) {
-    clearRememberedBleTarget();
-  }
-
-  if (select) {
-    if (targetUuid) {
-      select.innerHTML = `<option value="${targetUuid}">${targetUuid}</option>`;
-      select.value = targetUuid;
-    } else {
-      select.innerHTML = '<option value="">' + t('wifi.select_device_hint') + '</option>';
-    }
-  }
-  if (statusCard) {
-    statusCard.textContent = targetUuid
-      ? t('wifi.target_locked_scan', {uuid: targetUuid})
-      : t('wifi.no_saved_device');
-  }
-  updateBrightnessControlState();
+  await refreshBLEDevices();
 }
 
 function hideSerialSettings() {
   document.getElementById('serial-settings-dialog').style.display = 'none';
 }
 
+function showExportDialog() {
+  document.getElementById('export-dialog').style.display = 'flex';
+}
+
+function hideExportDialog() {
+  document.getElementById('export-dialog').style.display = 'none';
+}
+
 // === BLE Device Scanning ===
 async function refreshBLEDevices() {
   if (!isWebBluetoothAvailable()) {
-    updateBLEDeviceSelect(t('ble.bluetooth_unavailable'));
+    window.appState.bleKnownDevices = [];
+    renderBleDeviceList();
     renderBleStatus();
     return;
   }
 
-  if (window.appState.bleDevice) {
-    const uuid = normalizeBleDeviceUuid(window.appState.bleDevice.name);
-    const status = window.appState.bleDevice.gatt?.connected ? 'connected' : 'selected';
-    updateBLEDeviceSelect(uuid ? `${uuid} (${status})` : `Bluetooth ${status}`, window.appState.bleDevice.id || window.appState.bleDevice.name || '');
-    renderBleStatus();
-    return;
-  }
-
-  if (window.appState.targetDeviceUuid) {
-    updateBLEDeviceSelect(t('ble.remembered_device', {uuid: window.appState.targetDeviceUuid}));
-  } else {
-    updateBLEDeviceSelect(t('ble.choose_device'));
-  }
+  window.appState.bleKnownDevices = await getAuthorizedBLEDevices();
+  renderBleDeviceList();
   renderBleStatus();
+}
+
+async function completeBLEConnectionFlow() {
+  const uuid = rememberConnectedBleTarget() || getConnectedBleUuid();
+  showToast(uuid ? t('toast.ble_connected', {uuid: uuid}) : t('toast.ble_connected_simple'));
+  await refreshBLEDevices();
+  renderBleStatus();
+}
+
+async function connectKnownBLEDevice(deviceKey) {
+  const device = (window.appState.bleKnownDevices || []).find((item) => getBleDeviceKey(item) === deviceKey);
+  if (!device) {
+    showToast(t('ble.no_device_hint'), true);
+    return;
+  }
+
+  try {
+    setActiveBleDevice(device);
+    renderBleDeviceList();
+    renderBleStatus();
+    await ensureBLECharacteristic(false);
+    await completeBLEConnectionFlow();
+  } catch (err) {
+    await refreshBLEDevices();
+    if (err?.name !== 'NotFoundError') {
+      showToast(err.message || 'Bluetooth connection failed', true);
+    }
+  }
 }
 
 async function connectBLEDevice() {
   try {
-    updateBLEDeviceSelect('Connecting...');
     await requestBLEDevice();
     await ensureBLECharacteristic(false);
-    const uuid = rememberConnectedBleTarget() || getConnectedBleUuid();
-    if (uuid) refreshWiFiDevices();
-    showToast(uuid ? t('toast.ble_connected', {uuid: uuid}) : t('toast.ble_connected_simple'));
-    refreshBLEDevices();
-    renderBleStatus();
-    await syncBrightnessFromCurrentDevice();
+    await completeBLEConnectionFlow();
   } catch (err) {
-    refreshBLEDevices();
+    await refreshBLEDevices();
+    if (err?.name !== 'NotFoundError') {
+      showToast(err.message || 'Bluetooth connection failed', true);
+    }
+  }
+}
+
+async function addBLEDevice() {
+  try {
+    await requestBLEDevice(true);
+    await ensureBLECharacteristic(false);
+    await completeBLEConnectionFlow();
+  } catch (err) {
+    await refreshBLEDevices();
     if (err?.name !== 'NotFoundError') {
       showToast(err.message || 'Bluetooth connection failed', true);
     }
@@ -2973,7 +1844,7 @@ async function connectBLEDevice() {
 
 // === One-Click Send to ESP32 ===
 async function sendToESP32Direct() {
-  const { pixelMatrix, connectionMode, isSending } = window.appState;
+  const { pixelMatrix, isSending } = window.appState;
   if (!pixelMatrix) {
     showToast(t('toast.generate_first'), true);
     return;
@@ -2983,19 +1854,11 @@ async function sendToESP32Direct() {
     return;
   }
   window.appState.isSending = true;
-
-  const bgColor = document.getElementById('serial-bg-color').value;
-  const bgRgb = [
-    parseInt(bgColor.slice(1, 3), 16),
-    parseInt(bgColor.slice(3, 5), 16),
-    parseInt(bgColor.slice(5, 7), 16),
-  ];
+  const bgRgb = [0, 0, 0];
 
   // Show toast
   const toast = document.getElementById('serial-toast');
-  toast.textContent = connectionMode === 'ble'
-    ? 'Connecting via Bluetooth...'
-    : 'Sending via server relay...';
+  toast.textContent = 'Connecting via Bluetooth...';
   toast.className = 'serial-toast';
   toast.style.display = 'block';
 
@@ -3005,10 +1868,7 @@ async function sendToESP32Direct() {
     if (result.success) {
       toast.textContent = `Sent ${result.bytes_sent} bytes in ${result.duration_ms}ms`;
       toast.className = 'serial-toast success';
-      const okMsg = connectionMode === 'ble'
-        ? 'Image sent via Bluetooth!'
-        : 'Image sent via server relay!';
-      showToast(okMsg);
+      showToast('Image sent via Bluetooth!');
     } else {
       toast.textContent = result.message;
       toast.className = 'serial-toast error';

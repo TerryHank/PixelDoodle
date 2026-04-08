@@ -2,25 +2,25 @@
 
 PixelDoodle（像素豆绘）是一个“图片转拼豆图 + ESP32 点阵显示”的完整项目，包含：
 
-**Version: 6.26.47**
+**Version: v10**
 
-- Web 前端（上传、裁剪、生成、导出、扫码）
-- Python/FastAPI 后端（调色、量化、导出、串口接口）
-- ESP32 固件（BLE 接收图像、设备 UUID、二维码配对页）
+- Web 前端（上传、裁剪、浏览器本地生成、导出、BLE 连接）
+- Rust/Axum 后端（静态资源分发、生成 fallback、导出、设备接口）
+- Python 对照基线（仅用于 parity 测试与问题回溯）
+- ESP32 固件（BLE 接收图像、设备 UUID、待机页显示）
 
 ---
 
 ## 1. 当前能力概览
 
-- 图片生成拼豆图（颜色统计、坐标、导出 PNG/PDF/JSON）
+- 图片生成拼豆图（默认浏览器本地 WASM 处理，保留 Rust fallback）
 - ESP32 64x64 点阵 BLE 显示
 - 每台 ESP32 有唯一设备码（UUID，12 位 HEX）
-- 启动页后显示二维码，二维码参数为 `?u=<UUID>`
 - 前端支持：
-  - 扫码识别二维码
-  - 手动输入 UUID
-  - 自动锁定目标设备并尝试 BLE 连接
-  - 浏览器拦截自动连接时弹出“点一下连接这台设备”
+  - 上传图片 / 示例图生成
+  - 浏览器内直接 BLE 连接已授权设备
+  - PNG / PDF / JSON 导出
+  - 本地生成与 Rust 服务端结果 parity 对照
 
 ---
 
@@ -28,14 +28,16 @@ PixelDoodle（像素豆绘）是一个“图片转拼豆图 + ESP32 点阵显示
 
 ```text
 PixelDoodle/
-├─ main.py                    # FastAPI 入口
-├─ requirements.txt
-├─ core/                      # 图像处理、串口/BLE 后端能力
+├─ backend-rs/                # Rust/Axum 主后端
+├─ main.py                    # Python 基线入口（不再作为生产入口）
+├─ requirements.txt           # Python 基线依赖
+├─ core/                      # Python 基线图像处理、串口/BLE 能力
 ├─ static/                    # 前端 JS/CSS
 ├─ templates/                 # HTML 模板
 ├─ data/                      # 颜色数据
 ├─ certs/                     # 本地 HTTPS 证书（可选）
 ├─ docs/
+├─ tools/parity/              # Rust/Python 一致性对照脚本
 └─ firmware/                  # ESP32 固件（PlatformIO）
    ├─ src/main.cpp
    ├─ lib/beadcraft-receiver/
@@ -49,8 +51,9 @@ PixelDoodle/
 
 ### 后端
 
-- Python 3.8+
+- Rust stable toolchain
 - Windows/macOS/Linux
+- Python 3.10+（仅 parity 测试与回溯使用）
 
 ### 固件
 
@@ -71,21 +74,52 @@ PixelDoodle/
 在项目根目录执行：
 
 ```bash
-pip install -r requirements.txt
-python main.py
+cargo run --manifest-path backend-rs/Cargo.toml --release
 ```
 
 默认监听：
 
-- `https://0.0.0.0:8765`（如果检测到 `certs/localhost-cert.pem` 和 `certs/localhost-key.pem`）
-- 否则回退为 HTTP
+- `http://0.0.0.0:8765`
 
 可选环境变量：
 
 - `PORT`（默认 `8765`）
 - `HOST`（默认 `0.0.0.0`）
-- `SSL_CERTFILE`
-- `SSL_KEYFILE`
+- `APP_ROOT`（可选，显式指定仓库根目录）
+
+---
+
+## 4.1 浏览器本地处理实验
+
+仓库中额外提供两条浏览器本地生图实验链：
+
+- `TypeScript + Web Worker`
+- `Rust + WebAssembly + Web Worker`
+
+相关文件：
+
+- `frontend-local/src/`
+- `wasm-engine/`
+- `static/local-processing/benchmark.html`
+
+前端实验产物构建：
+
+```bash
+npm install
+npm run build:local-processing
+```
+
+WASM 产物构建：
+
+```bash
+rustup target add wasm32-unknown-unknown --toolchain stable-x86_64-pc-windows-msvc
+cargo +stable-x86_64-pc-windows-msvc build --manifest-path wasm-engine/Cargo.toml --target wasm32-unknown-unknown --release
+wasm-bindgen --target web --out-dir static/local-processing/wasm wasm-engine/target/wasm32-unknown-unknown/release/beadcraft_wasm.wasm
+```
+
+基准页地址：
+
+- `/static/local-processing/benchmark.html`
 
 ---
 
