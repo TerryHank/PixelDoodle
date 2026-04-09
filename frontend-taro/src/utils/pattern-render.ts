@@ -9,6 +9,8 @@ export interface CanvasRenderModel {
   cellSize: number
   canvasWidth: number
   canvasHeight: number
+  displayWidth: number
+  displayHeight: number
   cells: CanvasRenderCell[]
 }
 
@@ -18,6 +20,7 @@ export function buildCanvasRenderModel(input: {
   activeCodes: Set<string>
   pixelMatrix: (string | null)[][]
   maxPatternDim?: number
+  displayMaxPatternDim?: number
 }): CanvasRenderModel {
   const width = Math.max(1, input.gridWidth)
   const height = Math.max(1, input.gridHeight)
@@ -50,10 +53,23 @@ export function buildCanvasRenderModel(input: {
     }
   }
 
+  const canvasWidth = width * cellSize
+  const canvasHeight = height * cellSize
+  const displayMaxPatternDim = Math.max(
+    1,
+    Math.floor(input.displayMaxPatternDim ?? maxPatternDim)
+  )
+  const displayScale = Math.min(
+    1,
+    displayMaxPatternDim / Math.max(canvasWidth, canvasHeight)
+  )
+
   return {
     cellSize,
-    canvasWidth: width * cellSize,
-    canvasHeight: height * cellSize,
+    canvasWidth,
+    canvasHeight,
+    displayWidth: Math.max(1, Math.round(canvasWidth * displayScale)),
+    displayHeight: Math.max(1, Math.round(canvasHeight * displayScale)),
     cells
   }
 }

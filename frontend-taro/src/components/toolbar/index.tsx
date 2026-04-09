@@ -1,28 +1,26 @@
 import Taro from '@tarojs/taro'
-import { Text, View } from '@tarojs/components'
+import { Image, Text, View } from '@tarojs/components'
+import exportIconUrl from '@/assets/icons/toolbar-export.svg'
+import homeIconUrl from '@/assets/icons/toolbar-home.svg'
 import type { ToolbarProps } from './types'
 import './index.scss'
 
-type ToolbarIconKind = 'home' | 'export'
+const TOOLBAR_HOVER_PROPS = {
+  hoverClass: 'toolbar-tap-hover',
+  hoverStartTime: 0,
+  hoverStayTime: 40
+} as const
 
-function ToolbarIcon({ kind }: { kind: ToolbarIconKind }) {
-  if (kind === 'home') {
-    return (
-      <View className='toolbar-icon toolbar-icon--home'>
-        <View className='toolbar-icon__home-roof-left' />
-        <View className='toolbar-icon__home-roof-right' />
-        <View className='toolbar-icon__home-body' />
-        <View className='toolbar-icon__home-door' />
-      </View>
-    )
-  }
-
+function ToolbarIcon({ src, alt }: { src: string; alt: string }) {
   return (
-    <View className='toolbar-icon toolbar-icon--export'>
-      <View className='toolbar-icon__export-arrow' />
-      <View className='toolbar-icon__export-head-left' />
-      <View className='toolbar-icon__export-head-right' />
-      <View className='toolbar-icon__export-base' />
+    <Image className='toolbar-icon-image' mode='aspectFit' src={src} aria-label={alt} />
+  )
+}
+
+export function ToolbarPickerLabel({ value }: { value: string }) {
+  return (
+    <View className='toolbar-picker-label'>
+      <Text className='toolbar-picker-label__value'>{value}</Text>
     </View>
   )
 }
@@ -108,32 +106,42 @@ export function Toolbar({
 
   return (
     <View className='canvas-toolbar'>
-      <View className='toolbar-btn' onClick={onClear}>
-        <ToolbarIcon kind='home' />
+      <View className='toolbar-btn' onClick={onClear} {...TOOLBAR_HOVER_PROPS}>
+        <ToolbarIcon alt='回到主页' src={homeIconUrl} />
       </View>
       <View
         className={`toolbar-btn toolbar-btn--label ${removeBackground ? 'toolbar-btn--active' : ''}`}
         onClick={onToggleBackground}
+        {...TOOLBAR_HOVER_PROPS}
       >
         <Text className='toolbar-btn__label-text'>背</Text>
       </View>
-      <View className='toolbar-btn' onClick={onPickImage}>
+      <View className='toolbar-btn' onClick={onPickImage} {...TOOLBAR_HOVER_PROPS}>
         <Text className='toolbar-btn-icon'>+</Text>
       </View>
-      <View className='led-size-btn' onClick={handlePickDifficulty}>
-        <Text>{difficultyLabel}</Text>
+      <View
+        className='led-size-btn led-size-btn--picker'
+        onClick={handlePickDifficulty}
+        {...TOOLBAR_HOVER_PROPS}
+      >
+        <ToolbarPickerLabel value={difficultyLabel} />
       </View>
-      <View className='led-size-btn' onClick={handlePickMatrixSize}>
-        <Text>{ledSizeLabel}</Text>
+      <View
+        className='led-size-btn led-size-btn--picker'
+        onClick={handlePickMatrixSize}
+        {...TOOLBAR_HOVER_PROPS}
+      >
+        <ToolbarPickerLabel value={ledSizeLabel} />
       </View>
       <View
         className={`toolbar-btn mode-quick-btn ${modeQuickConnected ? 'mode-quick-btn--connected' : 'mode-quick-btn--disconnected'}`}
         onClick={onOpenPairSheet}
+        {...TOOLBAR_HOVER_PROPS}
       >
-        <Text>{modeQuickLabel}</Text>
+        <Text className='mode-quick-btn__text'>{modeQuickLabel}</Text>
       </View>
-      <View className='toolbar-btn' onClick={onOpenSettings}>
-        <ToolbarIcon kind='export' />
+      <View className='toolbar-btn' onClick={onOpenSettings} {...TOOLBAR_HOVER_PROPS}>
+        <ToolbarIcon alt='导出' src={exportIconUrl} />
       </View>
     </View>
   )

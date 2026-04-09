@@ -1,55 +1,44 @@
-import { Input, Text, View } from '@tarojs/components'
-import { getRuntimeEnv } from '@/utils/runtime-env'
-import type {
-  ConnectionMode,
-  DeviceConnectionStatus,
-  RegisteredWifiDevice,
-  WifiScanResult
-} from '@/types/device'
+import { Text, View } from '@tarojs/components'
+import type { BleKnownDevice } from '@/adapters/ble/types'
 import './index.scss'
+
+export interface PairSheetBleOption extends BleKnownDevice {
+  meta: string
+  connected: boolean
+  remembered: boolean
+}
 
 export interface PairSheetProps {
   visible: boolean
-  mode: ConnectionMode
-  manualUuid: string
-  targetDeviceUuid?: string
-  bleConnectionStatus: DeviceConnectionStatus
-  wifiScanResults: WifiScanResult[]
-  selectedWifiHotspot: WifiScanResult | null
-  wifiPassword: string
-  registeredWifiDevice: RegisteredWifiDevice | null
+  bleAvailable: boolean
+  bleConnectionStatus: 'idle' | 'connecting' | 'connected' | 'disconnected' | 'error'
+  statusMessage: string
+  statusTone: 'default' | 'ready' | 'connected'
+  devices: PairSheetBleOption[]
+  isScanning: boolean
   onClose: () => void
-  onModeChange: (mode: ConnectionMode) => void
-  onScan: () => void
-  onConnect: () => void
-  onManualUuidChange: (value: string) => void
-  onScanWifi: () => void
-  onSelectWifiHotspot: (hotspot: WifiScanResult) => void
-  onWifiPasswordChange: (value: string) => void
-  onConnectWifi: () => void
-}
-
-function getStatusLabel(status: DeviceConnectionStatus) {
-  if (status === 'connecting') return '连接中'
-  if (status === 'connected') return '已连接'
-  if (status === 'error') return '连接失败'
-  return '待连接'
+  onSelectDevice: (deviceKey: string) => void
+  onAddDevice: () => void
 }
 
 export function PairSheet({
   visible,
-  manualUuid,
-  targetDeviceUuid,
+  bleAvailable,
   bleConnectionStatus,
+  statusMessage,
+  statusTone,
+  devices,
+  isScanning,
   onClose,
-  onConnect,
-  onManualUuidChange,
+  onSelectDevice,
+  onAddDevice
 }: PairSheetProps) {
-  const isRnRuntime = getRuntimeEnv() === 'rn'
-
   if (!visible) {
     return null
   }
+
+  const addButtonLabel = isScanning ? '搜索中...' : devices.length > 0 ? '重新扫描' : '添加设备'
+  const addButtonClassName = `ble-add-device-btn${isScanning || bleConnectionStatus === 'connecting' ? ' ble-add-device-btn--disabled' : ''}`
 
   return (
     <View className='pair-sheet'>
@@ -65,55 +54,49 @@ export function PairSheet({
           </View>
         </View>
 
-        <View className='pair-sheet__status'>
-          <Text className='pair-sheet__status-label'>状态</Text>
-          <Text className='pair-sheet__status-value'>{getStatusLabel(bleConnectionStatus)}</Text>
-        </View>
-
         <View className='pair-sheet__body'>
-          <View className='pair-sheet__scan-button' onClick={onConnect}>
-            <Text className='pair-sheet__scan-label'>连接设备</Text>
-            <Text className='pair-sheet__scan-hint'>
-              {targetDeviceUuid
-                ? `当前目标：${targetDeviceUuid}`
-                : '未连接时也可以先生成图片，连接后才会发送到设备'}
-            </Text>
+          <View
+            className={`ble-status-card${statusTone === 'ready' ? ' ready' : ''}${statusTone === 'connected' ? ' connected' : ''}`}
+          >
+            <Text>{statusMessage}</Text>
           </View>
 
-          {isRnRuntime ? (
-            <View className='pair-sheet__group'>
-              <Text className='pair-sheet__hint'>RN Android 端当前请优先手动输入 UUID 后连接。</Text>
-            </View>
-          ) : null}
-
           <View className='pair-sheet__group'>
-            <Text className='pair-sheet__label'>目标 UUID</Text>
-            <Input
-              className='pair-sheet__input'
-              maxlength={12}
-              placeholder='例如 F42DC97179B4'
-              value={manualUuid}
-              onInput={(event) => onManualUuidChange(event.detail.value)}
-            />
-            {targetDeviceUuid ? (
-              <Text className='pair-sheet__hint'>当前锁定：{targetDeviceUuid}</Text>
-            ) : (
-              <Text className='pair-sheet__hint'>
-                可选。输入后会优先连接这台设备，不输入则连接当前可发现的 BeadCraft 设备。
-              </Text>
-            )}
+            <Text className='pair-sheet__label'>蓝牙设备：</Text>
+            <View className='ble-device-list'>
+              {!bleAvailable ? (
+                <View className='ble-device-empty'>
+                  <Text>当前小程序环境不支持蓝牙连接</Text>
+                </View>
+              ) : devices.length === 0 ? (
+                <View className='ble-device-empty'>
+                  <Text>{isScanning ? '正在搜索附近的 BeadCraft 设备...' : '还没有发现附近的 BeadCraft 设备，点“添加设备”开始搜索。'}</Text>
+                </View>
+              ) : (
+                devices.map((device) => (
+                  <View
+                    key={device.key}
+                    className={`ble-device-option${device.connected ? ' connected' : ''}${device.remembered ? ' remembered' : ''}`}
+                    onClick={() => onSelectDevice(device.key)}
+                  >
+                    <View className='ble-device-radio' />
+                    <View className='ble-device-info'>
+                      <Text className='ble-device-title'>{device.uuid || device.name || 'BeadCraft'}</Text>
+                      <Text className='ble-device-meta'>{device.meta}</Text>
+                    </View>
+                  </View>
+                ))
+              )}
+            </View>
+            <View className={addButtonClassName} onClick={isScanning ? undefined : onAddDevice}>
+              <Text>{addButtonLabel}</Text>
+            </View>
           </View>
         </View>
 
         <View className='pair-sheet__footer'>
-          <View className='pair-sheet__footer-button pair-sheet__footer-button--ghost' onClick={onClose}>
-            <Text>取消</Text>
-          </View>
-          <View
-            className='pair-sheet__footer-button pair-sheet__footer-button--primary'
-            onClick={onConnect}
-          >
-            <Text>连接设备</Text>
+          <View className='pair-sheet__footer-button pair-sheet__footer-button--primary' onClick={onClose}>
+            <Text>关闭</Text>
           </View>
         </View>
       </View>

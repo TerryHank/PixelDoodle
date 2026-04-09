@@ -1,9 +1,33 @@
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import { registerWeappRasterLoader } from './weapp-raster-loader'
+
+const { getEnvMock } = vi.hoisted(() => ({
+  getEnvMock: vi.fn()
+}))
+
+vi.mock('@tarojs/taro', () => ({
+  default: {
+    ENV_TYPE: {
+      WEB: 'WEB',
+      WEAPP: 'WEAPP',
+      RN: 'RN'
+    },
+    getEnv: getEnvMock
+  }
+}))
 
 import {
   buildLocalGenerateOptions,
+  getLocalGenerationUnavailableReason,
+  isLocalGenerationAvailable,
   normalizeGeneratePatternResponse
 } from './local-generation'
+
+afterEach(() => {
+  vi.unstubAllGlobals()
+  vi.clearAllMocks()
+  registerWeappRasterLoader(null)
+})
 
 describe('local-generation helpers', () => {
   it('coerces string form fields into wasm options', () => {
@@ -83,5 +107,22 @@ describe('local-generation helpers', () => {
     expect(response.preview_image).toBe('')
     expect(response.palette_preset).toBe('221')
     expect(response.session_id.length).toBeGreaterThan(0)
+  })
+
+  it('explains when weapp local raster loader has not been registered yet', () => {
+    getEnvMock.mockReturnValue('WEAPP')
+
+    expect(isLocalGenerationAvailable()).toBe(false)
+    expect(getLocalGenerationUnavailableReason()).toContain('本地生成画布')
+  })
+
+  it('treats weapp local generation as available once the raster loader is ready', () => {
+    getEnvMock.mockReturnValue('WEAPP')
+    registerWeappRasterLoader({
+      loadRaster: vi.fn()
+    })
+
+    expect(isLocalGenerationAvailable()).toBe(true)
+    expect(getLocalGenerationUnavailableReason()).toBeNull()
   })
 })

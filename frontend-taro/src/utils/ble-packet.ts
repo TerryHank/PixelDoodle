@@ -5,6 +5,9 @@ import {
 import type { PaletteColor, PixelMatrix } from '@/types/api'
 import type { WifiScanResult } from '../types/device'
 
+const RGB565_BLACK = 0x0000
+const RGB565_TRANSPARENT_MARKER = 0x0001
+
 export function splitBlePayload(payload: Uint8Array, chunkSize: number) {
   const chunks: Uint8Array[] = []
 
@@ -252,18 +255,28 @@ export function pixelMatrixToRgb565Bytes(
 ) {
   const bytes = new Uint8Array(BLE_IMAGE_PAYLOAD_BYTES)
   const backgroundRgb565 = rgbToRgb565(backgroundColor)
+  const backgroundFillRgb565 =
+    backgroundRgb565 === RGB565_BLACK
+      ? RGB565_TRANSPARENT_MARKER
+      : backgroundRgb565
 
   for (let offset = 0; offset < bytes.length; offset += 2) {
-    bytes[offset] = backgroundRgb565 & 0xff
-    bytes[offset + 1] = (backgroundRgb565 >> 8) & 0xff
+    bytes[offset] = backgroundFillRgb565 & 0xff
+    bytes[offset + 1] = (backgroundFillRgb565 >> 8) & 0xff
   }
 
   let offset = 0
   for (const row of pixelMatrix) {
     for (const code of row) {
       const colorInfo = code ? palette[code] : null
-      const rgb = colorInfo?.rgb || (code ? ([255, 255, 255] as [number, number, number]) : backgroundColor)
-      const rgb565 = rgbToRgb565(rgb)
+      let rgb565 = backgroundFillRgb565
+
+      if (code !== null) {
+        const rgb =
+          colorInfo?.rgb ||
+          (code ? ([255, 255, 255] as [number, number, number]) : backgroundColor)
+        rgb565 = rgbToRgb565(rgb)
+      }
 
       bytes[offset] = rgb565 & 0xff
       bytes[offset + 1] = (rgb565 >> 8) & 0xff

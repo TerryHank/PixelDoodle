@@ -4,6 +4,7 @@ import time
 import asyncio
 import json
 import os
+import sqlite3
 import requests
 from pathlib import Path
 from datetime import datetime
@@ -11,7 +12,7 @@ from typing import Optional, Dict, Any
 from collections import Counter
 
 from fastapi import FastAPI, File, UploadFile, Form, HTTPException, Request, Query
-from fastapi.responses import HTMLResponse, StreamingResponse, JSONResponse
+from fastapi.responses import HTMLResponse, StreamingResponse, JSONResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from PIL import Image
@@ -35,7 +36,23 @@ from core.ble_export import (
 app = FastAPI(title="BeadCraft", description="Perler Bead Pattern Generator", version="1.0.0")
 
 # Static files and templates
-app.mount("/static", StaticFiles(directory="static"), name="static")
+TARO_H5_DIST_DIR = Path("frontend-taro") / "dist-h5"
+TARO_H5_INDEX = TARO_H5_DIST_DIR / "index.html"
+TARO_H5_JS_DIR = TARO_H5_DIST_DIR / "js"
+TARO_H5_CSS_DIR = TARO_H5_DIST_DIR / "css"
+TARO_H5_STATIC_DIR = TARO_H5_DIST_DIR / "static"
+
+if TARO_H5_JS_DIR.exists():
+    app.mount("/js", StaticFiles(directory=str(TARO_H5_JS_DIR)), name="taro_js")
+
+if TARO_H5_CSS_DIR.exists():
+    app.mount("/css", StaticFiles(directory=str(TARO_H5_CSS_DIR)), name="taro_css")
+
+if TARO_H5_STATIC_DIR.exists():
+    app.mount("/static", StaticFiles(directory=str(TARO_H5_STATIC_DIR)), name="taro_static")
+else:
+    app.mount("/static", StaticFiles(directory="static"), name="static")
+
 app.mount("/examples", StaticFiles(directory="docs/examples"), name="examples")
 templates = Jinja2Templates(directory="templates")
 
@@ -45,11 +62,117 @@ palette = ArtkalPalette()
 # In-memory session storage
 sessions: Dict[str, Dict[str, Any]] = {}
 wifi_devices: Dict[str, Dict[str, Any]] = {}
+COMMUNITY_DB_PATH = Path("data") / "community.db"
+
+
+def ensure_community_db():
+    COMMUNITY_DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+    with sqlite3.connect(COMMUNITY_DB_PATH) as conn:
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS community_posts (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                title TEXT NOT NULL,
+                description TEXT NOT NULL,
+                author_id TEXT NOT NULL,
+                author_nickname TEXT NOT NULL,
+                author_avatar_seed TEXT NOT NULL,
+                palette_preset TEXT NOT NULL,
+                grid_width INTEGER NOT NULL,
+                grid_height INTEGER NOT NULL,
+                total_beads INTEGER NOT NULL,
+                pixel_matrix TEXT NOT NULL,
+                color_summary TEXT NOT NULL,
+                downloads INTEGER NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS community_comments (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                post_id INTEGER NOT NULL,
+                author_id TEXT NOT NULL,
+                author_nickname TEXT NOT NULL,
+                author_avatar_seed TEXT NOT NULL,
+                content TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                FOREIGN KEY(post_id) REFERENCES community_posts(id) ON DELETE CASCADE
+            )
+            """
+        )
+        conn.commit()
+
+
+def community_db():
+    ensure_community_db()
+    conn = sqlite3.connect(COMMUNITY_DB_PATH)
+    conn.row_factory = sqlite3.Row
+    return conn
+
+
+def _serialize_community_post(row: sqlite3.Row):
+    color_summary = json.loads(row["color_summary"])
+    return {
+        "id": row["id"],
+        "title": row["title"],
+        "description": row["description"],
+        "author": {
+            "id": row["author_id"],
+            "nickname": row["author_nickname"],
+            "avatar_seed": row["author_avatar_seed"],
+        },
+        "palette_preset": row["palette_preset"],
+        "grid_size": {
+            "width": row["grid_width"],
+            "height": row["grid_height"],
+        },
+        "total_beads": row["total_beads"],
+        "pixel_matrix": json.loads(row["pixel_matrix"]),
+        "color_summary": color_summary,
+        "created_at": row["created_at"],
+        "downloads": row["downloads"],
+        "comments_count": row["comments_count"],
+    }
+
+
+def _serialize_community_comment(row: sqlite3.Row):
+    return {
+        "id": row["id"],
+        "post_id": row["post_id"],
+        "author": {
+            "id": row["author_id"],
+            "nickname": row["author_nickname"],
+            "avatar_seed": row["author_avatar_seed"],
+        },
+        "content": row["content"],
+        "created_at": row["created_at"],
+    }
+
+
+def _community_post_row(conn: sqlite3.Connection, post_id: int):
+    return conn.execute(
+        """
+        SELECT
+            p.*,
+            (
+                SELECT COUNT(*)
+                FROM community_comments c
+                WHERE c.post_id = p.id
+            ) AS comments_count
+        FROM community_posts p
+        WHERE p.id = ?
+        """,
+        (post_id,),
+    ).fetchone()
 
 
 @app.get("/", response_class=HTMLResponse)
 async def index(request: Request):
     """Serve the main page."""
+    if TARO_H5_INDEX.exists():
+        return FileResponse(TARO_H5_INDEX)
     return templates.TemplateResponse("index.html", {"request": request})
 
 
@@ -535,6 +658,224 @@ async def send_to_wifi(data: dict):
 @app.post("/wifi/highlight/")
 async def highlight_wifi(data: dict):
     return await _highlight_wifi_impl(data)
+
+
+@app.get("/api/community/posts")
+async def list_community_posts(limit: int = Query(20, ge=1, le=60)):
+    with community_db() as conn:
+        rows = conn.execute(
+            """
+            SELECT
+                p.*,
+                (
+                    SELECT COUNT(*)
+                    FROM community_comments c
+                    WHERE c.post_id = p.id
+                ) AS comments_count
+            FROM community_posts p
+            ORDER BY p.id DESC
+            LIMIT ?
+            """,
+            (limit,),
+        ).fetchall()
+
+    return {"posts": [_serialize_community_post(row) for row in rows]}
+
+
+@app.post("/api/community/posts")
+async def create_community_post(data: dict):
+    required_fields = [
+        "title",
+        "author_id",
+        "author_nickname",
+        "author_avatar_seed",
+        "palette_preset",
+        "grid_size",
+        "total_beads",
+        "pixel_matrix",
+        "color_summary",
+    ]
+    for field in required_fields:
+        if field not in data:
+            raise HTTPException(status_code=400, detail=f"{field} is required")
+
+    grid_size = data.get("grid_size") or {}
+    created_at = datetime.now().isoformat()
+
+    with community_db() as conn:
+        cursor = conn.execute(
+            """
+            INSERT INTO community_posts (
+                title,
+                description,
+                author_id,
+                author_nickname,
+                author_avatar_seed,
+                palette_preset,
+                grid_width,
+                grid_height,
+                total_beads,
+                pixel_matrix,
+                color_summary,
+                downloads,
+                created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?)
+            """,
+            (
+                str(data.get("title") or "").strip() or "未命名图案",
+                str(data.get("description") or "").strip(),
+                str(data.get("author_id") or "").strip(),
+                str(data.get("author_nickname") or "").strip() or "像素玩家",
+                str(data.get("author_avatar_seed") or "").strip() or "像素玩家",
+                str(data.get("palette_preset") or "221"),
+                int(grid_size.get("width") or 0),
+                int(grid_size.get("height") or 0),
+                int(data.get("total_beads") or 0),
+                json.dumps(data.get("pixel_matrix"), ensure_ascii=False),
+                json.dumps(data.get("color_summary"), ensure_ascii=False),
+                created_at,
+            ),
+        )
+        post_id = int(cursor.lastrowid)
+        conn.commit()
+        row = _community_post_row(conn, post_id)
+
+    if row is None:
+        raise HTTPException(status_code=500, detail="Failed to load created community post")
+
+    return _serialize_community_post(row)
+
+
+@app.get("/api/community/posts/{post_id}")
+async def get_community_post(post_id: int):
+    with community_db() as conn:
+        row = _community_post_row(conn, post_id)
+        if row is None:
+            raise HTTPException(status_code=404, detail="Community post not found")
+        comments = conn.execute(
+            """
+            SELECT *
+            FROM community_comments
+            WHERE post_id = ?
+            ORDER BY id ASC
+            """,
+            (post_id,),
+        ).fetchall()
+
+    post = _serialize_community_post(row)
+    post["comments"] = [_serialize_community_comment(comment) for comment in comments]
+    return post
+
+
+@app.post("/api/community/posts/{post_id}/comments")
+async def create_community_comment(post_id: int, data: dict):
+    content = str(data.get("content") or "").strip()
+    if not content:
+        raise HTTPException(status_code=400, detail="content is required")
+
+    with community_db() as conn:
+        row = _community_post_row(conn, post_id)
+        if row is None:
+            raise HTTPException(status_code=404, detail="Community post not found")
+        conn.execute(
+            """
+            INSERT INTO community_comments (
+                post_id,
+                author_id,
+                author_nickname,
+                author_avatar_seed,
+                content,
+                created_at
+            ) VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (
+                post_id,
+                str(data.get("author_id") or "").strip(),
+                str(data.get("author_nickname") or "").strip() or "像素玩家",
+                str(data.get("author_avatar_seed") or "").strip() or "像素玩家",
+                content,
+                datetime.now().isoformat(),
+            ),
+        )
+        conn.commit()
+        comments = conn.execute(
+            """
+            SELECT *
+            FROM community_comments
+            WHERE post_id = ?
+            ORDER BY id ASC
+            """,
+            (post_id,),
+        ).fetchall()
+        row = _community_post_row(conn, post_id)
+
+    post = _serialize_community_post(row)
+    post["comments"] = [_serialize_community_comment(comment) for comment in comments]
+    return post
+
+
+@app.get("/api/community/posts/{post_id}/download/json")
+async def download_community_post_json(post_id: int):
+    with community_db() as conn:
+        row = _community_post_row(conn, post_id)
+        if row is None:
+            raise HTTPException(status_code=404, detail="Community post not found")
+        conn.execute(
+            "UPDATE community_posts SET downloads = downloads + 1 WHERE id = ?",
+            (post_id,),
+        )
+        conn.commit()
+
+    payload = {
+        "version": "1.0",
+        "exported_at": datetime.now().isoformat(),
+        "dimensions": {
+            "width": row["grid_width"],
+            "height": row["grid_height"],
+        },
+        "pixel_matrix": json.loads(row["pixel_matrix"]),
+        "color_summary": json.loads(row["color_summary"]),
+    }
+    body = json.dumps(payload, indent=2, ensure_ascii=False).encode("utf-8")
+    filename = f"community_pattern_{post_id}.json"
+    return StreamingResponse(
+        io.BytesIO(body),
+        media_type="application/json",
+        headers={"Content-Disposition": f"attachment; filename={filename}"},
+    )
+
+
+@app.get("/api/community/posts/{post_id}/download/png")
+async def download_community_post_png(post_id: int):
+    with community_db() as conn:
+        row = _community_post_row(conn, post_id)
+        if row is None:
+            raise HTTPException(status_code=404, detail="Community post not found")
+        conn.execute(
+            "UPDATE community_posts SET downloads = downloads + 1 WHERE id = ?",
+            (post_id,),
+        )
+        conn.commit()
+
+    pixel_matrix = json.loads(row["pixel_matrix"])
+    color_summary = json.loads(row["color_summary"])
+    color_data = {entry["code"]: entry["hex"] for entry in color_summary}
+    png_bytes = export_png(
+        pixel_matrix,
+        color_data,
+        color_summary,
+        16,
+        True,
+        True,
+        True,
+        row["palette_preset"],
+    )
+    filename = f"community_pattern_{post_id}.png"
+    return StreamingResponse(
+        io.BytesIO(png_bytes),
+        media_type="image/png",
+        headers={"Content-Disposition": f"attachment; filename={filename}"},
+    )
 
 
 if __name__ == "__main__":

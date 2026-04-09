@@ -12,17 +12,24 @@ import usachiThumb from '@/assets/examples/usachi_thumb.png'
 import { bleAdapter } from '@/adapters/ble'
 import type { BleKnownDevice } from '@/adapters/ble/types'
 import { fileAdapter } from '@/adapters/file'
+import { AppTabBar } from '@/components/app-tab-bar'
 import { CropDialogH5 } from '@/components/crop-dialog/index.h5'
 import { PairSheetH5, type PairSheetBleOption } from '@/components/pair-sheet/index.h5'
+import { PatternThumb } from '@/components/pattern-thumb'
+import { ProfileAvatar } from '@/components/profile-avatar'
 import { SettingsSheetH5 } from '@/components/settings-sheet/index.h5'
 import { ToastHost } from '@/components/toast-host'
+import { autoSendGeneratedPattern } from '@/services/ble-image-sync'
+import { publishCommunityPost } from '@/services/community-service'
 import {
   exportPattern,
   type ExportKind
 } from '@/services/pattern-service'
 import { useDeviceStore } from '@/store/device-store'
+import { useHistoryStore } from '@/store/history-store'
 import { usePatternStore } from '@/store/pattern-store'
 import { useUIStore } from '@/store/ui-store'
+import { useUserStore } from '@/store/user-store'
 import {
   buildColorHexMap,
   getExportFileName,
@@ -34,8 +41,21 @@ import {
   formatColorTotalText
 } from './h5-canvas'
 import { deriveH5HomeViewState, getBleConnectedToastMessage } from './h5-runtime'
+import { hideLoadingSafely } from '@/utils/loading'
 
 const VALID_IMAGE_TYPES = ['image/jpeg', 'image/png', 'image/gif', 'image/webp']
+const CANVAS_VIRTUAL_MAX_DIM = 640
+
+function resolveH5DisplayMaxPatternDim() {
+  if (typeof window === 'undefined') {
+    return CANVAS_VIRTUAL_MAX_DIM
+  }
+
+  return Math.max(
+    160,
+    Math.min(CANVAS_VIRTUAL_MAX_DIM, Math.floor(window.innerWidth - 28))
+  )
+}
 
 interface CropBoxState {
   x: number
@@ -82,6 +102,15 @@ const EXAMPLE_ITEMS = [
 
 function hasGeneratedPattern(pixelMatrix: string[][] | (string | null)[][]) {
   return pixelMatrix.some((row) => row.length > 0)
+}
+
+function sanitizePatternTitle(raw: string) {
+  const trimmed = raw.trim()
+  if (!trimmed) {
+    return '未命名图案'
+  }
+
+  return trimmed.replace(/\.[A-Za-z0-9]+$/, '')
 }
 
 function getDifficultyValue(difficulty: number) {
@@ -143,6 +172,9 @@ export default function HomePageH5() {
   const [cropImageStyle, setCropImageStyle] = useState<Record<string, string>>({})
   const [cropBoxStyle, setCropBoxStyle] = useState<Record<string, string>>({})
   const [isCropDialogOpen, setIsCropDialogOpen] = useState(false)
+  const [shareTitle, setShareTitle] = useState('')
+  const [shareDescription, setShareDescription] = useState('')
+  const [isPublishing, setIsPublishing] = useState(false)
 
   useEffect(() => {
     document.title = 'BeadCraft - Perler Bead Pattern Generator'
@@ -221,6 +253,12 @@ export default function HomePageH5() {
   const bleConnectionStatus = useDeviceStore((state) => state.bleConnectionStatus)
   const bleCharacteristicStatus = useDeviceStore((state) => state.bleCharacteristicStatus)
   const activeHighlightCodes = useDeviceStore((state) => state.activeHighlightCodes)
+  const historyEntries = useHistoryStore((state) => state.entries)
+  const userId = useUserStore((state) => state.id)
+  const userNickname = useUserStore((state) => state.nickname)
+  const userAvatarSeed = useUserStore((state) => state.avatarSeed)
+  const autoShareToCommunity = useUserStore((state) => state.autoShareToCommunity)
+  const setAutoShareToCommunity = useUserStore((state) => state.setAutoShareToCommunity)
 
   const toastMessage = useUIStore((state) => state.toastMessage)
   const isPairSheetOpen = useUIStore((state) => state.isPairSheetOpen)
@@ -469,15 +507,122 @@ export default function HomePageH5() {
     })
 
     try {
-      await usePatternStore.getState().generateFromFile(filePath, {
+      const response = await usePatternStore.getState().generateFromFile(filePath, {
         fileName,
         ...getGenerateOverrides()
       })
       useDeviceStore.getState().clearHighlightCodes()
-      showToast('图案已生成')
+      const nextTitle = sanitizePatternTitle(fileName || shareTitle || '未命名图案')
+      rememberGeneratedPattern({
+        title: nextTitle,
+        sourceLabel: fileName ? '上传图片' : '示例图'
+      })
+
+      if (!shareTitle.trim()) {
+        setShareTitle(nextTitle)
+      }
+
+      let sentToBle = false
+      let sendErrorMessage = ''
+      let publishMessage = ''
+
+      try {
+        const patternState = usePatternStore.getState()
+        const deviceState = useDeviceStore.getState()
+
+        if (!deviceState.isSending) {
+          deviceState.setIsSending(true)
+          sentToBle = await autoSendGeneratedPattern({
+            bleConnectionStatus: deviceState.bleConnectionStatus,
+            bleCharacteristicStatus: deviceState.bleCharacteristicStatus,
+            isSending: deviceState.isSending,
+            ledSize: patternState.ledSize,
+            pixelMatrix: patternState.pixelMatrix,
+            palette: patternState.fullPalette,
+            sendImage: (payload) => bleAdapter.sendImage(payload)
+          })
+        }
+      } catch (error) {
+        sendErrorMessage =
+          error instanceof Error ? error.message : '蓝牙发送失败'
+      } finally {
+        useDeviceStore.getState().setIsSending(false)
+      }
+
+      if (autoShareToCommunity) {
+        try {
+          await publishCurrentPattern({
+            title: nextTitle
+          })
+          publishMessage = '，并已同步到社区'
+        } catch (error) {
+          publishMessage = `，但社区发布失败：${
+            error instanceof Error ? error.message : '发布失败'
+          }`
+        }
+      }
+
+      showToast(
+        sendErrorMessage
+          ? `图案已生成，但蓝牙发送失败：${sendErrorMessage}${publishMessage}`
+          : sentToBle
+            ? `图案已生成并已推送到设备${publishMessage}`
+            : `图案已生成${publishMessage}`
+      )
+      return response
     } finally {
-      Taro.hideLoading()
+      await hideLoadingSafely(() => Taro.hideLoading())
     }
+  }
+
+  async function publishCurrentPattern(options?: {
+    title?: string
+    description?: string
+  }) {
+    const patternState = usePatternStore.getState()
+    if (!hasGeneratedPattern(patternState.pixelMatrix)) {
+      throw new Error('请先生成图案再发布到社区')
+    }
+
+    const title = sanitizePatternTitle(
+      options?.title || shareTitle || `图案 ${new Date().toLocaleString()}`
+    )
+
+    setIsPublishing(true)
+    try {
+      await publishCommunityPost({
+        title,
+        description: (options?.description ?? shareDescription).trim(),
+        author_id: userId,
+        author_nickname: userNickname.trim() || '像素玩家',
+        author_avatar_seed: userAvatarSeed || userNickname || '像素玩家',
+        palette_preset: patternState.palettePreset,
+        grid_size: patternState.gridSize,
+        total_beads: patternState.totalBeads,
+        pixel_matrix: patternState.pixelMatrix,
+        color_summary: patternState.colorSummary
+      })
+    } finally {
+      setIsPublishing(false)
+    }
+  }
+
+  function rememberGeneratedPattern(input: {
+    title: string
+    sourceLabel: string
+  }) {
+    const patternState = usePatternStore.getState()
+    useHistoryStore.getState().addEntry({
+      id: `${Date.now()}-${Math.random().toString(16).slice(2, 8)}`,
+      title: sanitizePatternTitle(input.title),
+      createdAt: new Date().toISOString(),
+      sourceLabel: input.sourceLabel,
+      gridSize: patternState.gridSize,
+      totalBeads: patternState.totalBeads,
+      palettePreset: patternState.palettePreset,
+      pixelMatrix: patternState.pixelMatrix,
+      colorSummary: patternState.colorSummary
+    })
   }
 
   async function handleSelectExample(item: (typeof EXAMPLE_ITEMS)[number]) {
@@ -904,7 +1049,9 @@ export default function HomePageH5() {
       gridWidth: gridSize.width || pixelMatrix[0]?.length || 0,
       gridHeight: gridSize.height || pixelMatrix.length,
       activeCodes: new Set(activeHighlightCodes),
-      pixelMatrix
+      pixelMatrix,
+      maxPatternDim: CANVAS_VIRTUAL_MAX_DIM,
+      displayMaxPatternDim: resolveH5DisplayMaxPatternDim()
     })
   }, [activeHighlightCodes, gridSize.height, gridSize.width, hasPattern, pixelMatrix])
 
@@ -942,7 +1089,7 @@ export default function HomePageH5() {
 
   return (
     <div className='template-home-page'>
-      <div className='site-version-badge'>v10</div>
+      <div className='site-version-badge'>v11</div>
       <div className='main-container'>
         <div id='result-area' className='result-area'>
           <div className='canvas-toolbar'>
@@ -1063,7 +1210,15 @@ export default function HomePageH5() {
                 <canvas
                   id='pattern-canvas'
                   ref={canvasRef}
-                  style={{ display: 'block' }}
+                  style={
+                    canvasRenderModel
+                      ? {
+                          display: 'block',
+                          width: `${canvasRenderModel.displayWidth}px`,
+                          height: `${canvasRenderModel.displayHeight}px`
+                        }
+                      : { display: 'none' }
+                  }
                 />
               </div>
             )}
@@ -1160,6 +1315,86 @@ export default function HomePageH5() {
               </div>
             </div>
           </div>
+
+          {hasPattern ? (
+            <div className='community-share-card'>
+              <div className='community-share-card__header'>
+                <div>
+                  <div className='community-share-card__title'>社区分享</div>
+                  <div className='community-share-card__subtitle'>
+                    决定这张图案是否同步到社区，当前历史 {historyEntries.length} 条
+                  </div>
+                </div>
+                <label className='community-share-card__toggle'>
+                  <input
+                    checked={autoShareToCommunity}
+                    type='checkbox'
+                    onChange={(event) => {
+                      setAutoShareToCommunity(event.target.checked)
+                    }}
+                  />
+                  <span>{autoShareToCommunity ? '已开启' : '未开启'}</span>
+                </label>
+              </div>
+              <div className='community-share-card__author'>
+                <ProfileAvatar
+                  nickname={userNickname}
+                  seed={userAvatarSeed}
+                  size='sm'
+                />
+                <div className='community-share-card__author-meta'>
+                  <div className='community-share-card__author-name'>{userNickname}</div>
+                  <div className='community-share-card__author-hint'>
+                    社区发布会使用当前昵称与默认头像
+                  </div>
+                </div>
+                <PatternThumb
+                  colorSummary={colorSummary}
+                  pixelMatrix={pixelMatrix}
+                />
+              </div>
+              <input
+                className='community-share-card__input'
+                placeholder='给这张图案起个名字'
+                type='text'
+                value={shareTitle}
+                onChange={(event) => {
+                  setShareTitle(event.target.value)
+                }}
+              />
+              <textarea
+                className='community-share-card__textarea'
+                maxLength={120}
+                placeholder='写一句作品说明，选填'
+                value={shareDescription}
+                onChange={(event) => {
+                  setShareDescription(event.target.value)
+                }}
+              />
+              <button
+                className={`community-share-card__button ${
+                  isPublishing ? 'community-share-card__button--disabled' : ''
+                }`}
+                type='button'
+                onClick={() => {
+                  if (isPublishing) {
+                    return
+                  }
+
+                  void publishCurrentPattern().then(
+                    () => {
+                      showToast('当前图案已发布到社区')
+                    },
+                    (error) => {
+                      showToast(error instanceof Error ? error.message : '社区发布失败')
+                    }
+                  )
+                }}
+              >
+                {isPublishing ? '发布中...' : '发布当前作品'}
+              </button>
+            </div>
+          ) : null}
         </div>
       </div>
 
@@ -1207,6 +1442,7 @@ export default function HomePageH5() {
         }}
       />
       <ToastHost message={toastMessage} />
+      <AppTabBar current='tool' />
     </div>
   )
 }

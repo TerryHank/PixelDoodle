@@ -81,7 +81,7 @@ export const usePatternStore = create<PatternState>((set, get) => ({
   },
   totalBeads: 0,
   palettePreset: DEFAULT_PALETTE_PRESET,
-  removeBackground: true,
+  removeBackground: false,
   ledSize: 64,
   difficulty: DEFAULT_DIFFICULTY,
   isGenerating: false,
@@ -159,7 +159,15 @@ export const usePatternStore = create<PatternState>((set, get) => ({
         removeBackground: options.removeBackground ?? state.removeBackground
       })
 
-      const outcome = await generatePattern(filePath, fields, options.fileName)
+      const outcome = await generatePattern(
+        filePath,
+        fields,
+        options.fileName,
+        {
+          colors: state.fullPaletteList,
+          presets: state.presets
+        }
+      )
       const response = outcome.response
 
       set(() => ({

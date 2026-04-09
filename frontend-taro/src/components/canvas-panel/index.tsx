@@ -26,8 +26,9 @@ export interface CanvasPanelProps {
 }
 
 const SHARED_CANVAS_ID = 'pattern-canvas-shared'
+const CANVAS_VIRTUAL_MAX_DIM = 640
 
-function resolveMaxPatternDim() {
+function resolveDisplayMaxPatternDim() {
   try {
     const windowInfo =
       typeof Taro.getWindowInfo === 'function'
@@ -36,11 +37,11 @@ function resolveMaxPatternDim() {
     const windowWidth = Number(windowInfo.windowWidth || 0)
 
     if (windowWidth > 0) {
-      return Math.max(160, Math.min(640, Math.floor(windowWidth - 28)))
+      return Math.max(160, Math.min(CANVAS_VIRTUAL_MAX_DIM, Math.floor(windowWidth - 28)))
     }
   } catch {}
 
-  return 640
+  return CANVAS_VIRTUAL_MAX_DIM
 }
 
 export function CanvasPanel({
@@ -81,7 +82,8 @@ export function CanvasPanel({
             gridHeight,
             pixelMatrix,
             activeCodes: new Set(resolvedActiveCodes),
-            maxPatternDim: resolveMaxPatternDim()
+            maxPatternDim: CANVAS_VIRTUAL_MAX_DIM,
+            displayMaxPatternDim: resolveDisplayMaxPatternDim()
           })
         : null,
     [gridHeight, gridWidth, hasPattern, pixelMatrix, resolvedActiveCodes]
@@ -192,8 +194,8 @@ export function CanvasPanel({
             type='2d'
             className='pattern-canvas'
             style={{
-              width: `${renderModel.canvasWidth}px`,
-              height: `${renderModel.canvasHeight}px`
+              width: `${renderModel.displayWidth}px`,
+              height: `${renderModel.displayHeight}px`
             }}
           />
         </View>

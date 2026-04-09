@@ -1,0 +1,228 @@
+import type {
+  ApiErrorResponse,
+  GeneratePatternResponse,
+  PaletteResponse
+} from '../types/api'
+import { getApiBaseUrl } from './env'
+import { getRuntimeEnv } from '@/utils/runtime-env'
+import {
+  generatePatternLocally,
+  isLocalGenerationAvailable,
+  normalizeGeneratePatternResponse,
+  type GenerateTransportMode
+} from './local-generation'
+
+export type ExportKind = 'png' | 'pdf' | 'json'
+const GENERATE_TIMEOUT_MS = 180000
+
+export interface GeneratePatternOutcome {
+  mode: GenerateTransportMode
+  response: GeneratePatternResponse
+}
+
+export interface GeneratePatternInput {
+  gridWidth: number
+  gridHeight: number
+  palettePreset: string
+  mode?: 'fixed_grid' | 'pixel_size'
+  ledSize?: number
+  pixelSize?: number
+  useDithering?: boolean
+  maxColors?: number
+  similarityThreshold?: number
+  removeBackground?: boolean
+  contrast?: number
+  saturation?: number
+  sharpness?: number
+}
+
+function getErrorMessage(statusCode: number, data: unknown) {
+  if (data && typeof data === 'object') {
+    const errorData = data as Partial<ApiErrorResponse>
+    if (errorData.detail) {
+      return errorData.detail
+    }
+    if (errorData.message) {
+      return errorData.message
+    }
+  }
+
+  return `Request failed with status ${statusCode}`
+}
+
+function parseJsonResponse<TResponse>(raw: string, statusCode: number) {
+  const data = JSON.parse(raw) as TResponse | ApiErrorResponse
+
+  if (statusCode >= 400) {
+    throw new Error(getErrorMessage(statusCode, data))
+  }
+
+  return data as TResponse
+}
+
+function normalizeUploadError(error: unknown) {
+  if (error instanceof Error) {
+    if (error.message.toLowerCase().includes('timeout')) {
+      return new Error('生成超时，请确认小程序网络可访问后端服务')
+    }
+    return error
+  }
+
+  if (error && typeof error === 'object' && 'errMsg' in error) {
+    const errMsg = String((error as { errMsg?: unknown }).errMsg || '')
+    if (errMsg.toLowerCase().includes('timeout')) {
+      return new Error('生成超时，请确认小程序网络可访问后端服务')
+    }
+    if (errMsg) {
+      return new Error(errMsg)
+    }
+  }
+
+  return new Error('图案生成失败')
+}
+
+export function buildGenerateFields(input: GeneratePatternInput) {
+  return {
+    mode: input.mode ?? 'fixed_grid',
+    grid_width: String(input.gridWidth),
+    grid_height: String(input.gridHeight),
+    led_size: String(input.ledSize ?? 64),
+    pixel_size: String(input.pixelSize ?? 8),
+    use_dithering: String(Boolean(input.useDithering)),
+    palette_preset: input.palettePreset,
+    max_colors: String(input.maxColors ?? 0),
+    similarity_threshold: String(input.similarityThreshold ?? 0),
+    remove_bg: String(Boolean(input.removeBackground)),
+    contrast: String(input.contrast ?? 0),
+    saturation: String(input.saturation ?? 0),
+    sharpness: String(input.sharpness ?? 0)
+  }
+}
+
+export async function fetchPalette() {
+  const { requestJson } = await import('./http')
+  return requestJson<PaletteResponse>('/api/palette')
+}
+
+export async function generatePattern(
+  filePath: string,
+  fields: Record<string, string>,
+  fileName?: string
+) : Promise<GeneratePatternOutcome> {
+  if (isLocalGenerationAvailable()) {
+    try {
+      return {
+        mode: 'local-wasm',
+        response: await generatePatternLocally(filePath, fields)
+      }
+    } catch (error) {
+      console.warn('Local generation failed, falling back to /api/generate:', error)
+    }
+  }
+
+  if (getRuntimeEnv() === 'h5') {
+    if (isLocalGenerationAvailable()) {
+      // Already attempted above. H5 keeps the dedicated HTTP fallback below.
+    }
+
+    return {
+      mode: 'server-http',
+      response: await generatePatternViaServer(filePath, fields, fileName)
+    }
+  }
+
+  const Taro = (await import('@tarojs/taro')).default
+  try {
+    const response = await Taro.uploadFile({
+      url: `${getApiBaseUrl()}/api/generate`,
+      filePath,
+      fileName,
+      name: 'file',
+      formData: fields,
+      timeout: GENERATE_TIMEOUT_MS
+    })
+
+    return {
+      mode: 'server-http',
+      response: normalizeGeneratePatternResponse(
+        parseJsonResponse<GeneratePatternResponse>(
+          response.data,
+          response.statusCode
+        ),
+        fields.palette_preset ?? '221'
+      )
+    }
+  } catch (error) {
+    throw normalizeUploadError(error)
+  }
+}
+
+async function generatePatternViaServer(
+  filePath: string,
+  fields: Record<string, string>,
+  fileName?: string
+) {
+  const formData = new FormData()
+  Object.entries(fields).forEach(([key, value]) => {
+    formData.append(key, value)
+  })
+
+  const fileResponse = await fetch(filePath)
+  if (!fileResponse.ok) {
+    throw new Error('图片读取失败')
+  }
+
+  const fileBlob = await fileResponse.blob()
+  formData.append('file', fileBlob, fileName || `upload-${Date.now()}.png`)
+
+  const response = await fetch(`${getApiBaseUrl()}/api/generate`, {
+    method: 'POST',
+    body: formData
+  })
+  const raw = await response.text()
+
+  return normalizeGeneratePatternResponse(
+    parseJsonResponse<GeneratePatternResponse>(raw, response.status),
+    fields.palette_preset ?? '221'
+  )
+}
+
+export async function exportPattern(kind: ExportKind, payload: unknown) {
+  if (getRuntimeEnv() === 'h5') {
+    const response = await fetch(`${getApiBaseUrl()}/api/export/${kind}`, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json'
+      },
+      body: JSON.stringify(payload)
+    })
+
+    if (!response.ok) {
+      const raw = await response.text()
+      let data: unknown = raw
+      try {
+        data = JSON.parse(raw)
+      } catch {}
+      throw new Error(getErrorMessage(response.status, data))
+    }
+
+    return response.arrayBuffer()
+  }
+
+  const Taro = (await import('@tarojs/taro')).default
+  const response = await Taro.request<ArrayBuffer | ApiErrorResponse>({
+    url: `${getApiBaseUrl()}/api/export/${kind}`,
+    method: 'POST',
+    header: {
+      'content-type': 'application/json'
+    },
+    data: payload,
+    responseType: 'arraybuffer'
+  })
+
+  if (response.statusCode >= 400) {
+    throw new Error(getErrorMessage(response.statusCode, response.data))
+  }
+
+  return response.data as ArrayBuffer
+}

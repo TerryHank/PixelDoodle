@@ -1,6 +1,6 @@
 {
   "name": "frontend-taro",
-  "version": "10.0.0",
+  "version": "11.0.0",
   "private": true,
   "description": "PixelDoodle Taro app",
   "templateInfo": {
@@ -10,18 +10,24 @@
     "framework": "React"
   },
   "scripts": {
+    "sync:local-wasm": "node scripts/sync-local-wasm-assets.js",
+    "predev:weapp": "npm run sync:local-wasm && node -e \"const fs=require('fs');fs.rmSync('dist-weapp',{recursive:true,force:true});\"",
     "dev:weapp": "taro build --type weapp --watch",
+    "prebuild:weapp": "npm run sync:local-wasm && node -e \"const fs=require('fs');fs.rmSync('dist-weapp',{recursive:true,force:true});\"",
     "build:weapp": "taro build --type weapp",
     "postbuild:weapp": "node scripts/sync-weapp-project-config.js",
+    "predev:h5": "npm run sync:local-wasm && node -e \"const fs=require('fs');fs.rmSync('dist-h5',{recursive:true,force:true});\"",
     "dev:h5": "taro build --type h5 --watch",
     "dev:h5:clean": "npm run clean:cache && taro build --type h5 --watch",
+    "prebuild:h5": "npm run sync:local-wasm && node -e \"const fs=require('fs');fs.rmSync('dist-h5',{recursive:true,force:true});\"",
     "build:h5": "taro build --type h5",
     "dev:rn": "taro build --type rn --watch",
     "build:rn": "taro build --type rn",
-    "clean:cache": "node -e \"const fs=require('fs');['.temp','dist','node_modules/.cache'].forEach((p)=>fs.rmSync(p,{recursive:true,force:true}));console.log('cache cleaned')\"",
+    "clean:cache": "node -e \"const fs=require('fs');['.temp','dist','dist-h5','dist-weapp','dist-rn','node_modules/.cache'].forEach((p)=>fs.rmSync(p,{recursive:true,force:true}));console.log('cache cleaned')\"",
     "android": "react-native run-android",
     "apk:debug": "cd android && gradlew.bat assembleDebug",
     "apk:release": "cd android && gradlew.bat assembleRelease",
+    "pretest": "npm run sync:local-wasm",
     "test": "vitest run"
   },
   "browserslist": [

@@ -1,5 +1,9 @@
 /*postcss-pxtransform disable*/
 
+@import '@/components/app-tab-bar/index.scss';
+@import '@/components/pattern-thumb/index.scss';
+@import '@/components/profile-avatar/index.scss';
+
 /* === BeadCraft - Linear/Notion inspired minimal UI === */
 
 :root {
@@ -67,7 +71,7 @@ body {
 /* === Main Layout === */
 .main-container {
   flex: 1;
-  padding: 24px;
+  padding: 24px 24px 108px;
   overflow-y: auto;
   display: flex;
   flex-direction: column;
@@ -129,7 +133,8 @@ body {
 
 /* === LED Size Button === */
 .led-size-btn {
-  width: 36px;
+  width: auto;
+  min-width: 46px;
   height: 36px;
   border: 2px dashed var(--border);
   border-radius: 6px;
@@ -137,15 +142,19 @@ body {
   cursor: pointer;
   display: flex;
   align-items: center;
-  justify-content: center;
+  justify-content: flex-start;
   font-size: 14px;
   font-weight: 600;
   color: var(--text-secondary);
   text-align: center;
-  padding: 0;
+  padding: 0 20px 0 10px;
   transition: all var(--transition);
   appearance: none;
   -webkit-appearance: none;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none'%3E%3Cpath d='M4 6l4 4 4-4' stroke='%2394A3B8' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: calc(100% - 7px) center;
+  background-size: 10px 10px;
 }
 .led-size-btn:hover {
   background: #F0F7FF;
@@ -549,6 +558,105 @@ input[type="range"]::-webkit-slider-thumb {
   color: var(--text-secondary);
   padding-top: 12px;
   border-top: 1px solid var(--border);
+}
+
+.community-share-card {
+  width: 100%;
+  max-width: 600px;
+  margin-top: 18px;
+  padding: 16px;
+  border: 1px solid rgba(226, 232, 240, 0.95);
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.98);
+  box-shadow: 0 18px 48px rgba(15, 23, 42, 0.08);
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.community-share-card__header,
+.community-share-card__author {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.community-share-card__title {
+  color: var(--text-primary);
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.community-share-card__subtitle,
+.community-share-card__author-hint {
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.5;
+  margin-top: 4px;
+}
+
+.community-share-card__author-meta {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.community-share-card__author-name {
+  color: var(--text-primary);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.community-share-card__toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.community-share-card__toggle input {
+  accent-color: #2563eb;
+}
+
+.community-share-card__input,
+.community-share-card__textarea {
+  width: 100%;
+  border: 1px solid rgba(203, 213, 225, 0.95);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.96);
+  color: var(--text-primary);
+  font-size: 13px;
+  padding: 12px 14px;
+}
+
+.community-share-card__textarea {
+  min-height: 88px;
+  resize: vertical;
+  font-family: inherit;
+}
+
+.community-share-card__button {
+  height: 42px;
+  border: 0;
+  border-radius: 12px;
+  background: linear-gradient(135deg, #2563eb, #1d4ed8);
+  color: #fff;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.community-share-card__button:hover {
+  filter: brightness(1.03);
+}
+
+.community-share-card__button--disabled {
+  opacity: 0.72;
+  cursor: default;
 }
 
 /* === Color Picker Popover === */
@@ -1440,6 +1548,22 @@ input[type="range"]::-webkit-slider-thumb {
 }
 
 @media (max-width: 768px) {
+  .main-container {
+    padding: 14px 10px 104px;
+  }
+
+  .community-share-card {
+    margin-top: 16px;
+    padding: 14px;
+    gap: 10px;
+  }
+
+  .community-share-card__header,
+  .community-share-card__author {
+    align-items: flex-start;
+    flex-wrap: wrap;
+  }
+
   .modal {
     padding: 12px;
     align-items: flex-end;

@@ -7,13 +7,13 @@ import { getApiBaseUrl } from './env'
 import { getRuntimeEnv } from '@/utils/runtime-env'
 import {
   generatePatternLocally,
+  getLocalGenerationUnavailableReason,
   isLocalGenerationAvailable,
-  normalizeGeneratePatternResponse,
-  type GenerateTransportMode
+  type GenerateTransportMode,
+  type LocalPaletteData
 } from './local-generation'
 
 export type ExportKind = 'png' | 'pdf' | 'json'
-const GENERATE_TIMEOUT_MS = 180000
 
 export interface GeneratePatternOutcome {
   mode: GenerateTransportMode
@@ -50,20 +50,10 @@ function getErrorMessage(statusCode: number, data: unknown) {
   return `Request failed with status ${statusCode}`
 }
 
-function parseJsonResponse<TResponse>(raw: string, statusCode: number) {
-  const data = JSON.parse(raw) as TResponse | ApiErrorResponse
-
-  if (statusCode >= 400) {
-    throw new Error(getErrorMessage(statusCode, data))
-  }
-
-  return data as TResponse
-}
-
 function normalizeUploadError(error: unknown) {
   if (error instanceof Error) {
     if (error.message.toLowerCase().includes('timeout')) {
-      return new Error('生成超时，请确认小程序网络可访问后端服务')
+      return new Error('本地生成超时，请稍后重试')
     }
     return error
   }
@@ -71,7 +61,7 @@ function normalizeUploadError(error: unknown) {
   if (error && typeof error === 'object' && 'errMsg' in error) {
     const errMsg = String((error as { errMsg?: unknown }).errMsg || '')
     if (errMsg.toLowerCase().includes('timeout')) {
-      return new Error('生成超时，请确认小程序网络可访问后端服务')
+      return new Error('本地生成超时，请稍后重试')
     }
     if (errMsg) {
       return new Error(errMsg)
@@ -107,80 +97,24 @@ export async function fetchPalette() {
 export async function generatePattern(
   filePath: string,
   fields: Record<string, string>,
-  fileName?: string
+  _fileName?: string,
+  localPaletteData?: LocalPaletteData
 ) : Promise<GeneratePatternOutcome> {
-  if (getRuntimeEnv() === 'h5') {
-    if (isLocalGenerationAvailable()) {
-      try {
-        return {
-          mode: 'local-wasm',
-          response: await generatePatternLocally(filePath, fields)
-        }
-      } catch (error) {
-        console.warn('Local generation failed, falling back to /api/generate:', error)
-      }
-    }
-
-    return {
-      mode: 'server-http',
-      response: await generatePatternViaServer(filePath, fields, fileName)
-    }
+  if (!isLocalGenerationAvailable()) {
+    throw new Error(
+      getLocalGenerationUnavailableReason() || '当前环境不支持本地生成'
+    )
   }
 
-  const Taro = (await import('@tarojs/taro')).default
   try {
-    const response = await Taro.uploadFile({
-      url: `${getApiBaseUrl()}/api/generate`,
-      filePath,
-      fileName,
-      name: 'file',
-      formData: fields,
-      timeout: GENERATE_TIMEOUT_MS
-    })
-
+    const runtime = getRuntimeEnv()
     return {
-      mode: 'server-http',
-      response: normalizeGeneratePatternResponse(
-        parseJsonResponse<GeneratePatternResponse>(
-          response.data,
-          response.statusCode
-        ),
-        fields.palette_preset ?? '221'
-      )
+      mode: runtime === 'weapp' ? 'local-js' : 'local-wasm',
+      response: await generatePatternLocally(filePath, fields, localPaletteData)
     }
   } catch (error) {
     throw normalizeUploadError(error)
   }
-}
-
-async function generatePatternViaServer(
-  filePath: string,
-  fields: Record<string, string>,
-  fileName?: string
-) {
-  const formData = new FormData()
-  Object.entries(fields).forEach(([key, value]) => {
-    formData.append(key, value)
-  })
-
-  const fileResponse = await fetch(filePath)
-  if (!fileResponse.ok) {
-    throw new Error('图片读取失败')
-  }
-
-  const fileBlob = await fileResponse.blob()
-  formData.append('file', fileBlob, fileName || `upload-${Date.now()}.png`)
-
-  const response = await fetch(`${getApiBaseUrl()}/api/generate`, {
-    method: 'POST',
-    body: formData
-  })
-  const raw = await response.text()
-
-  return normalizeGeneratePatternResponse(
-    parseJsonResponse<GeneratePatternResponse>(raw, response.status),
-    fields.palette_preset ?? '221'
-  )
 }
 
 export async function exportPattern(kind: ExportKind, payload: unknown) {

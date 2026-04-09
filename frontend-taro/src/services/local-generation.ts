@@ -1,9 +1,26 @@
-import type { GeneratePatternResponse } from '@/types/api'
+import type {
+  GeneratePatternResponse,
+  PaletteColor,
+  PalettePresetMap
+} from '@/types/api'
+import { getRuntimeEnv } from '@/utils/runtime-env'
+
+import {
+  generatePatternLocalJs,
+  resolveLocalGridSize
+} from './local-generation-js'
+import { getWeappRasterLoader } from './weapp-raster-loader'
+import { normalizeWeappAssetPath } from '@/utils/weapp-upload'
 
 const LOCAL_GENERATION_WORKER_URL = '/static/local-processing/wasm-worker.js'
 const LOCAL_GENERATION_TIMEOUT_MS = 60000
 
-export type GenerateTransportMode = 'local-wasm' | 'server-http'
+export type GenerateTransportMode = 'local-wasm' | 'local-js' | 'server-http'
+
+export interface LocalPaletteData {
+  colors: PaletteColor[]
+  presets: PalettePresetMap
+}
 
 export interface LocalGenerateOptions {
   mode: string
@@ -55,15 +72,34 @@ function createSessionId() {
   if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
     return crypto.randomUUID()
   }
+
   return `local-${Date.now()}-${Math.random().toString(16).slice(2)}`
 }
 
+export function getLocalGenerationUnavailableReason() {
+  const runtime = getRuntimeEnv()
+
+  if (runtime === 'weapp') {
+    if (!getWeappRasterLoader()) {
+      return '当前微信小程序本地生成画布尚未就绪，请稍后重试。'
+    }
+
+    return null
+  }
+
+  if (typeof window === 'undefined' || typeof Worker === 'undefined') {
+    return '当前浏览器环境不支持本地生成 Worker。'
+  }
+
+  if (typeof WebAssembly === 'undefined') {
+    return '当前浏览器环境未提供 WebAssembly，本地生成不可用。'
+  }
+
+  return null
+}
+
 export function isLocalGenerationAvailable() {
-  return (
-    typeof window !== 'undefined' &&
-    typeof Worker !== 'undefined' &&
-    typeof WebAssembly !== 'undefined'
-  )
+  return getLocalGenerationUnavailableReason() == null
 }
 
 export function buildLocalGenerateOptions(fields: Record<string, string>): LocalGenerateOptions {
@@ -137,6 +173,7 @@ function ensureLocalGenerationWorker() {
   }
 
   const worker = new Worker(LOCAL_GENERATION_WORKER_URL, { type: 'module' })
+
   worker.addEventListener('message', (event: MessageEvent<WorkerResponse>) => {
     const { id } = event.data || {}
     if (!id) {
@@ -163,14 +200,69 @@ function ensureLocalGenerationWorker() {
       )
     )
   })
+
   worker.addEventListener('error', (event) => {
     console.error('Local generation worker crashed:', event)
   })
+
   localGenerationWorker = worker
   return worker
 }
 
-export async function generatePatternLocally(
+async function generatePatternLocallyForWeapp(
+  filePath: string,
+  fields: Record<string, string>,
+  paletteData?: LocalPaletteData
+) {
+  const rasterLoader = getWeappRasterLoader()
+  if (!rasterLoader) {
+    throw new Error('当前微信小程序本地生成画布尚未就绪，请稍后重试。')
+  }
+
+  if (!paletteData || paletteData.colors.length === 0) {
+    throw new Error('调色板尚未加载完成，请稍后重试。')
+  }
+
+  const Taro = (await import('@tarojs/taro')).default
+  if (typeof Taro.getImageInfo !== 'function') {
+    throw new Error('当前微信小程序环境不支持本地图像解析')
+  }
+
+  const normalizedFilePath = normalizeWeappAssetPath(filePath)
+  const imageInfo = await Taro.getImageInfo({
+    src: normalizedFilePath
+  })
+  const options = buildLocalGenerateOptions(fields)
+  const grid = resolveLocalGridSize(
+    Number(imageInfo.width || 0),
+    Number(imageInfo.height || 0),
+    options
+  )
+
+  const [selectionRaster, midRaster] = await Promise.all([
+    rasterLoader.loadRaster(normalizedFilePath, 120, 120),
+    rasterLoader.loadRaster(
+      normalizedFilePath,
+      Math.max(1, grid.width * 4),
+      Math.max(1, grid.height * 4)
+    )
+  ])
+
+  return normalizeGeneratePatternResponse(
+    generatePatternLocalJs({
+      sourceWidth: Number(imageInfo.width || 0),
+      sourceHeight: Number(imageInfo.height || 0),
+      selectionRaster,
+      midRaster,
+      options,
+      colors: paletteData.colors,
+      presets: paletteData.presets
+    }),
+    fields.palette_preset ?? '221'
+  )
+}
+
+async function generatePatternLocallyForH5(
   filePath: string,
   fields: Record<string, string>
 ) {
@@ -202,6 +294,19 @@ export async function generatePatternLocally(
       bytes,
       options
     }
+
     worker.postMessage(payload, [payload.bytes])
   })
+}
+
+export async function generatePatternLocally(
+  filePath: string,
+  fields: Record<string, string>,
+  paletteData?: LocalPaletteData
+) {
+  if (getRuntimeEnv() === 'weapp') {
+    return generatePatternLocallyForWeapp(filePath, fields, paletteData)
+  }
+
+  return generatePatternLocallyForH5(filePath, fields)
 }

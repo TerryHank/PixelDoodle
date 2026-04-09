@@ -1,0 +1,361 @@
+import type { GeneratePatternResponse } from '@/types/api'
+import { getRuntimeEnv } from '@/utils/runtime-env'
+import { getApiBaseUrl } from './env'
+import {
+  LOCAL_WASM_FILE_NAME,
+  LOCAL_WASM_VERSION
+} from '@/generated/local-processing/beadcraft-wasm-meta'
+
+const LOCAL_GENERATION_WORKER_URL = '/static/local-processing/wasm-worker.js'
+const LOCAL_GENERATION_TIMEOUT_MS = 60000
+
+export type GenerateTransportMode = 'local-wasm' | 'server-http'
+
+export interface LocalGenerateOptions {
+  mode: string
+  grid_width: number
+  grid_height: number
+  led_size: number
+  pixel_size: number
+  use_dithering: boolean
+  palette_preset: string
+  max_colors: number
+  similarity_threshold: number
+  remove_bg: boolean
+  contrast: number
+  saturation: number
+  sharpness: number
+}
+
+interface WorkerRequest {
+  id: string
+  bytes: ArrayBuffer
+  options: LocalGenerateOptions
+}
+
+interface WorkerSuccessResponse {
+  id: string
+  ok: true
+  result: Omit<GeneratePatternResponse, 'session_id' | 'palette_preset'>
+}
+
+interface WorkerErrorResponse {
+  id: string
+  ok: false
+  error?: string
+}
+
+type WorkerResponse = WorkerSuccessResponse | WorkerErrorResponse
+
+interface PendingRequest {
+  resolve: (value: GeneratePatternResponse) => void
+  reject: (error: Error) => void
+  timeoutId: ReturnType<typeof setTimeout>
+  palettePreset: string
+}
+
+let localGenerationWorker: Worker | null = null
+const pendingRequests = new Map<string, PendingRequest>()
+let weappWasmRuntimePromise: Promise<
+  typeof import('@/generated/local-processing/beadcraft-wasm-bindgen')
+> | null = null
+
+function createSessionId() {
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+    return crypto.randomUUID()
+  }
+  return `local-${Date.now()}-${Math.random().toString(16).slice(2)}`
+}
+
+export function isLocalGenerationAvailable() {
+  const runtime = getRuntimeEnv()
+
+  if (runtime === 'weapp') {
+    return typeof WebAssembly !== 'undefined'
+  }
+
+  return (
+    typeof window !== 'undefined' &&
+    typeof Worker !== 'undefined' &&
+    typeof WebAssembly !== 'undefined'
+  )
+}
+
+export function buildLocalGenerateOptions(fields: Record<string, string>): LocalGenerateOptions {
+  return {
+    mode: fields.mode ?? 'fixed_grid',
+    grid_width: Number.parseInt(fields.grid_width ?? '48', 10) || 48,
+    grid_height: Number.parseInt(fields.grid_height ?? '48', 10) || 48,
+    led_size: Number.parseInt(fields.led_size ?? '64', 10) || 64,
+    pixel_size: Number.parseInt(fields.pixel_size ?? '8', 10) || 8,
+    use_dithering:
+      String(fields.use_dithering ?? 'false').toLowerCase() === 'true',
+    palette_preset: fields.palette_preset ?? '221',
+    max_colors: Number.parseInt(fields.max_colors ?? '0', 10) || 0,
+    similarity_threshold:
+      Number.parseInt(fields.similarity_threshold ?? '0', 10) || 0,
+    remove_bg: String(fields.remove_bg ?? 'false').toLowerCase() === 'true',
+    contrast: Number(fields.contrast ?? '0') || 0,
+    saturation: Number(fields.saturation ?? '0') || 0,
+    sharpness: Number(fields.sharpness ?? '0') || 0
+  }
+}
+
+export function normalizeGeneratePatternResponse(
+  data: Partial<GeneratePatternResponse> &
+    Record<string, unknown>,
+  palettePreset: string
+): GeneratePatternResponse {
+  const colorSummary = Array.isArray(data.color_summary)
+    ? data.color_summary.map((entry) => ({
+        code: String(entry?.code ?? ''),
+        count: Number(entry?.count ?? 0),
+        hex: String(entry?.hex ?? ''),
+        name: String(entry?.name ?? ''),
+        name_zh: String(entry?.name_zh ?? ''),
+        rgb:
+          Array.isArray(entry?.rgb) && entry.rgb.length === 3
+            ? [
+                Number(entry.rgb[0] ?? 0),
+                Number(entry.rgb[1] ?? 0),
+                Number(entry.rgb[2] ?? 0)
+              ] as [number, number, number]
+            : [0, 0, 0]
+      }))
+    : []
+
+  return {
+    session_id: String(data.session_id || createSessionId()),
+    grid_size: {
+      width: Number((data.grid_size as { width?: unknown } | undefined)?.width ?? 0),
+      height: Number((data.grid_size as { height?: unknown } | undefined)?.height ?? 0)
+    },
+    pixel_matrix: Array.isArray(data.pixel_matrix)
+      ? data.pixel_matrix.map((row) =>
+          Array.isArray(row) ? row.map((cell) => (cell == null ? null : String(cell))) : []
+        )
+      : [],
+    color_summary: colorSummary,
+    total_beads: Number(data.total_beads ?? 0),
+    palette_preset: String(data.palette_preset || palettePreset || '221'),
+    preview_image: String(data.preview_image || '')
+  }
+}
+
+function getWeappUserDataPath(Taro: typeof import('@tarojs/taro').default) {
+  const wxLike =
+    typeof globalThis !== 'undefined'
+      ? (globalThis as { wx?: { env?: { USER_DATA_PATH?: string } } }).wx
+      : undefined
+
+  return wxLike?.env?.USER_DATA_PATH || Taro.env?.USER_DATA_PATH || ''
+}
+
+function buildWeappWasmCachePath(Taro: typeof import('@tarojs/taro').default) {
+  const userDataPath = getWeappUserDataPath(Taro)
+
+  if (!userDataPath) {
+    throw new Error('当前小程序环境无法确定本地缓存目录')
+  }
+
+  return `${userDataPath}/beadcraft_wasm_${LOCAL_WASM_VERSION}.wasm`
+}
+
+function buildWeappWasmDownloadUrl() {
+  const apiBaseUrl = getApiBaseUrl()
+
+  if (!apiBaseUrl) {
+    throw new Error('当前环境缺少可用的后端地址，无法下载本地生成引擎')
+  }
+
+  return `${apiBaseUrl}/static/local-processing/wasm/${LOCAL_WASM_FILE_NAME}?v=${LOCAL_WASM_VERSION}`
+}
+
+async function ensureWeappWasmRuntime() {
+  if (weappWasmRuntimePromise) {
+    return weappWasmRuntimePromise
+  }
+
+  weappWasmRuntimePromise = (async () => {
+    const [wasmModule, wasmBytes] = await Promise.all([
+      import('@/generated/local-processing/beadcraft-wasm-bindgen'),
+      ensureWeappWasmBytes()
+    ])
+
+    wasmModule.initSync({
+      module: wasmBytes
+    })
+
+    return wasmModule
+  })()
+
+  return weappWasmRuntimePromise
+}
+
+async function readWeappFileBytes(filePath: string) {
+  const Taro = (await import('@tarojs/taro')).default
+  const fileSystemManager =
+    typeof Taro.getFileSystemManager === 'function'
+      ? Taro.getFileSystemManager()
+      : null
+
+  if (!fileSystemManager) {
+    throw new Error('当前小程序环境不支持本地文件读取')
+  }
+
+  return await new Promise<ArrayBuffer>((resolve, reject) => {
+    fileSystemManager.readFile({
+      filePath,
+      success: (result) => {
+        const data = result.data
+
+        if (data instanceof ArrayBuffer) {
+          resolve(data)
+          return
+        }
+
+        if (ArrayBuffer.isView(data)) {
+          resolve(data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength))
+          return
+        }
+
+        reject(new Error('图片文件读取结果不是二进制数据'))
+      },
+      fail: (error) => {
+        const message =
+          error && typeof error === 'object' && 'errMsg' in error
+            ? String((error as { errMsg?: unknown }).errMsg || '')
+            : ''
+        reject(new Error(message || '图片文件读取失败'))
+      }
+    })
+  })
+}
+
+async function ensureWeappWasmBytes() {
+  const Taro = (await import('@tarojs/taro')).default
+  const fileSystemManager =
+    typeof Taro.getFileSystemManager === 'function'
+      ? Taro.getFileSystemManager()
+      : null
+  const cachePath = buildWeappWasmCachePath(Taro)
+
+  try {
+    return await readWeappFileBytes(cachePath)
+  } catch {
+    // Cache miss: download below.
+  }
+
+  const downloadResult = await Taro.downloadFile({
+    url: buildWeappWasmDownloadUrl()
+  })
+
+  if (downloadResult.statusCode >= 400 || !downloadResult.tempFilePath) {
+    throw new Error('本地生成引擎下载失败')
+  }
+
+  if (!fileSystemManager || typeof fileSystemManager.copyFileSync !== 'function') {
+    return await readWeappFileBytes(downloadResult.tempFilePath)
+  }
+
+  try {
+    fileSystemManager.copyFileSync(downloadResult.tempFilePath, cachePath)
+    return await readWeappFileBytes(cachePath)
+  } catch {
+    return await readWeappFileBytes(downloadResult.tempFilePath)
+  }
+}
+
+function ensureLocalGenerationWorker() {
+  if (!isLocalGenerationAvailable()) {
+    throw new Error('Local generation is unavailable')
+  }
+
+  if (localGenerationWorker) {
+    return localGenerationWorker
+  }
+
+  const worker = new Worker(LOCAL_GENERATION_WORKER_URL, { type: 'module' })
+  worker.addEventListener('message', (event: MessageEvent<WorkerResponse>) => {
+    const { id } = event.data || {}
+    if (!id) {
+      return
+    }
+
+    const pending = pendingRequests.get(id)
+    if (!pending) {
+      return
+    }
+
+    pendingRequests.delete(id)
+    clearTimeout(pending.timeoutId)
+
+    if (!event.data.ok) {
+      pending.reject(new Error(event.data.error || 'Local generation failed'))
+      return
+    }
+
+    pending.resolve(
+      normalizeGeneratePatternResponse(
+        event.data.result,
+        pending.palettePreset
+      )
+    )
+  })
+  worker.addEventListener('error', (event) => {
+    console.error('Local generation worker crashed:', event)
+  })
+  localGenerationWorker = worker
+  return worker
+}
+
+export async function generatePatternLocally(
+  filePath: string,
+  fields: Record<string, string>
+) {
+  if (getRuntimeEnv() === 'weapp') {
+    const [wasmModule, bytes] = await Promise.all([
+      ensureWeappWasmRuntime(),
+      readWeappFileBytes(filePath)
+    ])
+
+    return normalizeGeneratePatternResponse(
+      wasmModule.generate_pattern_bytes(
+        new Uint8Array(bytes),
+        buildLocalGenerateOptions(fields)
+      ) as Partial<GeneratePatternResponse> & Record<string, unknown>,
+      fields.palette_preset ?? '221'
+    )
+  }
+
+  const worker = ensureLocalGenerationWorker()
+  const response = await fetch(filePath)
+  if (!response.ok) {
+    throw new Error('图片读取失败')
+  }
+
+  const bytes = await response.arrayBuffer()
+  const requestId = createSessionId()
+  const options = buildLocalGenerateOptions(fields)
+
+  return await new Promise<GeneratePatternResponse>((resolve, reject) => {
+    const timeoutId = setTimeout(() => {
+      pendingRequests.delete(requestId)
+      reject(new Error('Local generation timed out'))
+    }, LOCAL_GENERATION_TIMEOUT_MS)
+
+    pendingRequests.set(requestId, {
+      resolve,
+      reject,
+      timeoutId,
+      palettePreset: options.palette_preset
+    })
+
+    const payload: WorkerRequest = {
+      id: requestId,
+      bytes,
+      options
+    }
+    worker.postMessage(payload, [payload.bytes])
+  })
+}

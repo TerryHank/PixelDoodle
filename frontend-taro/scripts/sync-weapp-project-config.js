@@ -2,7 +2,10 @@ const fs = require('node:fs')
 const path = require('node:path')
 
 const projectRoot = path.resolve(__dirname, '..')
-const outputRoot = process.env.TARO_OUTPUT_ROOT || 'dist'
+const currentTarget = process.env.TARO_ENV || 'weapp'
+const outputRoot =
+  process.env.TARO_OUTPUT_ROOT ||
+  (currentTarget === 'rn' ? 'dist-rn' : currentTarget === 'h5' ? 'dist-h5' : 'dist-weapp')
 const sourceConfigPath = path.join(projectRoot, 'project.config.json')
 const outputConfigPath = path.join(projectRoot, outputRoot, 'project.config.json')
 

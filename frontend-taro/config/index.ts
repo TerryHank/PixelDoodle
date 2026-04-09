@@ -10,7 +10,33 @@ import prodConfig from './prod'
 // https://taro-docs.jd.com/docs/next/config#defineconfig-辅助函数
 export default defineConfig<'webpack5'>(async (merge) => {
   const assetVersion = `v${pkg.version}`
-  const outputRoot = process.env.TARO_OUTPUT_ROOT || 'dist'
+  const currentTarget = process.env.TARO_ENV || 'weapp'
+  const outputRoot =
+    process.env.TARO_OUTPUT_ROOT ||
+    (currentTarget === 'h5'
+      ? 'dist-h5'
+      : currentTarget === 'rn'
+        ? 'dist-rn'
+        : 'dist-weapp')
+  const copyPatterns =
+    currentTarget === 'h5'
+      ? [
+          {
+            from: 'static',
+            to: `${outputRoot}/static`
+          }
+        ]
+      : currentTarget === 'weapp'
+        ? [
+            {
+              from: 'static/local-processing/wasm/beadcraft_wasm_bg.wasm',
+              to: `${outputRoot}/assets/local-processing/beadcraft_wasm_bg.wasm`
+            }
+          ]
+      : []
+  const applyCommonWebpackChain = (chain: any) => {
+    chain.resolve.plugin('tsconfig-paths').use(TsconfigPathsPlugin)
+  }
   const baseConfig: UserConfigExport<'webpack5'> = {
     projectName: 'frontend-taro',
     date: '2026-3-31',
@@ -24,12 +50,7 @@ export default defineConfig<'webpack5'>(async (merge) => {
     sourceRoot: 'src',
     outputRoot,
     copy: {
-      patterns: [
-        {
-          from: 'static',
-          to: `${outputRoot}/static`
-        }
-      ],
+      patterns: copyPatterns,
       options: {}
     },
     framework: 'react',
@@ -57,7 +78,7 @@ export default defineConfig<'webpack5'>(async (merge) => {
         }
       },
       webpackChain(chain) {
-        chain.resolve.plugin('tsconfig-paths').use(TsconfigPathsPlugin)
+        applyCommonWebpackChain(chain)
       }
     },
     h5: {
@@ -87,7 +108,7 @@ export default defineConfig<'webpack5'>(async (merge) => {
         }
       },
       webpackChain(chain) {
-        chain.resolve.plugin('tsconfig-paths').use(TsconfigPathsPlugin)
+        applyCommonWebpackChain(chain)
       }
     }
   }

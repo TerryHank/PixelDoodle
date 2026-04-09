@@ -1,42 +1,48 @@
 import Taro from '@tarojs/taro'
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { Text, View } from '@tarojs/components'
+import { Canvas, Input, Switch, Text, Textarea, View } from '@tarojs/components'
 import luoxiaoheiOriginal from '@/assets/examples/luoxiaohei_original.jpg'
-import luoxiaoheiThumb from '@/assets/examples/luoxiaohei_thumb.png'
 import meiliOriginal from '@/assets/examples/meili_original.jpg'
-import meiliThumb from '@/assets/examples/meili_thumb.png'
 import ponyOriginal from '@/assets/examples/pony_original.jpg'
-import ponyThumb from '@/assets/examples/pony_thumb.png'
 import usachiOriginal from '@/assets/examples/usachi_original.jpg'
-import usachiThumb from '@/assets/examples/usachi_thumb.png'
 import { bleAdapter } from '@/adapters/ble'
+import type { BleKnownDevice } from '@/adapters/ble/types'
 import { fileAdapter } from '@/adapters/file'
 import { CanvasPanel } from '@/components/canvas-panel'
 import { ColorPanel } from '@/components/color-panel'
+import { AppTabBar } from '@/components/app-tab-bar'
 import {
   type ExampleGalleryItem,
   ExampleGallery
 } from '@/components/example-gallery'
-import { PairSheet } from '@/components/pair-sheet'
+import { PairSheet, type PairSheetBleOption } from '@/components/pair-sheet'
+import { PatternThumb } from '@/components/pattern-thumb'
+import { ProfileAvatar } from '@/components/profile-avatar'
 import { SettingsSheet } from '@/components/settings-sheet'
 import { ToastHost } from '@/components/toast-host'
 import { Toolbar } from '@/components/toolbar'
+import { publishCommunityPost } from '@/services/community-service'
 import {
   exportPattern,
   type ExportKind
 } from '@/services/pattern-service'
+import { autoSendGeneratedPattern } from '@/services/ble-image-sync'
+import { registerWeappRasterLoader } from '@/services/weapp-raster-loader'
 import { useDeviceStore } from '@/store/device-store'
+import { useHistoryStore } from '@/store/history-store'
 import { usePatternStore } from '@/store/pattern-store'
 import { useUIStore } from '@/store/ui-store'
+import { useUserStore } from '@/store/user-store'
 import {
   buildColorHexMap,
   getExportFileName,
   getExportMimeType
 } from '@/utils/export'
 import { getRuntimeEnv } from '@/utils/runtime-env'
-import { isUuidLike, normalizeUuid } from '@/utils/uuid'
 import { resolveWeappUploadablePath } from '@/utils/weapp-upload'
 import { buildHomeViewModel } from './view-model'
+import { applyPatternChangeAndMaybeRegenerate } from './pattern-regeneration'
+import { hideLoadingSafely } from '@/utils/loading'
 import './index.scss'
 
 interface WeappMenuButtonRect {
@@ -66,7 +72,7 @@ const EXAMPLE_ITEMS: ExampleGalleryItem[] = [
     title: 'Luo Xiaohei',
     subtitle: '黑白留白',
     tone: 'ink',
-    thumbnailUrl: luoxiaoheiThumb,
+    thumbnailUrl: luoxiaoheiOriginal,
     sourceUrl: luoxiaoheiOriginal
   },
   {
@@ -74,7 +80,7 @@ const EXAMPLE_ITEMS: ExampleGalleryItem[] = [
     title: 'Meili',
     subtitle: '柔和肤色',
     tone: 'rose',
-    thumbnailUrl: meiliThumb,
+    thumbnailUrl: meiliOriginal,
     sourceUrl: meiliOriginal
   },
   {
@@ -82,7 +88,7 @@ const EXAMPLE_ITEMS: ExampleGalleryItem[] = [
     title: 'Pony',
     subtitle: '高饱和撞色',
     tone: 'sky',
-    thumbnailUrl: ponyThumb,
+    thumbnailUrl: ponyOriginal,
     sourceUrl: ponyOriginal
   },
   {
@@ -90,10 +96,23 @@ const EXAMPLE_ITEMS: ExampleGalleryItem[] = [
     title: 'Usachi',
     subtitle: '糖果浅色系',
     tone: 'mint',
-    thumbnailUrl: usachiThumb,
+    thumbnailUrl: usachiOriginal,
     sourceUrl: usachiOriginal
   }
 ]
+
+const LOCAL_GENERATION_CANVAS_ID = 'local-generation-canvas'
+
+type WeappLocalCanvasNode = HTMLCanvasElement & {
+  width: number
+  height: number
+  createImage?: () => {
+    src: string
+    onload: (() => void) | null
+    onerror: ((error: unknown) => void) | null
+  }
+  getContext: (kind: '2d') => CanvasRenderingContext2D | null
+}
 
 function getDifficultyLabel(difficulty: number) {
   if (difficulty <= 0.0625) return '易'
@@ -129,6 +148,15 @@ function hasGeneratedPattern(pixelMatrix: string[][] | (string | null)[][]) {
   return pixelMatrix.some((row) => row.length > 0)
 }
 
+function sanitizePatternTitle(raw: string) {
+  const trimmed = raw.trim()
+  if (!trimmed) {
+    return '未命名图案'
+  }
+
+  return trimmed.replace(/\.[A-Za-z0-9]+$/, '')
+}
+
 function getWeappMenuButtonRect(): WeappMenuButtonRect | null {
   const wxLike =
     typeof globalThis !== 'undefined'
@@ -152,8 +180,19 @@ function getWeappMenuButtonRect(): WeappMenuButtonRect | null {
 
 export default function HomePage() {
   const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
-  const [manualUuid, setManualUuid] = useState('')
-  const [wifiPassword, setWifiPassword] = useState('')
+  const localGenerationCanvasNodeRef = useRef<WeappLocalCanvasNode | null>(null)
+  const localGenerationCanvasContextRef = useRef<CanvasRenderingContext2D | null>(null)
+  const localGenerationCanvasReadyRef = useRef<
+    Promise<{
+      node: WeappLocalCanvasNode
+      context: CanvasRenderingContext2D
+    }> | null
+  >(null)
+  const [nearbyBleDevices, setNearbyBleDevices] = useState<BleKnownDevice[]>([])
+  const [isBleScanning, setIsBleScanning] = useState(false)
+  const [shareTitle, setShareTitle] = useState('')
+  const [shareDescription, setShareDescription] = useState('')
+  const [isPublishing, setIsPublishing] = useState(false)
   const [weappChromeMetrics, setWeappChromeMetrics] = useState<WeappChromeMetrics>(
     DEFAULT_WEAPP_CHROME_METRICS
   )
@@ -173,6 +212,12 @@ export default function HomePage() {
   const targetDeviceUuid = useDeviceStore((state) => state.targetDeviceUuid)
   const bleConnectionStatus = useDeviceStore((state) => state.bleConnectionStatus)
   const bleCharacteristicStatus = useDeviceStore((state) => state.bleCharacteristicStatus)
+  const historyEntries = useHistoryStore((state) => state.entries)
+  const userId = useUserStore((state) => state.id)
+  const userNickname = useUserStore((state) => state.nickname)
+  const userAvatarSeed = useUserStore((state) => state.avatarSeed)
+  const autoShareToCommunity = useUserStore((state) => state.autoShareToCommunity)
+  const setAutoShareToCommunity = useUserStore((state) => state.setAutoShareToCommunity)
 
   const toastMessage = useUIStore((state) => state.toastMessage)
   const isPairSheetOpen = useUIStore((state) => state.isPairSheetOpen)
@@ -229,6 +274,114 @@ export default function HomePage() {
     }
   }, [currentEnv])
 
+  useEffect(() => {
+    if (currentEnv !== 'weapp') {
+      registerWeappRasterLoader(null)
+      return
+    }
+
+    const ensureLocalGenerationCanvas = async () => {
+      if (localGenerationCanvasNodeRef.current && localGenerationCanvasContextRef.current) {
+        return {
+          node: localGenerationCanvasNodeRef.current,
+          context: localGenerationCanvasContextRef.current
+        }
+      }
+
+      if (localGenerationCanvasReadyRef.current) {
+        return localGenerationCanvasReadyRef.current
+      }
+
+      localGenerationCanvasReadyRef.current = new Promise((resolve, reject) => {
+        Taro.nextTick(() => {
+          Taro.createSelectorQuery()
+            .select(`#${LOCAL_GENERATION_CANVAS_ID}`)
+            .fields({ node: true, size: true } as never)
+            .exec((result) => {
+              const canvasNode = result?.[0]?.node as WeappLocalCanvasNode | undefined
+              if (!canvasNode) {
+                localGenerationCanvasReadyRef.current = null
+                reject(new Error('小程序本地生成画布初始化失败'))
+                return
+              }
+
+              const context = canvasNode.getContext('2d')
+              if (!context) {
+                localGenerationCanvasReadyRef.current = null
+                reject(new Error('小程序本地生成画布上下文初始化失败'))
+                return
+              }
+
+              localGenerationCanvasNodeRef.current = canvasNode
+              localGenerationCanvasContextRef.current = context
+              resolve({
+                node: canvasNode,
+                context
+              })
+            })
+        })
+      })
+
+      return localGenerationCanvasReadyRef.current
+    }
+
+    const loadRaster = async (sourcePath: string, width: number, height: number) => {
+      const { node, context } = await ensureLocalGenerationCanvas()
+      const imageFactory = node.createImage
+
+      if (typeof imageFactory !== 'function') {
+        throw new Error('当前微信小程序环境不支持本地图片解码画布')
+      }
+
+      const image = imageFactory.call(node)
+      await new Promise<void>((resolve, reject) => {
+        image.onload = () => resolve()
+        image.onerror = (error) => reject(error || new Error('图片解码失败'))
+        image.src = sourcePath
+      })
+
+      node.width = Math.max(1, width)
+      node.height = Math.max(1, height)
+
+      if (typeof context.setTransform === 'function') {
+        context.setTransform(1, 0, 0, 1, 0, 0)
+      }
+
+      context.clearRect(0, 0, width, height)
+      context.drawImage(image as never, 0, 0, width, height)
+      const imageData = context.getImageData(0, 0, width, height)
+
+      return {
+        width,
+        height,
+        data: new Uint8ClampedArray(imageData.data)
+      }
+    }
+
+    registerWeappRasterLoader({
+      loadRaster
+    })
+
+    return () => {
+      registerWeappRasterLoader(null)
+      localGenerationCanvasReadyRef.current = null
+      localGenerationCanvasNodeRef.current = null
+      localGenerationCanvasContextRef.current = null
+    }
+  }, [currentEnv])
+
+  useEffect(() => {
+    if (!isPairSheetOpen) {
+      return
+    }
+
+    if (typeof bleAdapter.scanNearbyDevices !== 'function') {
+      return
+    }
+
+    void refreshBleDevices()
+  }, [isPairSheetOpen])
+
   function showToast(message: string) {
     useUIStore.setState({
       toastMessage: message
@@ -245,17 +398,124 @@ export default function HomePage() {
     }, 2400)
   }
 
+  async function publishCurrentPattern(options?: {
+    title?: string
+    description?: string
+  }) {
+    const patternState = usePatternStore.getState()
+    if (!hasGeneratedPattern(patternState.pixelMatrix)) {
+      throw new Error('请先生成图案再发布到社区')
+    }
+
+    const title = sanitizePatternTitle(
+      options?.title || shareTitle || `图案 ${new Date().toLocaleString()}`
+    )
+
+    setIsPublishing(true)
+    try {
+      await publishCommunityPost({
+        title,
+        description: (options?.description ?? shareDescription).trim(),
+        author_id: userId,
+        author_nickname: userNickname.trim() || '像素玩家',
+        author_avatar_seed: userAvatarSeed || userNickname || '像素玩家',
+        palette_preset: patternState.palettePreset,
+        grid_size: patternState.gridSize,
+        total_beads: patternState.totalBeads,
+        pixel_matrix: patternState.pixelMatrix,
+        color_summary: patternState.colorSummary
+      })
+    } finally {
+      setIsPublishing(false)
+    }
+  }
+
+  function rememberGeneratedPattern(input: {
+    title: string
+    sourceLabel: string
+  }) {
+    const patternState = usePatternStore.getState()
+    useHistoryStore.getState().addEntry({
+      id: `${Date.now()}-${Math.random().toString(16).slice(2, 8)}`,
+      title: sanitizePatternTitle(input.title),
+      createdAt: new Date().toISOString(),
+      sourceLabel: input.sourceLabel,
+      gridSize: patternState.gridSize,
+      totalBeads: patternState.totalBeads,
+      palettePreset: patternState.palettePreset,
+      pixelMatrix: patternState.pixelMatrix,
+      colorSummary: patternState.colorSummary
+    })
+  }
+
   async function runGenerate(filePath: string, fileName?: string) {
     Taro.showLoading({
       title: '生成中...'
     })
 
     try {
-      await usePatternStore.getState().generateFromFile(filePath, { fileName })
+      const response = await usePatternStore.getState().generateFromFile(filePath, { fileName })
       useDeviceStore.getState().clearHighlightCodes()
-      showToast('图案已生成')
+      const nextTitle = sanitizePatternTitle(fileName || shareTitle || '未命名图案')
+      rememberGeneratedPattern({
+        title: nextTitle,
+        sourceLabel: fileName ? '上传图片' : '示例图'
+      })
+
+      if (!shareTitle.trim()) {
+        setShareTitle(nextTitle)
+      }
+
+      let sentToBle = false
+      let sendErrorMessage = ''
+      let publishMessage = ''
+
+      try {
+        const patternState = usePatternStore.getState()
+        const deviceState = useDeviceStore.getState()
+
+        if (!deviceState.isSending) {
+          deviceState.setIsSending(true)
+          sentToBle = await autoSendGeneratedPattern({
+            bleConnectionStatus: deviceState.bleConnectionStatus,
+            bleCharacteristicStatus: deviceState.bleCharacteristicStatus,
+            isSending: deviceState.isSending,
+            ledSize: patternState.ledSize,
+            pixelMatrix: patternState.pixelMatrix,
+            palette: patternState.fullPalette,
+            sendImage: (payload) => bleAdapter.sendImage(payload)
+          })
+        }
+      } catch (error) {
+        sendErrorMessage =
+          error instanceof Error ? error.message : '蓝牙发送失败'
+      } finally {
+        useDeviceStore.getState().setIsSending(false)
+      }
+
+      if (autoShareToCommunity) {
+        try {
+          await publishCurrentPattern({
+            title: nextTitle
+          })
+          publishMessage = '，并已同步到社区'
+        } catch (error) {
+          publishMessage = `，但社区发布失败：${
+            error instanceof Error ? error.message : '发布失败'
+          }`
+        }
+      }
+
+      showToast(
+        sendErrorMessage
+          ? `图案已生成，但蓝牙发送失败：${sendErrorMessage}${publishMessage}`
+          : sentToBle
+            ? `图案已生成并已推送到设备${publishMessage}`
+            : `图案已生成${publishMessage}`
+      )
+      return response
     } finally {
-      Taro.hideLoading()
+      void hideLoadingSafely(() => Taro.hideLoading())
     }
   }
 
@@ -306,16 +566,16 @@ export default function HomePage() {
   }
 
   async function handleSelectExample(item: ExampleGalleryItem) {
-    Taro.showLoading({
-      title: '载入示例...'
-    })
-
     try {
       usePatternStore.getState().setExampleImage(item.id)
 
       if (currentEnv === 'weapp') {
+        const examplePath = await resolveWeappUploadablePath(
+          item.sourceUrl,
+          `${item.id}_original.jpg`
+        )
         await runGenerate(
-          resolveWeappUploadablePath(item.sourceUrl, `${item.id}_original.jpg`),
+          examplePath,
           `${item.id}_original.jpg`
         )
         return
@@ -332,8 +592,6 @@ export default function HomePage() {
       await runGenerate(response.tempFilePath, `${item.id}_original.jpg`)
     } catch (error) {
       showToast(error instanceof Error ? error.message : '示例图片加载失败')
-    } finally {
-      Taro.hideLoading()
     }
   }
 
@@ -418,7 +676,15 @@ export default function HomePage() {
       return
     }
 
-    usePatternStore.getState().setLedSize(nextLedSize)
+    void applyPatternChangeAndMaybeRegenerate({
+      applyChange: () => {
+        usePatternStore.getState().setLedSize(nextLedSize)
+      },
+      originalImage: usePatternStore.getState().originalImage,
+      regenerate: runGenerate
+    }).catch((error) => {
+      showToast(error instanceof Error ? error.message : '重新生成失败')
+    })
   }
 
   async function handleChangeDifficulty(nextDifficultyValue: string) {
@@ -467,11 +733,35 @@ export default function HomePage() {
     })
   }
 
-  function handleOpenPairSheet() {
-    setManualUuid(targetDeviceUuid)
+  async function refreshBleDevices() {
+    if (typeof bleAdapter.scanNearbyDevices !== 'function') {
+      setNearbyBleDevices([])
+      return []
+    }
+
+    setIsBleScanning(true)
+
+    try {
+      const devices = await bleAdapter.scanNearbyDevices()
+      setNearbyBleDevices(devices)
+      return devices
+    } catch (error) {
+      setNearbyBleDevices([])
+      showToast(error instanceof Error ? error.message : '蓝牙搜索失败')
+      return []
+    } finally {
+      setIsBleScanning(false)
+    }
+  }
+
+  async function handleOpenPairSheet() {
     useUIStore.setState({
       isPairSheetOpen: true
     })
+
+    if (typeof bleAdapter.scanNearbyDevices === 'function') {
+      await refreshBleDevices()
+    }
   }
 
   function handleClosePairSheet() {
@@ -480,44 +770,54 @@ export default function HomePage() {
     })
   }
 
-  async function ensureBleReady(uuid?: string) {
-    if (
-      bleConnectionStatus === 'connected' &&
-      bleCharacteristicStatus === 'ready'
-    ) {
-      return
-    }
-
+  async function handleBleConnection(connect: () => Promise<string | null>) {
     useDeviceStore.getState().setBleConnectionStatus('connecting')
     useDeviceStore.getState().setBleCharacteristicStatus('discovering')
 
-    await bleAdapter.connectTargetDevice(uuid)
-    useDeviceStore.getState().setBleConnectionStatus('connected')
-    useDeviceStore.getState().setBleCharacteristicStatus('ready')
-  }
-
-  async function handleConnectDevice() {
-    const normalizedUuid = manualUuid ? normalizeUuid(manualUuid) : ''
-
-    if (normalizedUuid && !isUuidLike(normalizedUuid)) {
-      showToast('请输入 12 位设备 UUID')
-      return
-    }
-
-    const lockedUuid = normalizedUuid || targetDeviceUuid
-    useDeviceStore.getState().setTargetDeviceUuid(lockedUuid)
-
     try {
-      await ensureBleReady(lockedUuid || undefined)
+      const connectedUuid = (await connect())?.trim().toUpperCase() || ''
+
+      if (!connectedUuid) {
+        throw new Error('蓝牙连接成功，但设备 UUID 为空')
+      }
+
+      useDeviceStore.getState().setTargetDeviceUuid(connectedUuid)
+      useDeviceStore.getState().setBleConnectionStatus('connected')
+      useDeviceStore.getState().setBleCharacteristicStatus('ready')
       useUIStore.setState({
         isPairSheetOpen: false
       })
-      showToast(lockedUuid ? `蓝牙已连接 ${lockedUuid}` : '蓝牙连接成功')
+      showToast(`蓝牙已连接 ${connectedUuid}`)
     } catch (error) {
       useDeviceStore.getState().setBleConnectionStatus('error')
       useDeviceStore.getState().setBleCharacteristicStatus('error')
       showToast(error instanceof Error ? error.message : '蓝牙连接失败')
     }
+  }
+
+  async function handleAddBleDevice() {
+    if (typeof bleAdapter.scanNearbyDevices === 'function') {
+      await refreshBleDevices()
+      return
+    }
+
+    await handleBleConnection(async () => {
+      if (typeof bleAdapter.addTargetDevice === 'function') {
+        return await bleAdapter.addTargetDevice()
+      }
+      return await bleAdapter.connectTargetDevice()
+    })
+  }
+
+  async function handleSelectBleDevice(deviceKey: string) {
+    await handleBleConnection(async () => {
+      if (typeof bleAdapter.connectKnownDevice === 'function') {
+        return await bleAdapter.connectKnownDevice(deviceKey)
+      }
+
+      const target = nearbyBleDevices.find((device) => device.key === deviceKey)
+      return await bleAdapter.connectTargetDevice(target?.uuid || undefined)
+    })
   }
 
   async function handleToggleColor(code: string) {
@@ -541,6 +841,7 @@ export default function HomePage() {
     colorSummaryCount: colorSummary.length,
     env: currentEnv
   })
+  const hasPattern = hasGeneratedPattern(pixelMatrix)
   const patternColorLookup = useMemo(
     () =>
       buildColorHexMap(pixelMatrix, colorSummary, fullPalette),
@@ -551,6 +852,69 @@ export default function HomePage() {
     bleCharacteristicStatus,
     targetDeviceUuid
   })
+  const bleAvailable =
+    currentEnv === 'weapp'
+      ? typeof Taro.openBluetoothAdapter === 'function'
+      : typeof bleAdapter.connectTargetDevice === 'function'
+  const pairSheetDevices = useMemo<PairSheetBleOption[]>(
+    () =>
+      nearbyBleDevices.map((device) => {
+        const normalizedUuid = device.uuid.trim().toUpperCase()
+        const rememberedUuid = targetDeviceUuid.trim().toUpperCase()
+        const isConnected =
+          bleConnectionStatus === 'connected' &&
+          bleCharacteristicStatus === 'ready' &&
+          !!rememberedUuid &&
+          normalizedUuid === rememberedUuid
+
+        return {
+          ...device,
+          connected: isConnected,
+          remembered: !!rememberedUuid && normalizedUuid === rememberedUuid,
+          meta: isConnected
+            ? `已连接设备 ${normalizedUuid}`
+            : `附近发现的 BeadCraft 设备 ${normalizedUuid}`
+        }
+      }),
+    [bleCharacteristicStatus, bleConnectionStatus, nearbyBleDevices, targetDeviceUuid]
+  )
+  const pairSheetStatusMessage = useMemo(() => {
+    if (!bleAvailable) {
+      return '当前小程序环境不支持蓝牙连接'
+    }
+    if (bleConnectionStatus === 'connecting' || isBleScanning) {
+      return '正在搜索并连接附近的 BeadCraft 设备...'
+    }
+    if (
+      bleConnectionStatus === 'connected' &&
+      bleCharacteristicStatus === 'ready' &&
+      targetDeviceUuid
+    ) {
+      return `已连接设备 ${targetDeviceUuid}`
+    }
+    if (pairSheetDevices.length > 0) {
+      return `已发现 ${pairSheetDevices.length} 台 BeadCraft 设备，点一下即可连接`
+    }
+    if (bleConnectionStatus === 'error') {
+      return '蓝牙连接失败，请重新扫描设备'
+    }
+    return '点击“添加设备”搜索附近的 BeadCraft 设备'
+  }, [
+    bleAvailable,
+    bleCharacteristicStatus,
+    bleConnectionStatus,
+    isBleScanning,
+    pairSheetDevices.length,
+    targetDeviceUuid
+  ])
+  const pairSheetStatusTone: 'default' | 'ready' | 'connected' =
+    bleConnectionStatus === 'connected' &&
+    bleCharacteristicStatus === 'ready' &&
+    targetDeviceUuid
+      ? 'connected'
+      : pairSheetDevices.length > 0
+        ? 'ready'
+        : 'default'
 
   function handleUploadAreaAction() {
     if (vm.uploadAreaMode === 'upload') {
@@ -583,7 +947,7 @@ export default function HomePage() {
   return (
     <View className={`home-page home-page--${currentEnv}`}>
       <View className='site-version-badge' style={versionBadgeStyle}>
-        v10
+        v11
       </View>
       <View className='main-container' style={mainContainerStyle}>
         <View className='result-area'>
@@ -633,27 +997,102 @@ export default function HomePage() {
               onToggleColor={handleToggleColor}
             />
           ) : null}
+          {hasPattern ? (
+            <View className='community-share-card'>
+              <View className='community-share-card__header'>
+                <View>
+                  <Text className='community-share-card__title'>社区分享</Text>
+                  <Text className='community-share-card__subtitle'>
+                    决定这张图案是否同步到社区，当前历史 {historyEntries.length} 条
+                  </Text>
+                </View>
+                <Switch
+                  checked={autoShareToCommunity}
+                  color='#2563eb'
+                  onChange={(event) => {
+                    setAutoShareToCommunity(Boolean(event.detail.value))
+                  }}
+                />
+              </View>
+              <View className='community-share-card__author'>
+                <ProfileAvatar
+                  nickname={userNickname}
+                  seed={userAvatarSeed}
+                  size='sm'
+                />
+                <View className='community-share-card__author-meta'>
+                  <Text className='community-share-card__author-name'>{userNickname}</Text>
+                  <Text className='community-share-card__author-hint'>
+                    社区发布会使用当前昵称与默认头像
+                  </Text>
+                </View>
+                <PatternThumb
+                  colorSummary={colorSummary}
+                  pixelMatrix={pixelMatrix}
+                />
+              </View>
+              <Input
+                className='community-share-card__input'
+                value={shareTitle}
+                placeholder='给这张图案起个名字'
+                onInput={(event) => {
+                  setShareTitle(event.detail.value)
+                }}
+              />
+              <Textarea
+                className='community-share-card__textarea'
+                value={shareDescription}
+                maxlength={120}
+                placeholder='写一句作品说明，选填'
+                onInput={(event) => {
+                  setShareDescription(event.detail.value)
+                }}
+              />
+              <View
+                className={`community-share-card__button ${
+                  isPublishing ? 'community-share-card__button--disabled' : ''
+                }`}
+                hoverClass='community-share-card__button--hover'
+                hoverStayTime={40}
+                onClick={() => {
+                  if (isPublishing) {
+                    return
+                  }
+
+                  void publishCurrentPattern().then(
+                    () => {
+                      showToast('当前图案已发布到社区')
+                    },
+                    (error) => {
+                      showToast(error instanceof Error ? error.message : '社区发布失败')
+                    }
+                  )
+                }}
+              >
+                <Text>{isPublishing ? '发布中...' : '发布当前作品'}</Text>
+              </View>
+            </View>
+          ) : null}
         </View>
       </View>
+      {currentEnv === 'weapp' ? (
+        <Canvas
+          id={LOCAL_GENERATION_CANVAS_ID}
+          type='2d'
+          className='local-generation-canvas'
+        />
+      ) : null}
       <PairSheet
-        bleConnectionStatus={bleConnectionStatus}
-        manualUuid={manualUuid}
-        targetDeviceUuid={targetDeviceUuid}
         visible={isPairSheetOpen}
+        bleAvailable={bleAvailable}
+        bleConnectionStatus={bleConnectionStatus}
+        statusMessage={pairSheetStatusMessage}
+        statusTone={pairSheetStatusTone}
+        devices={pairSheetDevices}
+        isScanning={isBleScanning}
         onClose={handleClosePairSheet}
-        onConnect={handleConnectDevice}
-        onManualUuidChange={setManualUuid}
-        onModeChange={() => undefined}
-        onScan={() => undefined}
-        onScanWifi={() => undefined}
-        onConnectWifi={() => undefined}
-        onSelectWifiHotspot={() => undefined}
-        onWifiPasswordChange={setWifiPassword}
-        mode='ble'
-        registeredWifiDevice={null}
-        selectedWifiHotspot={null}
-        wifiPassword={wifiPassword}
-        wifiScanResults={[]}
+        onSelectDevice={handleSelectBleDevice}
+        onAddDevice={handleAddBleDevice}
       />
       <SettingsSheet
         visible={isSettingsSheetOpen}
@@ -661,6 +1100,7 @@ export default function HomePage() {
         onExport={handleExport}
       />
       <ToastHost message={toastMessage} />
+      <AppTabBar current='tool' />
     </View>
   )
 }
