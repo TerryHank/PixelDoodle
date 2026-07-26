@@ -506,12 +506,14 @@ export default function HomePage() {
         }
       }
 
+      const generationMessage = '图案已生成'
+
       showToast(
         sendErrorMessage
-          ? `图案已生成，但蓝牙发送失败：${sendErrorMessage}${publishMessage}`
+          ? `${generationMessage}，但蓝牙发送失败：${sendErrorMessage}${publishMessage}`
           : sentToBle
-            ? `图案已生成并已推送到设备${publishMessage}`
-            : `图案已生成${publishMessage}`
+            ? `${generationMessage}并已推送到设备${publishMessage}`
+            : `${generationMessage}${publishMessage}`
       )
       return response
     } finally {

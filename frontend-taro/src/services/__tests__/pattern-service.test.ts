@@ -11,7 +11,7 @@ vi.mock('@tarojs/taro', () => ({
   }
 }))
 
-import { buildGenerateFields, exportPattern } from '../pattern-service'
+import { buildGenerateFields, exportPattern, generatePattern } from '../pattern-service'
 
 describe('pattern service', () => {
   it('serializes generate options', () => {
@@ -24,6 +24,46 @@ describe('pattern service', () => {
     expect(fields.grid_width).toBe('48')
     expect(fields.grid_height).toBe('48')
     expect(fields.palette_preset).toBe('221')
+  })
+
+  it('uploads H5 images to the AI generation endpoint', async () => {
+    const generatedPattern = {
+      session_id: 'ai-session',
+      grid_size: { width: 48, height: 48 },
+      pixel_matrix: [['A1']],
+      color_summary: [],
+      total_beads: 1,
+      palette_preset: '221',
+      preview_image: '',
+      ai_image: 'data:image/png;base64,AA=='
+    }
+    const fetchMock = vi
+      .spyOn(globalThis, 'fetch')
+      .mockResolvedValueOnce(
+        new Response(new Uint8Array([1, 2, 3]), {
+          status: 200,
+          headers: { 'content-type': 'image/png' }
+        })
+      )
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify(generatedPattern), { status: 200 })
+      )
+
+    await expect(
+      generatePattern('blob:uploaded-image', { grid_width: '48' }, 'image.png')
+    ).resolves.toEqual({
+      mode: 'server-http',
+      response: generatedPattern
+    })
+
+    expect(fetchMock).toHaveBeenNthCalledWith(1, 'blob:uploaded-image')
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      2,
+      '/api/ai/generate',
+      expect.objectContaining({ method: 'POST' })
+    )
+
+    fetchMock.mockRestore()
   })
 
   it('uses fetch for h5 export requests', async () => {

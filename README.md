@@ -14,6 +14,7 @@ PixelDoodle（像素豆绘）是一个“图片转拼豆图 + ESP32 点阵显示
 ## 1. 当前能力概览
 
 - 图片生成拼豆图（颜色统计、坐标、导出 PNG/PDF/JSON）
+- AI 图生图后自动转换为拼豆图（MiniMax `image-01`）
 - ESP32 64x64 点阵 BLE 显示
 - 每台 ESP32 有唯一设备码（UUID，12 位 HEX）
 - 启动页后显示二维码，二维码参数为 `?u=<UUID>`
@@ -140,6 +141,16 @@ python main.py
 - `HOST`（默认 `0.0.0.0`）
 - `SSL_CERTFILE`
 - `SSL_KEYFILE`
+- `MINIMAX_API_KEY`：MiniMax 服务端 API Key，仅配置在后端或部署平台环境变量中。
+
+MiniMax 图生图的参考图由后端转换为 Base64 Data URL 后直接提交，不需要配置公网图片地址。
+
+本地 PowerShell 示例：
+
+```powershell
+$env:MINIMAX_API_KEY = 'your-key'
+python main.py
+```
 
 ---
 
@@ -193,6 +204,7 @@ https://10.39.251.173:8765/?u=F42DC97179B4
 - `GET /`：主页
 - `GET /api/palette`：调色板与预设
 - `POST /api/generate`：图像转拼豆图
+- `POST /api/ai/generate`：上传参考图，调用 MiniMax 生成图片后转为拼豆图
 - `POST /api/export/png`
 - `POST /api/export/pdf`
 - `POST /api/export/json`

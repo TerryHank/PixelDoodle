@@ -41,6 +41,10 @@ export interface GeneratePatternResponse {
   total_beads: number
   palette_preset: string
   preview_image: string
+  ai_image?: string
+  ai_trace_id?: string | null
+  ai_generation_ms?: number
+  total_generation_ms?: number
 }
 
 export interface ExportJsonResponse {

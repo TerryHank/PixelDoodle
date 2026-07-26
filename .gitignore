@@ -37,6 +37,8 @@ uploads/
 .worktrees/
 frontend-taro/dist/
 frontend-taro/dist-rn/
+frontend-taro/dist-weapp/
+.codex-artifacts/
 frontend-taro/.temp/
 frontend-taro/.metro/
 frontend-taro/node_modules/

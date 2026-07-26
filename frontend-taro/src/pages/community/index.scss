@@ -1,6 +1,6 @@
-@import '@/components/app-tab-bar/index.scss';
-@import '@/components/pattern-thumb/index.scss';
-@import '@/components/profile-avatar/index.scss';
+@use '@/components/app-tab-bar/index.scss' as *;
+@use '@/components/pattern-thumb/index.scss' as *;
+@use '@/components/profile-avatar/index.scss' as *;
 
 .community-page {
   min-height: 100vh;

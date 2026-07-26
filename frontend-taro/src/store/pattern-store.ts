@@ -162,16 +162,12 @@ export const usePatternStore = create<PatternState>((set, get) => ({
       const outcome = await generatePattern(
         filePath,
         fields,
-        options.fileName,
-        {
-          colors: state.fullPaletteList,
-          presets: state.presets
-        }
+        options.fileName
       )
       const response = outcome.response
 
       set(() => ({
-        originalImage: filePath,
+        originalImage: response.ai_image || filePath,
         pixelMatrix: response.pixel_matrix,
         colorSummary: response.color_summary,
         gridSize: response.grid_size,

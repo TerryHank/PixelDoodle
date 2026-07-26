@@ -5,13 +5,7 @@ import type {
 } from '../types/api'
 import { getApiBaseUrl } from './env'
 import { getRuntimeEnv } from '@/utils/runtime-env'
-import {
-  generatePatternLocally,
-  getLocalGenerationUnavailableReason,
-  isLocalGenerationAvailable,
-  type GenerateTransportMode,
-  type LocalPaletteData
-} from './local-generation'
+import type { GenerateTransportMode } from './local-generation'
 
 export type ExportKind = 'png' | 'pdf' | 'json'
 
@@ -53,7 +47,7 @@ function getErrorMessage(statusCode: number, data: unknown) {
 function normalizeUploadError(error: unknown) {
   if (error instanceof Error) {
     if (error.message.toLowerCase().includes('timeout')) {
-      return new Error('本地生成超时，请稍后重试')
+      return new Error('AI 图片生成超时，请稍后重试')
     }
     return error
   }
@@ -61,14 +55,52 @@ function normalizeUploadError(error: unknown) {
   if (error && typeof error === 'object' && 'errMsg' in error) {
     const errMsg = String((error as { errMsg?: unknown }).errMsg || '')
     if (errMsg.toLowerCase().includes('timeout')) {
-      return new Error('本地生成超时，请稍后重试')
+      return new Error('AI 图片生成超时，请稍后重试')
     }
     if (errMsg) {
       return new Error(errMsg)
     }
   }
 
-  return new Error('图案生成失败')
+  return new Error('AI 图案生成失败')
+}
+
+function parseJsonResponse<TResponse>(raw: string, statusCode: number) {
+  let data: TResponse | ApiErrorResponse
+  try {
+    data = JSON.parse(raw) as TResponse | ApiErrorResponse
+  } catch {
+    throw new Error(`Request failed with status ${statusCode}`)
+  }
+
+  if (statusCode >= 400) {
+    throw new Error(getErrorMessage(statusCode, data))
+  }
+
+  return data as TResponse
+}
+
+async function uploadAiImageForH5(
+  filePath: string,
+  fields: Record<string, string>,
+  fileName?: string
+) {
+  const imageResponse = await fetch(filePath)
+  if (!imageResponse.ok) {
+    throw new Error('无法读取待上传图片')
+  }
+
+  const imageBlob = await imageResponse.blob()
+  const formData = new FormData()
+  formData.append('file', imageBlob, fileName || 'upload-image.png')
+  Object.entries(fields).forEach(([key, value]) => formData.append(key, value))
+
+  const response = await fetch(`${getApiBaseUrl()}/api/ai/generate`, {
+    method: 'POST',
+    body: formData
+  })
+  const raw = await response.text()
+  return parseJsonResponse<GeneratePatternResponse>(raw, response.status)
 }
 
 export function buildGenerateFields(input: GeneratePatternInput) {
@@ -97,20 +129,32 @@ export async function fetchPalette() {
 export async function generatePattern(
   filePath: string,
   fields: Record<string, string>,
-  _fileName?: string,
-  localPaletteData?: LocalPaletteData
+  fileName?: string
 ) : Promise<GeneratePatternOutcome> {
-  if (!isLocalGenerationAvailable()) {
-    throw new Error(
-      getLocalGenerationUnavailableReason() || '当前环境不支持本地生成'
-    )
-  }
-
   try {
     const runtime = getRuntimeEnv()
+    if (runtime === 'h5') {
+      return {
+        mode: 'server-http',
+        response: await uploadAiImageForH5(filePath, fields, fileName)
+      }
+    }
+
+    const Taro = (await import('@tarojs/taro')).default
+    const response = await Taro.uploadFile({
+      url: `${getApiBaseUrl()}/api/ai/generate`,
+      filePath,
+      fileName,
+      name: 'file',
+      formData: fields
+    })
+
     return {
-      mode: runtime === 'weapp' ? 'local-js' : 'local-wasm',
-      response: await generatePatternLocally(filePath, fields, localPaletteData)
+      mode: 'server-http',
+      response: parseJsonResponse<GeneratePatternResponse>(
+        response.data,
+        response.statusCode
+      )
     }
   } catch (error) {
     throw normalizeUploadError(error)

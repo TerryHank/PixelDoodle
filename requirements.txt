@@ -1,6 +1,7 @@
 fastapi
 uvicorn[standard]
 pillow
+requests
 numpy
 reportlab<4.1
 python-multipart

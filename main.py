@@ -1,4 +1,3 @@
-import uuid
 import io
 import time
 import asyncio
@@ -6,6 +5,9 @@ import json
 import os
 import sqlite3
 import requests
+import base64
+import uuid
+import numpy as np
 from pathlib import Path
 from datetime import datetime
 from typing import Optional, Dict, Any
@@ -35,6 +37,29 @@ from core.ble_export import (
 
 app = FastAPI(title="BeadCraft", description="Perler Bead Pattern Generator", version="1.0.0")
 
+MAX_IMAGE_UPLOAD_BYTES = 20 * 1024 * 1024
+MAX_MINIMAX_REFERENCE_BYTES = 10 * 1024 * 1024
+MINIMAX_IMAGE_GENERATION_URL = "https://api.minimaxi.com/v1/image_generation"
+DEFAULT_MINIMAX_PROMPT = (
+    "STYLE REFERENCE GENERATION.\n"
+    "Create a photorealistic live-action cinematic photography style reference inspired by the "
+    "uploaded image. Prioritize the rendering style rather than inventing a new story: natural "
+    "skin and material texture, believable filmic lighting, soft highlight roll-off, rich but "
+    "restrained shadows, realistic depth, subtle film grain, and restrained cinematic color "
+    "grading. Keep the dominant color family compatible with the uploaded image. The result "
+    "will be used only as a style reference, so prioritize lighting, color palette, tonal "
+    "response, texture, and cinematic photographic finish."
+)
+SUPPORTED_ASPECT_RATIOS = {
+    "1:1": 1,
+    "16:9": 16 / 9,
+    "4:3": 4 / 3,
+    "3:2": 3 / 2,
+    "2:3": 2 / 3,
+    "3:4": 3 / 4,
+    "9:16": 9 / 16,
+    "21:9": 21 / 9,
+}
 # Static files and templates
 TARO_H5_DIST_DIR = Path("frontend-taro") / "dist-h5"
 TARO_H5_INDEX = TARO_H5_DIST_DIR / "index.html"
@@ -63,6 +88,194 @@ palette = ArtkalPalette()
 sessions: Dict[str, Dict[str, Any]] = {}
 wifi_devices: Dict[str, Dict[str, Any]] = {}
 COMMUNITY_DB_PATH = Path("data") / "community.db"
+
+
+def _pick_aspect_ratio(width: int, height: int) -> str:
+    if width <= 0 or height <= 0:
+        return "1:1"
+
+    ratio = width / height
+    return min(SUPPORTED_ASPECT_RATIOS, key=lambda item: abs(SUPPORTED_ASPECT_RATIOS[item] - ratio))
+
+
+def _get_minimax_dimensions(aspect_ratio: str) -> tuple[int, int]:
+    ratio = SUPPORTED_ASPECT_RATIOS.get(aspect_ratio, 1)
+    if ratio >= 1:
+        height = 512
+        width = round((height * ratio) / 8) * 8
+    else:
+        width = 512
+        height = round((width / ratio) / 8) * 8
+
+    return max(512, min(width, 2048)), max(512, min(height, 2048))
+
+
+def _image_to_data_url(image: Image.Image) -> str:
+    image_buffer = io.BytesIO()
+    image.convert("RGB").save(image_buffer, format="JPEG", quality=90, optimize=True)
+    image_bytes = image_buffer.getvalue()
+
+    if len(image_bytes) > MAX_MINIMAX_REFERENCE_BYTES:
+        raise HTTPException(status_code=400, detail="Reference image exceeds MiniMax 10MB limit")
+
+    encoded_image = base64.b64encode(image_bytes).decode("ascii")
+    return f"data:image/jpeg;base64,{encoded_image}"
+
+
+def _transfer_minimax_style(reference: Image.Image, style_reference: Image.Image) -> Image.Image:
+    """Transfer color and tonal statistics while preserving the source image geometry."""
+    reference_lab = np.asarray(reference.convert("RGB").convert("LAB"), dtype=np.float32)
+    style_lab = np.asarray(style_reference.convert("RGB").convert("LAB"), dtype=np.float32)
+
+    reference_mean = reference_lab.mean(axis=(0, 1), keepdims=True)
+    reference_std = reference_lab.std(axis=(0, 1), keepdims=True)
+    style_mean = style_lab.mean(axis=(0, 1), keepdims=True)
+    style_std = style_lab.std(axis=(0, 1), keepdims=True)
+
+    scale = style_std / np.maximum(reference_std, 1.0)
+    scale = np.clip(
+        scale,
+        np.array([0.85, 0.90, 0.90], dtype=np.float32).reshape(1, 1, 3),
+        np.array([1.15, 1.10, 1.10], dtype=np.float32).reshape(1, 1, 3),
+    )
+    mean_shift = np.clip(
+        style_mean - reference_mean,
+        np.array([-12, -8, -8], dtype=np.float32).reshape(1, 1, 3),
+        np.array([12, 8, 8], dtype=np.float32).reshape(1, 1, 3),
+    )
+    transferred = (
+        (reference_lab - reference_mean)
+        * scale
+        + reference_mean
+        + mean_shift
+    )
+    blend_weights = np.array([0.45, 0.30, 0.30], dtype=np.float32).reshape(1, 1, 3)
+    blended = reference_lab * (1 - blend_weights) + transferred * blend_weights
+    blended = np.clip(blended, 0, 255).astype(np.uint8)
+    return Image.fromarray(blended, mode="LAB").convert("RGB")
+
+
+def _extract_minimax_image(response_data: Dict[str, Any]) -> tuple[bytes, str]:
+    base_resp = response_data.get("base_resp") or {}
+    if base_resp.get("status_code") not in (None, 0, "0"):
+        raise ValueError(str(base_resp.get("status_msg") or "MiniMax image generation failed"))
+
+    image_base64 = ((response_data.get("data") or {}).get("image_base64") or [None])[0]
+    if not isinstance(image_base64, str) or not image_base64:
+        raise ValueError("MiniMax did not return an image")
+
+    encoded_image = image_base64.split(",", 1)[-1]
+    image_bytes = base64.b64decode(encoded_image, validate=True)
+    image = Image.open(io.BytesIO(image_bytes))
+    image.load()
+    return image_bytes, Image.MIME.get(image.format, "image/png")
+
+
+def _generate_minimax_image(reference_data_url: str, prompt: str, aspect_ratio: str) -> tuple[bytes, str, str | None]:
+    api_key = os.getenv("MINIMAX_API_KEY", "").strip()
+    if not api_key:
+        raise HTTPException(status_code=503, detail="MINIMAX_API_KEY is not configured")
+
+    width, height = _get_minimax_dimensions(aspect_ratio)
+    payload = {
+        "model": "image-01",
+        "prompt": prompt,
+        "width": width,
+        "height": height,
+        "response_format": "base64",
+        "n": 1,
+        "prompt_optimizer": False,
+        "subject_reference": [
+            {
+                "type": "character",
+                "image_file": reference_data_url,
+            }
+        ],
+    }
+
+    try:
+        response = requests.post(
+            MINIMAX_IMAGE_GENERATION_URL,
+            headers={
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type": "application/json",
+            },
+            json=payload,
+            timeout=(10, 120),
+        )
+        response.raise_for_status()
+        response_data = response.json()
+        image_bytes, media_type = _extract_minimax_image(response_data)
+    except requests.RequestException as exc:
+        raise HTTPException(status_code=502, detail="MiniMax image generation request failed") from exc
+    except (ValueError, TypeError, KeyError, OSError, base64.binascii.Error) as exc:
+        raise HTTPException(status_code=502, detail="MiniMax returned an invalid image response") from exc
+
+    return image_bytes, media_type, response_data.get("id")
+
+
+def _create_pattern_response(
+    image: Image.Image,
+    *,
+    mode: str,
+    grid_width: int,
+    grid_height: int,
+    led_size: int,
+    pixel_size: int,
+    use_dithering: bool,
+    palette_preset: str,
+    max_colors: int,
+    similarity_threshold: int,
+    remove_bg: bool,
+    contrast: float,
+    saturation: float,
+    sharpness: float,
+) -> Dict[str, Any]:
+    try:
+        result = process_image(
+            image=image,
+            palette=palette,
+            mode=mode,
+            grid_width=grid_width,
+            grid_height=grid_height,
+            pixel_size=pixel_size,
+            use_dithering=use_dithering,
+            palette_preset=palette_preset,
+            max_colors=max_colors,
+            similarity_threshold=similarity_threshold,
+            remove_bg=remove_bg,
+            contrast=contrast,
+            saturation=saturation,
+            sharpness=sharpness,
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Processing failed: {str(exc)}") from exc
+
+    preview_image = generate_preview_base64(result["pixel_matrix"], palette)
+    session_id = str(uuid.uuid4())
+    sessions[session_id] = {
+        "pixel_matrix": result["pixel_matrix"],
+        "color_summary": result["color_summary"],
+        "grid_size": result["grid_size"],
+        "total_beads": result["total_beads"],
+        "led_size": led_size,
+        "created_at": time.time(),
+    }
+
+    if len(sessions) > 50:
+        sorted_keys = sorted(sessions.keys(), key=lambda key: sessions[key].get("created_at", 0))
+        for key in sorted_keys[:-50]:
+            del sessions[key]
+
+    return {
+        "session_id": session_id,
+        "grid_size": result["grid_size"],
+        "pixel_matrix": result["pixel_matrix"],
+        "color_summary": result["color_summary"],
+        "total_beads": result["total_beads"],
+        "palette_preset": palette_preset,
+        "preview_image": preview_image,
+    }
 
 
 def ensure_community_db():
@@ -230,7 +443,7 @@ async def generate_pattern(
 
     # Read and validate file size (20MB limit)
     contents = await file.read()
-    if len(contents) > 20 * 1024 * 1024:
+    if len(contents) > MAX_IMAGE_UPLOAD_BYTES:
         raise HTTPException(status_code=400, detail="File size exceeds 20MB limit")
 
     try:
@@ -238,56 +451,110 @@ async def generate_pattern(
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Failed to open image: {str(e)}")
 
-    # Process the image
+    return _create_pattern_response(
+        image,
+        mode=mode,
+        grid_width=grid_width,
+        grid_height=grid_height,
+        led_size=led_size,
+        pixel_size=pixel_size,
+        use_dithering=dithering_enabled,
+        palette_preset=palette_preset,
+        max_colors=max_colors,
+        similarity_threshold=similarity_threshold,
+        remove_bg=remove_bg_enabled,
+        contrast=contrast,
+        saturation=saturation,
+        sharpness=sharpness,
+    )
+
+
+@app.post("/api/ai/generate")
+async def generate_ai_pattern(
+    file: UploadFile = File(...),
+    prompt: str = Form(DEFAULT_MINIMAX_PROMPT),
+    aspect_ratio: str = Form(""),
+    mode: str = Form("fixed_grid"),
+    grid_width: int = Form(48),
+    grid_height: int = Form(48),
+    led_size: int = Form(64),
+    pixel_size: int = Form(8),
+    use_dithering: str = Form("false"),
+    palette_preset: str = Form("221"),
+    max_colors: int = Form(0),
+    similarity_threshold: int = Form(0),
+    remove_bg: str = Form("false"),
+    contrast: float = Form(0.0),
+    saturation: float = Form(0.0),
+    sharpness: float = Form(0.0),
+):
+    """Generate an image from an uploaded reference, then convert it to a bead pattern."""
+    request_started_at = time.perf_counter()
+
+    if not file.content_type or not file.content_type.startswith("image/"):
+        raise HTTPException(status_code=400, detail="Please upload an image file")
+
+    contents = await file.read()
+    if len(contents) > MAX_IMAGE_UPLOAD_BYTES:
+        raise HTTPException(status_code=400, detail="File size exceeds 20MB limit")
+
     try:
-        result = process_image(
-            image=image,
-            palette=palette,
-            mode=mode,
-            grid_width=grid_width,
-            grid_height=grid_height,
-            pixel_size=pixel_size,
-            use_dithering=dithering_enabled,
-            palette_preset=palette_preset,
-            max_colors=max_colors,
-            similarity_threshold=similarity_threshold,
-            remove_bg=remove_bg_enabled,
-            contrast=contrast,
-            saturation=saturation,
-            sharpness=sharpness,
-        )
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Processing failed: {str(e)}")
+        reference_image = Image.open(io.BytesIO(contents))
+        reference_image.load()
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail="Failed to open image") from exc
 
-    # Generate preview image
-    preview_image = generate_preview_base64(result['pixel_matrix'], palette)
+    normalized_prompt = prompt.strip() or DEFAULT_MINIMAX_PROMPT
+    if len(normalized_prompt) > 1500:
+        raise HTTPException(status_code=400, detail="Prompt exceeds 1500 characters")
 
-    # Create session
-    session_id = str(uuid.uuid4())
-    sessions[session_id] = {
-        'pixel_matrix': result['pixel_matrix'],
-        'color_summary': result['color_summary'],
-        'grid_size': result['grid_size'],
-        'total_beads': result['total_beads'],
-        'led_size': led_size,
-        'created_at': time.time(),
-    }
+    selected_aspect_ratio = aspect_ratio if aspect_ratio in SUPPORTED_ASPECT_RATIOS else _pick_aspect_ratio(
+        reference_image.width,
+        reference_image.height,
+    )
+    reference_data_url = _image_to_data_url(reference_image)
+    ai_started_at = time.perf_counter()
+    ai_image_bytes, ai_media_type, trace_id = await asyncio.to_thread(
+        _generate_minimax_image,
+        reference_data_url,
+        normalized_prompt,
+        selected_aspect_ratio,
+    )
+    ai_generation_ms = round((time.perf_counter() - ai_started_at) * 1000)
 
-    # Clean up old sessions (keep last 50)
-    if len(sessions) > 50:
-        sorted_keys = sorted(sessions.keys(), key=lambda k: sessions[k].get('created_at', 0))
-        for key in sorted_keys[:-50]:
-            del sessions[key]
+    try:
+        ai_image = Image.open(io.BytesIO(ai_image_bytes))
+        ai_image.load()
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail="MiniMax returned an unreadable image") from exc
 
-    return {
-        'session_id': session_id,
-        'grid_size': result['grid_size'],
-        'pixel_matrix': result['pixel_matrix'],
-        'color_summary': result['color_summary'],
-        'total_beads': result['total_beads'],
-        'palette_preset': palette_preset,
-        'preview_image': preview_image,
-    }
+    styled_image = _transfer_minimax_style(reference_image, ai_image)
+    result = _create_pattern_response(
+        styled_image,
+        mode=mode,
+        grid_width=grid_width,
+        grid_height=grid_height,
+        led_size=led_size,
+        pixel_size=pixel_size,
+        use_dithering=use_dithering.lower() in ("true", "1", "yes"),
+        palette_preset=palette_preset,
+        max_colors=max_colors,
+        similarity_threshold=similarity_threshold,
+        remove_bg=remove_bg.lower() in ("true", "1", "yes"),
+        contrast=contrast,
+        saturation=saturation,
+        sharpness=sharpness,
+    )
+    styled_image_buffer = io.BytesIO()
+    styled_image.save(styled_image_buffer, format="PNG")
+    result["ai_image"] = (
+        "data:image/png;base64,"
+        f"{base64.b64encode(styled_image_buffer.getvalue()).decode('ascii')}"
+    )
+    result["ai_trace_id"] = trace_id
+    result["ai_generation_ms"] = ai_generation_ms
+    result["total_generation_ms"] = round((time.perf_counter() - request_started_at) * 1000)
+    return result
 
 
 @app.post("/api/export/png")
