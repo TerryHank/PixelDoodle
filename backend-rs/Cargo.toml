@@ -1,0 +1,38 @@
+[package]
+name = "beadcraft-server"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "backend_rs"
+path = "src/lib.rs"
+
+[[bin]]
+name = "beadcraft-server"
+path = "src/main.rs"
+
+[dependencies]
+axum = { version = "0.8", features = ["multipart"] }
+base64 = "0.22"
+chrono = { version = "0.4", features = ["clock"] }
+crc32fast = "1"
+font8x8 = "0.3"
+image = { version = "0.25", default-features = false, features = ["gif", "jpeg", "png", "webp"] }
+printpdf = { version = "0.8", features = ["png"] }
+rayon = "1.10"
+serialport = "4.7"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+tokio = { version = "1", features = ["full"] }
+tower-http = { version = "0.6", features = ["fs", "trace"] }
+tower = "0.5"
+http = "1"
+uuid = { version = "1", features = ["v4", "serde"] }
+thiserror = "2"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["fmt", "env-filter"] }
+
+[dev-dependencies]
+beadcraft-wasm = { path = "../wasm-engine" }
+http-body-util = "0.1"

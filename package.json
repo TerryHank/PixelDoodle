@@ -1,0 +1,12 @@
+{
+  "name": "pixeldoodle-local-processing-lab",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build:local-processing": "node scripts/build-local-processing.mjs"
+  },
+  "devDependencies": {
+    "esbuild": "^0.25.4",
+    "typescript": "^5.8.3"
+  }
+}

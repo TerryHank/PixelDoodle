@@ -17,12 +17,11 @@ PixelDoodle（像素豆绘）是一个“图片转拼豆图 + ESP32 点阵显示
 - AI 图生图后自动转换为拼豆图（MiniMax `image-01`）
 - ESP32 64x64 点阵 BLE 显示
 - 每台 ESP32 有唯一设备码（UUID，12 位 HEX）
-- 启动页后显示二维码，二维码参数为 `?u=<UUID>`
 - 前端支持：
-  - 扫码识别二维码
-  - 手动输入 UUID
-  - 自动锁定目标设备并尝试 BLE 连接
-  - 浏览器拦截自动连接时弹出“点一下连接这台设备”
+  - 上传图片 / 示例图生成
+  - 浏览器内直接 BLE 连接已授权设备
+  - PNG / PDF / JSON 导出
+  - 本地生成与 Rust 服务端结果 parity 对照
 
 ---
 
@@ -39,6 +38,7 @@ PixelDoodle/
 ├─ data/                      # 颜色数据
 ├─ certs/                     # 本地 HTTPS 证书（可选）
 ├─ docs/
+├─ tools/parity/              # Rust/Python 一致性对照脚本
 └─ firmware/                  # ESP32 固件（PlatformIO）
    ├─ src/main.cpp
    ├─ lib/beadcraft-receiver/
@@ -52,8 +52,9 @@ PixelDoodle/
 
 ### 后端
 
-- Python 3.8+
+- Rust stable toolchain
 - Windows/macOS/Linux
+- Python 3.10+（仅 parity 测试与回溯使用）
 
 ### Taro 前端
 
@@ -132,8 +133,7 @@ python main.py
 
 默认监听：
 
-- `https://0.0.0.0:8765`（如果检测到 `certs/localhost-cert.pem` 和 `certs/localhost-key.pem`）
-- 否则回退为 HTTP
+- `http://0.0.0.0:8765`
 
 可选环境变量：
 

@@ -2,7 +2,6 @@
 __pycache__/
 *.py[cod]
 *$py.class
-
 *.so
 *.egg-info/
 dist/
@@ -13,6 +12,7 @@ build/
 venv/
 env/
 .env
+.venv/
 
 # IDE
 .vscode/
@@ -33,15 +33,27 @@ uploads/
 
 # Test artifacts
 /tmp/
+
+# Superpowers / worktrees / codex artifacts
 .superpowers/
 .worktrees/
+.codex-artifacts/
+
+# Frontend build outputs
 frontend-taro/dist/
 frontend-taro/dist-rn/
 frontend-taro/dist-weapp/
-.codex-artifacts/
 frontend-taro/.temp/
 frontend-taro/.metro/
 frontend-taro/node_modules/
 frontend-taro/.swc/
 frontend-taro/android/.gradle/
 frontend-taro/android/app/build/
+
+# Rust / WASM build outputs
+backend-rs/target/
+wasm-engine/target/
+
+# Node / scratch files
+node_modules/
+.tmp-serial-monitor.py

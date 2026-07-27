@@ -20,6 +20,8 @@ MAGIC_HEADER = bytes([0xBC, 0xD1, 0x32, 0x57])
 BAUD_RATE = 460800  # Optimized baud rate
 TIMEOUT = 10.0  # seconds
 IMAGE_SIZE = 8192  # 64x64 * 2 bytes
+RGB565_BLACK = 0x0000
+TRANSPARENT_RGB565 = 0x0001
 
 
 # === Persistent Serial Connection Pool ===
@@ -112,6 +114,12 @@ def rgb_to_rgb565(r: int, g: int, b: int) -> int:
     return (r5 << 11) | (g6 << 5) | b5
 
 
+def background_fill_rgb565(background_color: Tuple[int, int, int]) -> int:
+    """Encode transparent pixels without colliding with real black beads."""
+    rgb565 = rgb_to_rgb565(*background_color)
+    return TRANSPARENT_RGB565 if rgb565 == RGB565_BLACK else rgb565
+
+
 def pixel_matrix_to_rgb565(
     pixel_matrix: List[List[Optional[str]]],
     palette: ArtkalPalette,
@@ -134,19 +142,18 @@ def pixel_matrix_to_rgb565(
     width = len(pixel_matrix[0])
     
     data = bytearray()
+    background_rgb565 = background_fill_rgb565(background_color)
     
     for row in pixel_matrix:
         for code in row:
             if code is None:
-                r, g, b = background_color
+                rgb565 = background_rgb565
             else:
                 color_info = palette.get_by_code(code)
                 if color_info:
-                    r, g, b = color_info['rgb']
+                    rgb565 = rgb_to_rgb565(*color_info['rgb'])
                 else:
-                    r, g, b = 255, 255, 255  # White for unknown
-            
-            rgb565 = rgb_to_rgb565(r, g, b)
+                    rgb565 = rgb_to_rgb565(255, 255, 255)  # White for unknown
             data.extend(struct.pack('<H', rgb565))  # little-endian uint16
     
     return bytes(data)
