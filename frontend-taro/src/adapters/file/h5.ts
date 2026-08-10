@@ -8,8 +8,13 @@ export const h5FileAdapter: FileAdapter = {
 
     anchor.href = url
     anchor.download = name
+    anchor.style.display = 'none'
+    document.body.appendChild(anchor)
     anchor.click()
 
-    URL.revokeObjectURL(url)
+    setTimeout(() => {
+      anchor.remove()
+      URL.revokeObjectURL(url)
+    }, 0)
   }
 }

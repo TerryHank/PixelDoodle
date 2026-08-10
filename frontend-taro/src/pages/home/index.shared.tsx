@@ -27,6 +27,7 @@ import {
   type ExportKind
 } from '@/services/pattern-service'
 import { autoSendGeneratedPattern } from '@/services/ble-image-sync'
+import { GENERATION_STYLES } from '@/constants/generation-styles'
 import { registerWeappRasterLoader } from '@/services/weapp-raster-loader'
 import { useDeviceStore } from '@/store/device-store'
 import { useHistoryStore } from '@/store/history-store'
@@ -114,20 +115,6 @@ type WeappLocalCanvasNode = HTMLCanvasElement & {
   getContext: (kind: '2d') => CanvasRenderingContext2D | null
 }
 
-function getDifficultyLabel(difficulty: number) {
-  if (difficulty <= 0.0625) return '易'
-  if (difficulty <= 0.125) return '中'
-  if (difficulty <= 0.25) return '难'
-  return '原'
-}
-
-function getDifficultyValue(difficulty: number) {
-  if (difficulty <= 0.0625) return '0.0625'
-  if (difficulty <= 0.125) return '0.125'
-  if (difficulty <= 0.25) return '0.25'
-  return '1'
-}
-
 function getModeQuickPresentation(input: {
   bleConnectionStatus: string
   bleCharacteristicStatus: string
@@ -206,6 +193,7 @@ export default function HomePage() {
   const totalBeads = usePatternStore((state) => state.totalBeads)
   const removeBackground = usePatternStore((state) => state.removeBackground)
   const ledSize = usePatternStore((state) => state.ledSize)
+  const styleIndex = usePatternStore((state) => state.styleIndex)
   const difficulty = usePatternStore((state) => state.difficulty)
   const previewImage = usePatternStore((state) => state.previewImage)
 
@@ -689,26 +677,20 @@ export default function HomePage() {
     })
   }
 
-  async function handleChangeDifficulty(nextDifficultyValue: string) {
-    const nextDifficulty = Number.parseFloat(nextDifficultyValue)
-
-    if (!Number.isFinite(nextDifficulty) || nextDifficulty <= 0) {
+  function handleChangeStyle(nextStyleIndex: number) {
+    if (!GENERATION_STYLES.some((style) => style.index === nextStyleIndex)) {
       return
     }
 
-    usePatternStore.getState().setDifficulty(nextDifficulty)
-
-    const store = usePatternStore.getState()
-
-    if (!store.originalImage) {
-      return
-    }
-
-    try {
-      await runGenerate(store.originalImage)
-    } catch (error) {
+    void applyPatternChangeAndMaybeRegenerate({
+      applyChange: () => {
+        usePatternStore.getState().setStyleIndex(nextStyleIndex)
+      },
+      originalImage: usePatternStore.getState().originalImage,
+      regenerate: runGenerate
+    }).catch((error) => {
       showToast(error instanceof Error ? error.message : '重新生成失败')
-    }
+    })
   }
 
   async function handleToggleBackground() {
@@ -945,6 +927,8 @@ export default function HomePage() {
           paddingBottom: '20px'
         }
       : undefined
+  const styleLabel =
+    GENERATION_STYLES.find((style) => style.index === styleIndex)?.name ?? '日漫世界'
 
   return (
     <View className={`home-page home-page--${currentEnv}`}>
@@ -954,17 +938,17 @@ export default function HomePage() {
       <View className='main-container' style={mainContainerStyle}>
         <View className='result-area'>
           <Toolbar
-            difficultyLabel={getDifficultyLabel(difficulty)}
-            difficultyValue={getDifficultyValue(difficulty)}
             ledSizeLabel={String(ledSize)}
             ledSizeValue={ledSize}
+            styleLabel={styleLabel}
+            styleIndexValue={styleIndex}
             modeQuickConnected={modeQuick.connected}
             modeQuickLabel={modeQuick.label}
             removeBackground={removeBackground}
             targetDeviceUuid={vm.toolbarChipText}
             onClear={handleClear}
-            onChangeDifficulty={handleChangeDifficulty}
             onChangeLedSize={handleChangeLedSize}
+            onChangeStyle={handleChangeStyle}
             onOpenPairSheet={handleOpenPairSheet}
             onOpenSettings={handleOpenSettings}
             onPickImage={handlePickImage}

@@ -7,7 +7,6 @@ import sqlite3
 import requests
 import base64
 import uuid
-import numpy as np
 from pathlib import Path
 from datetime import datetime
 from typing import Optional, Dict, Any
@@ -19,6 +18,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from PIL import Image
 
+from core.bg_remove import remove_background
 from core.color_match import ArtkalPalette
 from core.quantizer import process_image
 from core.exporter import export_png, export_pdf, generate_preview_base64
@@ -38,18 +38,10 @@ from core.ble_export import (
 app = FastAPI(title="BeadCraft", description="Perler Bead Pattern Generator", version="1.0.0")
 
 MAX_IMAGE_UPLOAD_BYTES = 20 * 1024 * 1024
-MAX_MINIMAX_REFERENCE_BYTES = 10 * 1024 * 1024
-MINIMAX_IMAGE_GENERATION_URL = "https://api.minimaxi.com/v1/image_generation"
-DEFAULT_MINIMAX_PROMPT = (
-    "STYLE REFERENCE GENERATION.\n"
-    "Create a photorealistic live-action cinematic photography style reference inspired by the "
-    "uploaded image. Prioritize the rendering style rather than inventing a new story: natural "
-    "skin and material texture, believable filmic lighting, soft highlight roll-off, rich but "
-    "restrained shadows, realistic depth, subtle film grain, and restrained cinematic color "
-    "grading. Keep the dominant color family compatible with the uploaded image. The result "
-    "will be used only as a style reference, so prioritize lighting, color palette, tonal "
-    "response, texture, and cinematic photographic finish."
-)
+MAX_DASHSCOPE_REFERENCE_BYTES = 10 * 1024 * 1024
+DASHSCOPE_IMAGE_GENERATION_URL = "https://dashscope.aliyuncs.com/api/v1/services/aigc/image-generation/generation"
+AI_GENERATIONS_DIR = Path("data") / "ai-generations"
+DEFAULT_DASHSCOPE_STYLE_INDEX = 34  # 日漫世界  # wanx-style-repaint-v1 style index
 SUPPORTED_ASPECT_RATIOS = {
     "1:1": 1,
     "16:9": 16 / 9,
@@ -78,6 +70,12 @@ if TARO_H5_STATIC_DIR.exists():
 else:
     app.mount("/static", StaticFiles(directory="static"), name="static")
 
+AI_GENERATIONS_DIR.mkdir(parents=True, exist_ok=True)
+app.mount(
+    "/ai-generations",
+    StaticFiles(directory=str(AI_GENERATIONS_DIR)),
+    name="ai_generations",
+)
 app.mount("/examples", StaticFiles(directory="docs/examples"), name="examples")
 templates = Jinja2Templates(directory="templates")
 
@@ -98,120 +96,188 @@ def _pick_aspect_ratio(width: int, height: int) -> str:
     return min(SUPPORTED_ASPECT_RATIOS, key=lambda item: abs(SUPPORTED_ASPECT_RATIOS[item] - ratio))
 
 
-def _get_minimax_dimensions(aspect_ratio: str) -> tuple[int, int]:
-    ratio = SUPPORTED_ASPECT_RATIOS.get(aspect_ratio, 1)
-    if ratio >= 1:
-        height = 512
-        width = round((height * ratio) / 8) * 8
-    else:
-        width = 512
-        height = round((width / ratio) / 8) * 8
-
-    return max(512, min(width, 2048)), max(512, min(height, 2048))
-
-
-def _image_to_data_url(image: Image.Image) -> str:
-    image_buffer = io.BytesIO()
-    image.convert("RGB").save(image_buffer, format="JPEG", quality=90, optimize=True)
-    image_bytes = image_buffer.getvalue()
-
-    if len(image_bytes) > MAX_MINIMAX_REFERENCE_BYTES:
-        raise HTTPException(status_code=400, detail="Reference image exceeds MiniMax 10MB limit")
+def _image_bytes_to_data_url(image_bytes: bytes, media_type: str) -> str:
+    if len(image_bytes) > MAX_DASHSCOPE_REFERENCE_BYTES:
+        raise HTTPException(status_code=400, detail="Reference image exceeds DashScope 10MB limit")
 
     encoded_image = base64.b64encode(image_bytes).decode("ascii")
-    return f"data:image/jpeg;base64,{encoded_image}"
+    return f"data:{media_type};base64,{encoded_image}"
 
 
-def _transfer_minimax_style(reference: Image.Image, style_reference: Image.Image) -> Image.Image:
-    """Transfer color and tonal statistics while preserving the source image geometry."""
-    reference_lab = np.asarray(reference.convert("RGB").convert("LAB"), dtype=np.float32)
-    style_lab = np.asarray(style_reference.convert("RGB").convert("LAB"), dtype=np.float32)
-
-    reference_mean = reference_lab.mean(axis=(0, 1), keepdims=True)
-    reference_std = reference_lab.std(axis=(0, 1), keepdims=True)
-    style_mean = style_lab.mean(axis=(0, 1), keepdims=True)
-    style_std = style_lab.std(axis=(0, 1), keepdims=True)
-
-    scale = style_std / np.maximum(reference_std, 1.0)
-    scale = np.clip(
-        scale,
-        np.array([0.85, 0.90, 0.90], dtype=np.float32).reshape(1, 1, 3),
-        np.array([1.15, 1.10, 1.10], dtype=np.float32).reshape(1, 1, 3),
-    )
-    mean_shift = np.clip(
-        style_mean - reference_mean,
-        np.array([-12, -8, -8], dtype=np.float32).reshape(1, 1, 3),
-        np.array([12, 8, 8], dtype=np.float32).reshape(1, 1, 3),
-    )
-    transferred = (
-        (reference_lab - reference_mean)
-        * scale
-        + reference_mean
-        + mean_shift
-    )
-    blend_weights = np.array([0.45, 0.30, 0.30], dtype=np.float32).reshape(1, 1, 3)
-    blended = reference_lab * (1 - blend_weights) + transferred * blend_weights
-    blended = np.clip(blended, 0, 255).astype(np.uint8)
-    return Image.fromarray(blended, mode="LAB").convert("RGB")
+def _image_suffix(media_type: str, filename: str = "") -> str:
+    suffix = Path(filename).suffix.lower()
+    if suffix in {".png", ".jpg", ".jpeg", ".webp", ".gif"}:
+        return suffix
+    return {
+        "image/png": ".png",
+        "image/jpeg": ".jpg",
+        "image/webp": ".webp",
+        "image/gif": ".gif",
+    }.get(media_type, ".img")
 
 
-def _extract_minimax_image(response_data: Dict[str, Any]) -> tuple[bytes, str]:
-    base_resp = response_data.get("base_resp") or {}
-    if base_resp.get("status_code") not in (None, 0, "0"):
-        raise ValueError(str(base_resp.get("status_msg") or "MiniMax image generation failed"))
+def _persist_ai_input(
+    input_bytes: bytes,
+    input_media_type: str,
+    input_filename: str,
+    generation_id: str | None = None,
+) -> tuple[str, Path]:
+    generation_id = generation_id or uuid.uuid4().hex
+    generation_dir = AI_GENERATIONS_DIR / generation_id
+    generation_dir.mkdir(parents=True, exist_ok=True)
 
-    image_base64 = ((response_data.get("data") or {}).get("image_base64") or [None])[0]
-    if not isinstance(image_base64, str) or not image_base64:
-        raise ValueError("MiniMax did not return an image")
-
-    encoded_image = image_base64.split(",", 1)[-1]
-    image_bytes = base64.b64decode(encoded_image, validate=True)
-    image = Image.open(io.BytesIO(image_bytes))
-    image.load()
-    return image_bytes, Image.MIME.get(image.format, "image/png")
+    input_path = generation_dir / f"input{_image_suffix(input_media_type, input_filename)}"
+    input_path.write_bytes(input_bytes)
+    return generation_id, input_path
 
 
-def _generate_minimax_image(reference_data_url: str, prompt: str, aspect_ratio: str) -> tuple[bytes, str, str | None]:
-    api_key = os.getenv("MINIMAX_API_KEY", "").strip()
+def _persist_ai_output(
+    generation_id: str,
+    output_bytes: bytes,
+    output_media_type: str,
+) -> Path:
+    generation_dir = AI_GENERATIONS_DIR / generation_id
+    generation_dir.mkdir(parents=True, exist_ok=True)
+    output_path = generation_dir / f"output{_image_suffix(output_media_type)}"
+    output_path.write_bytes(output_bytes)
+    return output_path
+
+
+def _dashscope_http_error_detail(prefix: str, response: requests.Response | None) -> str:
+    if response is None:
+        return prefix
+
+    details = [f"HTTP {response.status_code}"]
+    try:
+        response_data = response.json()
+    except ValueError:
+        response_data = {}
+
+    error_code = response_data.get("code")
+    error_message = response_data.get("message")
+    request_id = response_data.get("request_id")
+    if error_code:
+        details.append(str(error_code))
+    if error_message:
+        details.append(str(error_message)[:300])
+    if request_id:
+        details.append(f"request_id={request_id}")
+    return f"{prefix}: {'; '.join(details)}"
+
+
+DASHSCOPE_TASK_URL = "https://dashscope.aliyuncs.com/api/v1/tasks"
+_DASHSCOPE_POLL_INTERVAL_S = 2
+_DASHSCOPE_MAX_WAIT_S = 120
+
+
+def _poll_dashscope_task(task_id: str, api_key: str) -> tuple[bytes, str]:
+    """Poll DashScope async task and return (image_bytes, media_type)."""
+    started_at = time.monotonic()
+    while True:
+        elapsed = time.monotonic() - started_at
+        if elapsed > _DASHSCOPE_MAX_WAIT_S:
+            raise HTTPException(status_code=504, detail="DashScope style transfer timed out")
+
+        try:
+            resp = requests.get(
+                f"{DASHSCOPE_TASK_URL}/{task_id}",
+                headers={"Authorization": f"Bearer {api_key}"},
+                timeout=15,
+            )
+            resp.raise_for_status()
+            data = resp.json()
+        except requests.RequestException as exc:
+            raise HTTPException(
+                status_code=502,
+                detail=_dashscope_http_error_detail(
+                    "DashScope task poll failed",
+                    exc.response,
+                ),
+            ) from exc
+
+        output = data.get("output") or {}
+        status = output.get("task_status", "UNKNOWN")
+
+        if status == "SUCCEEDED":
+            results = output.get("results") or []
+            if not results:
+                raise ValueError("DashScope returned no results")
+            result_url = results[0].get("result_url") or results[0].get("url")
+            if not result_url:
+                raise ValueError("DashScope result missing URL")
+
+            img_resp = requests.get(result_url, timeout=30)
+            img_resp.raise_for_status()
+            image_bytes = img_resp.content
+            image = Image.open(io.BytesIO(image_bytes))
+            image.load()
+            return image_bytes, Image.MIME.get(image.format, "image/png")
+
+        if status == "FAILED":
+            error_code = output.get("code") or output.get("error_code")
+            error_message = (
+                output.get("message")
+                or output.get("error_message")
+                or "DashScope style transfer failed"
+            )
+            if error_code:
+                raise ValueError(f"{error_code}: {error_message}")
+            raise ValueError(error_message)
+
+        time.sleep(_DASHSCOPE_POLL_INTERVAL_S)
+
+
+def _generate_dashscope_style(reference_url: str, style_index: int) -> tuple[bytes, str, str | None]:
+    """Submit a style-transfer task to DashScope, poll until complete, return (bytes, media_type, trace_id)."""
+    api_key = os.getenv("DASHSCOPE_API_KEY", "").strip()
     if not api_key:
-        raise HTTPException(status_code=503, detail="MINIMAX_API_KEY is not configured")
+        raise HTTPException(status_code=503, detail="DASHSCOPE_API_KEY is not configured")
 
-    width, height = _get_minimax_dimensions(aspect_ratio)
     payload = {
-        "model": "image-01",
-        "prompt": prompt,
-        "width": width,
-        "height": height,
-        "response_format": "base64",
-        "n": 1,
-        "prompt_optimizer": False,
-        "subject_reference": [
-            {
-                "type": "character",
-                "image_file": reference_data_url,
-            }
-        ],
+        "model": "wanx-style-repaint-v1",
+        "input": {
+            "image_url": reference_url,
+            "style_index": style_index,
+        },
     }
 
     try:
-        response = requests.post(
-            MINIMAX_IMAGE_GENERATION_URL,
+        submit_resp = requests.post(
+            DASHSCOPE_IMAGE_GENERATION_URL,
             headers={
                 "Authorization": f"Bearer {api_key}",
                 "Content-Type": "application/json",
+                "X-DashScope-Async": "enable",
             },
             json=payload,
-            timeout=(10, 120),
+            timeout=30,
         )
-        response.raise_for_status()
-        response_data = response.json()
-        image_bytes, media_type = _extract_minimax_image(response_data)
+        submit_resp.raise_for_status()
+        submit_data = submit_resp.json()
     except requests.RequestException as exc:
-        raise HTTPException(status_code=502, detail="MiniMax image generation request failed") from exc
-    except (ValueError, TypeError, KeyError, OSError, base64.binascii.Error) as exc:
-        raise HTTPException(status_code=502, detail="MiniMax returned an invalid image response") from exc
+        raise HTTPException(
+            status_code=502,
+            detail=_dashscope_http_error_detail(
+                "DashScope style transfer request failed",
+                exc.response,
+            ),
+        ) from exc
 
-    return image_bytes, media_type, response_data.get("id")
+    task_id = (submit_data.get("output") or {}).get("task_id")
+    if not task_id:
+        raise HTTPException(status_code=502, detail="DashScope did not return a task id")
+
+    try:
+        image_bytes, media_type = _poll_dashscope_task(task_id, api_key)
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(
+            status_code=502,
+            detail=f"DashScope style transfer failed: {exc}",
+        ) from exc
+
+    return image_bytes, media_type, task_id
 
 
 def _create_pattern_response(
@@ -472,7 +538,8 @@ async def generate_pattern(
 @app.post("/api/ai/generate")
 async def generate_ai_pattern(
     file: UploadFile = File(...),
-    prompt: str = Form(DEFAULT_MINIMAX_PROMPT),
+    style_index: int = Form(DEFAULT_DASHSCOPE_STYLE_INDEX),
+    reference_image_url: str = Form(""),
     aspect_ratio: str = Form(""),
     mode: str = Form("fixed_grid"),
     grid_width: int = Form(48),
@@ -504,21 +571,33 @@ async def generate_ai_pattern(
     except Exception as exc:
         raise HTTPException(status_code=400, detail="Failed to open image") from exc
 
-    normalized_prompt = prompt.strip() or DEFAULT_MINIMAX_PROMPT
-    if len(normalized_prompt) > 1500:
-        raise HTTPException(status_code=400, detail="Prompt exceeds 1500 characters")
+    # Remove background before sending to DashScope (keep only subject)
+    try:
+        bg_removed_bytes = await asyncio.to_thread(remove_background, contents)
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Background removal failed: {exc}") from exc
 
-    selected_aspect_ratio = aspect_ratio if aspect_ratio in SUPPORTED_ASPECT_RATIOS else _pick_aspect_ratio(
-        reference_image.width,
-        reference_image.height,
+    if style_index not in (-1, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 14, 15, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40):
+        raise HTTPException(status_code=400, detail="Unsupported style_index")
+
+    generation_id, input_path = _persist_ai_input(
+        contents,
+        file.content_type,
+        file.filename or "",
     )
-    reference_data_url = _image_to_data_url(reference_image)
+    # Save background-removed version for DashScope reference
+    bg_removed_filename = "input_nobg.png"
+    (AI_GENERATIONS_DIR / generation_id / bg_removed_filename).write_bytes(bg_removed_bytes)
+
+    if reference_image_url.strip():
+        das_reference = reference_image_url.strip()
+    else:
+        das_reference = _image_bytes_to_data_url(bg_removed_bytes, "image/png")
     ai_started_at = time.perf_counter()
     ai_image_bytes, ai_media_type, trace_id = await asyncio.to_thread(
-        _generate_minimax_image,
-        reference_data_url,
-        normalized_prompt,
-        selected_aspect_ratio,
+        _generate_dashscope_style,
+        das_reference,
+        style_index,
     )
     ai_generation_ms = round((time.perf_counter() - ai_started_at) * 1000)
 
@@ -526,11 +605,10 @@ async def generate_ai_pattern(
         ai_image = Image.open(io.BytesIO(ai_image_bytes))
         ai_image.load()
     except Exception as exc:
-        raise HTTPException(status_code=502, detail="MiniMax returned an unreadable image") from exc
+        raise HTTPException(status_code=502, detail="DashScope returned an unreadable image") from exc
 
-    styled_image = _transfer_minimax_style(reference_image, ai_image)
     result = _create_pattern_response(
-        styled_image,
+        ai_image,
         mode=mode,
         grid_width=grid_width,
         grid_height=grid_height,
@@ -545,12 +623,20 @@ async def generate_ai_pattern(
         saturation=saturation,
         sharpness=sharpness,
     )
-    styled_image_buffer = io.BytesIO()
-    styled_image.save(styled_image_buffer, format="PNG")
-    result["ai_image"] = (
-        "data:image/png;base64,"
-        f"{base64.b64encode(styled_image_buffer.getvalue()).decode('ascii')}"
+    output_path = _persist_ai_output(
+        generation_id,
+        ai_image_bytes,
+        ai_media_type,
     )
+    result["ai_image"] = (
+        f"data:{ai_media_type};base64,"
+        f"{base64.b64encode(ai_image_bytes).decode('ascii')}"
+    )
+    result["ai_generation_id"] = generation_id
+    result["ai_input_path"] = input_path.as_posix()
+    result["ai_output_path"] = output_path.as_posix()
+    if das_reference.startswith(("http://", "https://")):
+        result["ai_reference_url"] = das_reference
     result["ai_trace_id"] = trace_id
     result["ai_generation_ms"] = ai_generation_ms
     result["total_generation_ms"] = round((time.perf_counter() - request_started_at) * 1000)

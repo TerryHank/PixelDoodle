@@ -1,17 +1,17 @@
 export interface ToolbarProps {
   targetDeviceUuid?: string
   removeBackground?: boolean
-  difficultyLabel: string
   ledSizeLabel: string
+  styleLabel: string
   modeQuickLabel: string
   modeQuickConnected?: boolean
-  difficultyValue?: string
   ledSizeValue?: number
+  styleIndexValue?: number
   onToggleBackground?: () => void
   onClear?: () => void
   onPickImage?: () => void
   onOpenPairSheet?: () => void
   onOpenSettings?: () => void
-  onChangeDifficulty?: (value: string) => void
   onChangeLedSize?: (value: number) => void
+  onChangeStyle?: (value: number) => void
 }

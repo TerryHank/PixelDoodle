@@ -1,13 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
-const { uploadFileMock } = vi.hoisted(() => ({
-  uploadFileMock: vi.fn()
-}))
-
-vi.mock('@tarojs/taro', () => ({
-  default: {
-    uploadFile: uploadFileMock
-  }
+const { generatePatternLocallyMock, transformImageStyleMock } = vi.hoisted(() => ({
+  generatePatternLocallyMock: vi.fn(),
+  transformImageStyleMock: vi.fn()
 }))
 
 vi.mock('@/utils/runtime-env', () => ({
@@ -15,28 +10,40 @@ vi.mock('@/utils/runtime-env', () => ({
   normalizeRuntimeEnv: () => 'weapp'
 }))
 
+vi.mock('../local-generation', () => ({
+  generatePatternLocally: generatePatternLocallyMock
+}))
+
+vi.mock('../style-transfer', () => ({
+  transformImageStyle: transformImageStyleMock
+}))
+
 import { generatePattern } from '../pattern-service'
 
-describe('pattern service weapp AI generation', () => {
+describe('pattern service weapp local generation', () => {
   beforeEach(() => {
-    uploadFileMock.mockReset()
+    vi.clearAllMocks()
+    transformImageStyleMock.mockImplementation(async (input) => ({
+      filePath: input.filePath,
+      fileName: input.fileName
+    }))
   })
 
-  it('uploads the selected image to the AI generation endpoint', async () => {
+  it('processes the selected image without uploading it', async () => {
     const response = {
-      session_id: 'ai-session',
+      session_id: 'local-session',
       grid_size: { width: 48, height: 48 },
       pixel_matrix: [['A1']],
       color_summary: [],
       total_beads: 1,
       palette_preset: '221',
-      preview_image: '',
-      ai_image: 'data:image/png;base64,AA=='
+      preview_image: ''
     }
-    uploadFileMock.mockResolvedValue({
-      statusCode: 200,
-      data: JSON.stringify(response)
-    })
+    const paletteData = {
+      colors: [],
+      presets: {}
+    }
+    generatePatternLocallyMock.mockResolvedValue(response)
 
     await expect(
       generatePattern(
@@ -47,31 +54,18 @@ describe('pattern service weapp AI generation', () => {
           grid_height: '48',
           palette_preset: '221'
         },
-        'example.png'
+        'example.png',
+        paletteData
       )
     ).resolves.toEqual({
-      mode: 'server-http',
+      mode: 'local-js',
       response
     })
 
-    expect(uploadFileMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        url: 'https://beadcraft.cvalab.top/api/ai/generate',
-        filePath: '/tmp/example.png',
-        fileName: 'example.png',
-        name: 'file'
-      })
+    expect(generatePatternLocallyMock).toHaveBeenCalledWith(
+      '/tmp/example.png',
+      expect.objectContaining({ grid_width: '48' }),
+      paletteData
     )
-  })
-
-  it('surfaces the backend error message', async () => {
-    uploadFileMock.mockResolvedValue({
-      statusCode: 503,
-      data: JSON.stringify({ detail: 'MINIMAX_API_KEY is not configured' })
-    })
-
-    await expect(
-      generatePattern('/tmp/example.png', { grid_width: '48' }, 'example.png')
-    ).rejects.toThrow('MINIMAX_API_KEY is not configured')
   })
 })

@@ -1,11 +1,15 @@
 import type { ChangeEvent } from 'react'
+import {
+  DEFAULT_GENERATION_STYLE_INDEX,
+  GENERATION_STYLES
+} from '@/constants/generation-styles'
 import type { ToolbarProps } from './types'
 import './index.h5.scss'
 
 export function Toolbar({
   removeBackground = false,
-  difficultyValue = '0.125',
   ledSizeValue = 64,
+  styleIndexValue = DEFAULT_GENERATION_STYLE_INDEX,
   modeQuickLabel,
   modeQuickConnected = false,
   onToggleBackground,
@@ -13,15 +17,15 @@ export function Toolbar({
   onPickImage,
   onOpenPairSheet,
   onOpenSettings,
-  onChangeDifficulty,
-  onChangeLedSize
+  onChangeLedSize,
+  onChangeStyle
 }: ToolbarProps) {
-  function handleDifficultyChange(event: ChangeEvent<HTMLSelectElement>) {
-    onChangeDifficulty?.(event.target.value)
-  }
-
   function handleLedSizeChange(event: ChangeEvent<HTMLSelectElement>) {
     onChangeLedSize?.(Number(event.target.value))
+  }
+
+  function handleStyleChange(event: ChangeEvent<HTMLSelectElement>) {
+    onChangeStyle?.(Number(event.target.value))
   }
 
   return (
@@ -45,15 +49,16 @@ export function Toolbar({
         <span className='toolbar-btn-icon'>+</span>
       </button>
       <select
-        className='led-size-btn'
-        onChange={handleDifficultyChange}
-        title='难度'
-        value={difficultyValue}
+        className='led-size-btn generation-style-select'
+        onChange={handleStyleChange}
+        title='生成风格'
+        value={String(styleIndexValue)}
       >
-        <option value='1'>原</option>
-        <option value='0.25'>难</option>
-        <option value='0.125'>中</option>
-        <option value='0.0625'>易</option>
+        {GENERATION_STYLES.map((style) => (
+          <option key={style.index} value={style.index}>
+            {style.name}
+          </option>
+        ))}
       </select>
       <select
         className='led-size-btn'

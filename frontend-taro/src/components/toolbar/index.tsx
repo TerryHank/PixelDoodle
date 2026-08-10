@@ -1,7 +1,12 @@
 import Taro from '@tarojs/taro'
-import { Image, Text, View } from '@tarojs/components'
+import { Image, Picker, Text, View } from '@tarojs/components'
 import exportIconUrl from '@/assets/icons/toolbar-export.svg'
 import homeIconUrl from '@/assets/icons/toolbar-home.svg'
+import {
+  DEFAULT_GENERATION_STYLE_INDEX,
+  GENERATION_STYLE_NAMES,
+  GENERATION_STYLES
+} from '@/constants/generation-styles'
 import type { ToolbarProps } from './types'
 import './index.scss'
 
@@ -27,55 +32,25 @@ export function ToolbarPickerLabel({ value }: { value: string }) {
 
 export function Toolbar({
   removeBackground = false,
-  difficultyLabel,
   ledSizeLabel,
+  styleLabel,
   modeQuickLabel,
   modeQuickConnected = false,
-  difficultyValue = '0.125',
   ledSizeValue = 64,
+  styleIndexValue = DEFAULT_GENERATION_STYLE_INDEX,
   onToggleBackground,
   onClear,
   onPickImage,
   onOpenPairSheet,
   onOpenSettings,
-  onChangeDifficulty,
-  onChangeLedSize
+  onChangeLedSize,
+  onChangeStyle
 }: ToolbarProps) {
-  const difficultyOptions = [
-    { label: '原', value: '1' },
-    { label: '难', value: '0.25' },
-    { label: '中', value: '0.125' },
-    { label: '易', value: '0.0625' }
-  ] as const
-
   const matrixOptions = [16, 32, 52, 64] as const
-
-  async function handlePickDifficulty() {
-    if (!onChangeDifficulty) return
-
-    const currentIndex = Math.max(
-      0,
-      difficultyOptions.findIndex((item) => item.value === difficultyValue)
-    )
-
-    try {
-      const result = await Taro.showActionSheet({
-        itemList: difficultyOptions.map((item) => item.label),
-        alertText: '选择难度'
-      })
-      onChangeDifficulty(difficultyOptions[result.tapIndex].value)
-    } catch (error) {
-      if (
-        error &&
-        typeof error === 'object' &&
-        'errMsg' in error &&
-        String(error.errMsg).includes('cancel')
-      ) {
-        return
-      }
-      onChangeDifficulty(difficultyOptions[currentIndex].value)
-    }
-  }
+  const selectedStyleOptionIndex = Math.max(
+    0,
+    GENERATION_STYLES.findIndex((item) => item.index === styleIndexValue)
+  )
 
   async function handlePickMatrixSize() {
     if (!onChangeLedSize) return
@@ -119,13 +94,24 @@ export function Toolbar({
       <View className='toolbar-btn' onClick={onPickImage} {...TOOLBAR_HOVER_PROPS}>
         <Text className='toolbar-btn-icon'>+</Text>
       </View>
-      <View
-        className='led-size-btn led-size-btn--picker'
-        onClick={handlePickDifficulty}
-        {...TOOLBAR_HOVER_PROPS}
+      <Picker
+        mode='selector'
+        range={GENERATION_STYLE_NAMES}
+        value={selectedStyleOptionIndex}
+        onChange={(event) => {
+          const selectedStyle = GENERATION_STYLES[Number(event.detail.value)]
+          if (selectedStyle) {
+            onChangeStyle?.(selectedStyle.index)
+          }
+        }}
       >
-        <ToolbarPickerLabel value={difficultyLabel} />
-      </View>
+        <View
+          className='led-size-btn led-size-btn--picker generation-style-picker'
+          {...TOOLBAR_HOVER_PROPS}
+        >
+          <ToolbarPickerLabel value={styleLabel} />
+        </View>
+      </Picker>
       <View
         className='led-size-btn led-size-btn--picker'
         onClick={handlePickMatrixSize}

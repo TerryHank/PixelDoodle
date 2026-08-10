@@ -42,6 +42,10 @@ export interface GeneratePatternResponse {
   palette_preset: string
   preview_image: string
   ai_image?: string
+  ai_generation_id?: string
+  ai_input_path?: string
+  ai_output_path?: string
+  ai_reference_url?: string
   ai_trace_id?: string | null
   ai_generation_ms?: number
   total_generation_ms?: number

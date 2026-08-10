@@ -1,4 +1,9 @@
-import { describe, expect, it, vi } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
+
+const { generatePatternLocallyMock, transformImageStyleMock } = vi.hoisted(() => ({
+  generatePatternLocallyMock: vi.fn(),
+  transformImageStyleMock: vi.fn()
+}))
 
 vi.mock('@tarojs/taro', () => ({
   default: {
@@ -11,101 +16,124 @@ vi.mock('@tarojs/taro', () => ({
   }
 }))
 
-import { buildGenerateFields, exportPattern, generatePattern } from '../pattern-service'
+vi.mock('../local-generation', () => ({
+  generatePatternLocally: generatePatternLocallyMock
+}))
+
+vi.mock('../style-transfer', () => ({
+  transformImageStyle: transformImageStyleMock
+}))
+
+import {
+  buildGenerateFields,
+  exportPattern,
+  fetchPalette,
+  generatePattern
+} from '../pattern-service'
+
+const paletteData = {
+  colors: [
+    {
+      code: 'A1',
+      name: 'White',
+      name_zh: '白色',
+      hex: '#FFFFFF',
+      rgb: [255, 255, 255] as [number, number, number]
+    }
+  ],
+  presets: {}
+}
 
 describe('pattern service', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    transformImageStyleMock.mockImplementation(async (input) => ({
+      filePath: input.filePath,
+      fileName: input.fileName
+    }))
+  })
+
   it('serializes generate options', () => {
     const fields = buildGenerateFields({
       gridWidth: 48,
       gridHeight: 48,
-      palettePreset: '221'
+      palettePreset: '221',
+      styleIndex: 32,
+      prompt: '  watercolor animation  ',
+      referenceImageUrl: '  https://cdn.example.com/reference.png  '
     })
 
     expect(fields.grid_width).toBe('48')
     expect(fields.grid_height).toBe('48')
     expect(fields.palette_preset).toBe('221')
+    expect(fields.style_index).toBe('32')
+    expect(fields.prompt).toBe('watercolor animation')
+    expect(fields.reference_image_url).toBe(
+      'https://cdn.example.com/reference.png'
+    )
   })
 
-  it('uploads H5 images to the AI generation endpoint', async () => {
+  it('loads the Artkal palette without requesting a backend', async () => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch')
+
+    const response = await fetchPalette()
+
+    expect(response.colors.length).toBeGreaterThan(200)
+    expect(response.presets['221']).toBeDefined()
+    expect(fetchMock).not.toHaveBeenCalled()
+    fetchMock.mockRestore()
+  })
+
+  it('bypasses style conversion and generates H5 patterns locally', async () => {
     const generatedPattern = {
-      session_id: 'ai-session',
+      session_id: 'local-session',
       grid_size: { width: 48, height: 48 },
       pixel_matrix: [['A1']],
       color_summary: [],
       total_beads: 1,
       palette_preset: '221',
-      preview_image: '',
-      ai_image: 'data:image/png;base64,AA=='
+      preview_image: ''
     }
-    const fetchMock = vi
-      .spyOn(globalThis, 'fetch')
-      .mockResolvedValueOnce(
-        new Response(new Uint8Array([1, 2, 3]), {
-          status: 200,
-          headers: { 'content-type': 'image/png' }
-        })
-      )
-      .mockResolvedValueOnce(
-        new Response(JSON.stringify(generatedPattern), { status: 200 })
-      )
+    generatePatternLocallyMock.mockResolvedValue(generatedPattern)
+    const fetchMock = vi.spyOn(globalThis, 'fetch')
 
     await expect(
-      generatePattern('blob:uploaded-image', { grid_width: '48' }, 'image.png')
+      generatePattern(
+        'blob:uploaded-image',
+        { grid_width: '48', style_index: '34' },
+        'image.png',
+        paletteData
+      )
     ).resolves.toEqual({
-      mode: 'server-http',
+      mode: 'local-wasm',
       response: generatedPattern
     })
 
-    expect(fetchMock).toHaveBeenNthCalledWith(1, 'blob:uploaded-image')
-    expect(fetchMock).toHaveBeenNthCalledWith(
-      2,
-      '/api/ai/generate',
-      expect.objectContaining({ method: 'POST' })
+    expect(transformImageStyleMock).toHaveBeenCalledWith({
+      filePath: 'blob:uploaded-image',
+      fileName: 'image.png',
+      fields: { grid_width: '48', style_index: '34' }
+    })
+    expect(generatePatternLocallyMock).toHaveBeenCalledWith(
+      'blob:uploaded-image',
+      { grid_width: '48', style_index: '34' },
+      paletteData
     )
-
+    expect(fetchMock).not.toHaveBeenCalled()
     fetchMock.mockRestore()
   })
 
-  it('uses fetch for h5 export requests', async () => {
-    const arrayBuffer = new Uint8Array([1, 2, 3]).buffer
-    const fetchMock = vi
-      .spyOn(globalThis, 'fetch')
-      .mockResolvedValue(
-        new Response(arrayBuffer, {
-          status: 200
-        })
-      )
+  it('exports JSON locally without requesting a backend', async () => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch')
+    const result = await exportPattern('json', {
+      pixel_matrix: [['A1']],
+      color_summary: [{ code: 'A1', count: 1 }]
+    })
+    const parsed = JSON.parse(new TextDecoder().decode(result))
 
-    const result = await exportPattern('json', { foo: 'bar' })
-
-    expect(fetchMock).toHaveBeenCalledWith(
-      '/api/export/json',
-      expect.objectContaining({
-        method: 'POST'
-      })
-    )
-    expect(result).toBeInstanceOf(ArrayBuffer)
-    expect(new Uint8Array(result)).toEqual(new Uint8Array([1, 2, 3]))
-
-    fetchMock.mockRestore()
-  })
-
-  it('throws service errors from h5 export responses', async () => {
-    const fetchMock = vi
-      .spyOn(globalThis, 'fetch')
-      .mockResolvedValue(
-        new Response(JSON.stringify({ detail: 'export failed' }), {
-          status: 500,
-          headers: {
-            'content-type': 'application/json'
-          }
-        })
-      )
-
-    await expect(exportPattern('json', { foo: 'bar' })).rejects.toThrow(
-      'export failed'
-    )
-
+    expect(parsed.pixel_matrix).toEqual([['A1']])
+    expect(parsed.color_summary).toEqual([{ code: 'A1', count: 1 }])
+    expect(fetchMock).not.toHaveBeenCalled()
     fetchMock.mockRestore()
   })
 })

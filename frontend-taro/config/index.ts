@@ -26,13 +26,6 @@ export default defineConfig<'webpack5'>(async (merge) => {
             to: `${outputRoot}/static`
           }
         ]
-      : currentTarget === 'weapp'
-        ? [
-            {
-              from: 'static/local-processing/wasm/beadcraft_wasm_bg.wasm',
-              to: `${outputRoot}/assets/local-processing/beadcraft_wasm_bg.wasm`
-            }
-          ]
       : []
   const applyCommonWebpackChain = (chain: any) => {
     chain.resolve.plugin('tsconfig-paths').use(TsconfigPathsPlugin)

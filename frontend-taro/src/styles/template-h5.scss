@@ -166,6 +166,10 @@ body {
   color: var(--text-primary);
 }
 
+.generation-style-select {
+  min-width: 120px;
+}
+
 /* === Upload Area === */
 .upload-area {
   border: 2px dashed var(--border);

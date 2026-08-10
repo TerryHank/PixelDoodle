@@ -97,20 +97,39 @@ function cloneRaster(raster: WeappImageRaster): WeappImageRaster {
 }
 
 function applyContrast(raster: WeappImageRaster, amount: number) {
-  if (!amount) {
-    return
-  }
-
-  const factor = 1 + amount / 100
   const { data } = raster
-  let mean = 127
+  const histogram = new Array<number>(256).fill(0)
   let accum = 0
 
   for (let index = 0; index < data.length; index += 4) {
-    accum += grayscale([data[index], data[index + 1], data[index + 2]])
+    const gray = clampByte(grayscale([data[index], data[index + 1], data[index + 2]]))
+    histogram[gray] += 1
+    accum += gray
   }
 
-  mean = accum / (data.length / 4)
+  const pixelCount = data.length / 4
+  const mean = pixelCount ? Math.round(accum / pixelCount) : 127
+  let factor = Math.max(0.5, Math.min(1.5, 1 + amount / 100))
+
+  if (amount === 0 && pixelCount) {
+    let cumulative = 0
+    let p5 = 0
+    let p95 = 255
+    let foundLow = false
+    for (let value = 0; value < histogram.length; value += 1) {
+      cumulative += histogram[value]
+      if (!foundLow && cumulative >= pixelCount * 0.05) {
+        p5 = value
+        foundLow = true
+      }
+      if (cumulative >= pixelCount * 0.95) {
+        p95 = value
+        break
+      }
+    }
+    const spread = p95 - p5
+    factor = spread < 100 ? 1.25 : spread < 160 ? 1.15 : 1.05
+  }
 
   for (let index = 0; index < data.length; index += 4) {
     data[index] = clampByte(mean + (data[index] - mean) * factor)
@@ -120,11 +139,9 @@ function applyContrast(raster: WeappImageRaster, amount: number) {
 }
 
 function applySaturation(raster: WeappImageRaster, amount: number) {
-  if (!amount) {
-    return
-  }
-
-  const factor = 1 + amount / 100
+  const factor = amount === 0
+    ? 1.1
+    : Math.max(0.5, Math.min(1.5, 1 + amount / 100))
   const { data } = raster
 
   for (let index = 0; index < data.length; index += 4) {
@@ -136,36 +153,70 @@ function applySaturation(raster: WeappImageRaster, amount: number) {
 }
 
 function applySharpness(raster: WeappImageRaster, amount: number) {
-  if (!amount) {
+  const { width, height, data } = raster
+  if (width < 3 || height < 3) {
     return
   }
 
-  const { width, height, data } = raster
   const source = new Uint8ClampedArray(data)
-  const alpha = Math.max(0, amount / 100)
+  const smooth = new Uint8ClampedArray(source)
+  const factor = amount === 0
+    ? 1.3
+    : Math.max(0, Math.min(2, 1 + amount / 50))
+  const kernel = [1, 1, 1, 1, 5, 1, 1, 1, 1]
 
-  const sample = (x: number, y: number, channel: number) => {
-    const safeX = Math.max(0, Math.min(width - 1, x))
-    const safeY = Math.max(0, Math.min(height - 1, y))
-    return source[(safeY * width + safeX) * 4 + channel]
+  for (let y = 1; y < height - 1; y += 1) {
+    for (let x = 1; x < width - 1; x += 1) {
+      const offset = (y * width + x) * 4
+      for (let channel = 0; channel < 3; channel += 1) {
+        let sum = 0
+        let kernelIndex = 0
+        for (let kernelY = -1; kernelY <= 1; kernelY += 1) {
+          for (let kernelX = -1; kernelX <= 1; kernelX += 1) {
+            const sampleOffset = ((y + kernelY) * width + x + kernelX) * 4
+            sum += source[sampleOffset + channel] * kernel[kernelIndex]
+            kernelIndex += 1
+          }
+        }
+        smooth[offset + channel] = clampByte(sum / 13)
+      }
+    }
   }
 
-  for (let y = 0; y < height; y += 1) {
-    for (let x = 0; x < width; x += 1) {
-      const offset = (y * width + x) * 4
+  for (let index = 0; index < data.length; index += 4) {
+    for (let channel = 0; channel < 3; channel += 1) {
+      data[index + channel] = clampByte(
+        smooth[index + channel] + factor * (source[index + channel] - smooth[index + channel])
+      )
+    }
+  }
+}
 
-      for (let channel = 0; channel < 3; channel += 1) {
-        const center = sample(x, y, channel) * 5
-        const blurred =
-          sample(x - 1, y, channel) +
-          sample(x + 1, y, channel) +
-          sample(x, y - 1, channel) +
-          sample(x, y + 1, channel)
-        const sharpened = center - blurred
-        data[offset + channel] = clampByte(
-          source[offset + channel] * (1 - alpha) + sharpened * alpha
-        )
-      }
+function consolidateExtremes(raster: WeappImageRaster) {
+  const { data } = raster
+  const darkLimit = 80
+  const lightLimit = 210
+
+  for (let index = 0; index < data.length; index += 4) {
+    const rgb: [number, number, number] = [
+      data[index],
+      data[index + 1],
+      data[index + 2]
+    ]
+    const luma = grayscale(rgb)
+    let factor = 1
+    if (luma < darkLimit) {
+      factor = luma / darkLimit
+    } else if (luma > lightLimit) {
+      factor = (255 - luma) / (255 - lightLimit)
+    } else {
+      continue
+    }
+
+    for (let channel = 0; channel < 3; channel += 1) {
+      data[index + channel] = clampByte(
+        luma + factor * (rgb[channel] - luma)
+      )
     }
   }
 }
@@ -684,24 +735,29 @@ function removeBackground(matrix: (number | null)[][]) {
     return
   }
 
-  const corners = [
-    matrix[0][0],
-    matrix[0][width - 1],
-    matrix[height - 1][0],
-    matrix[height - 1][width - 1]
-  ].filter((value): value is number => value !== null)
+  const border: number[] = []
+  for (let x = 0; x < width; x += 1) {
+    if (matrix[0][x] !== null) {
+      border.push(matrix[0][x] as number)
+    }
+    if (height > 1 && matrix[height - 1][x] !== null) {
+      border.push(matrix[height - 1][x] as number)
+    }
+  }
+  for (let y = 1; y < height - 1; y += 1) {
+    if (matrix[y][0] !== null) {
+      border.push(matrix[y][0] as number)
+    }
+    if (width > 1 && matrix[y][width - 1] !== null) {
+      border.push(matrix[y][width - 1] as number)
+    }
+  }
 
-  if (!corners.length) {
+  if (!border.length) {
     return
   }
 
-  const background = [...corners
-    .reduce((accumulator, value) => {
-      accumulator.set(value, (accumulator.get(value) ?? 0) + 1)
-      return accumulator
-    }, new Map<number, number>())
-    .entries()]
-    .sort((lhs, rhs) => rhs[1] - lhs[1])[0]?.[0]
+  const background = mostCommonNeighbor(border)
 
   if (typeof background !== 'number') {
     return
@@ -800,11 +856,16 @@ function renderMatrixAndSummary(
 }
 
 export const __localGenerationJsInternals = {
+  applyContrast,
+  applySaturation,
+  applySharpness,
+  consolidateExtremes,
   buildPaletteState,
   cleanupRareColors,
   mergeSimilarColors,
   capMaxColors,
   smoothEdges,
+  removeBackground,
   reduceRgbForPaletteLookup,
   rgbDistanceSquared
 }
@@ -828,6 +889,7 @@ export function generatePatternLocalJs({
   applyContrast(adjustedSelection, options.contrast)
   applySaturation(adjustedSelection, options.saturation)
   applySharpness(adjustedSelection, options.sharpness)
+  consolidateExtremes(adjustedSelection)
 
   const selectionPixels = rasterToPixels(adjustedSelection)
   const allowed = allowedPaletteIndices(paletteState, options.palette_preset)
@@ -848,6 +910,7 @@ export function generatePatternLocalJs({
   applyContrast(adjustedMid, options.contrast)
   applySaturation(adjustedMid, options.saturation)
   applySharpness(adjustedMid, options.sharpness)
+  consolidateExtremes(adjustedMid)
 
   const quantized = quantizePixels(
     adjustedMid,

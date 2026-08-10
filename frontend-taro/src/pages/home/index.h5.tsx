@@ -19,6 +19,7 @@ import { PatternThumb } from '@/components/pattern-thumb'
 import { ProfileAvatar } from '@/components/profile-avatar'
 import { SettingsSheetH5 } from '@/components/settings-sheet/index.h5'
 import { ToastHost } from '@/components/toast-host'
+import { GENERATION_STYLES } from '@/constants/generation-styles'
 import { autoSendGeneratedPattern } from '@/services/ble-image-sync'
 import { publishCommunityPost } from '@/services/community-service'
 import {
@@ -166,7 +167,7 @@ export default function HomePageH5() {
   })
   const [authorizedBleDevices, setAuthorizedBleDevices] = useState<BleKnownDevice[]>([])
   const [bleConnectedUuid, setBleConnectedUuid] = useState<string | null>(null)
-  const [difficultyMode, setDifficultyMode] = useState('0.125')
+  const [difficultyMode, setDifficultyMode] = useState('0.25')
   const [customPixelSize, setCustomPixelSize] = useState(8)
   const [cropImageUrl, setCropImageUrl] = useState('')
   const [cropImageStyle, setCropImageStyle] = useState<Record<string, string>>({})
@@ -247,6 +248,7 @@ export default function HomePageH5() {
   const totalBeads = usePatternStore((state) => state.totalBeads)
   const removeBackground = usePatternStore((state) => state.removeBackground)
   const ledSize = usePatternStore((state) => state.ledSize)
+  const styleIndex = usePatternStore((state) => state.styleIndex)
   const difficulty = usePatternStore((state) => state.difficulty)
   const isGenerating = usePatternStore((state) => state.isGenerating)
   const targetDeviceUuid = useDeviceStore((state) => state.targetDeviceUuid)
@@ -747,6 +749,25 @@ export default function HomePageH5() {
     }
   }
 
+  async function handleChangeStyle(nextStyleIndex: number) {
+    if (!GENERATION_STYLES.some((style) => style.index === nextStyleIndex)) {
+      return
+    }
+
+    usePatternStore.getState().setStyleIndex(nextStyleIndex)
+
+    const store = usePatternStore.getState()
+    if (!store.originalImage) {
+      return
+    }
+
+    try {
+      await runGenerate(store.originalImage)
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : '重新生成失败')
+    }
+  }
+
   async function handleChangeDifficulty(nextDifficultyValue: string) {
     setDifficultyMode(nextDifficultyValue)
 
@@ -1142,17 +1163,17 @@ export default function HomePageH5() {
               onChange={(event) => handleUploadFileSelection(event.target.files?.[0] ?? null)}
             />
             <select
-              id='difficulty-select'
-              className='led-size-btn'
-              title='难度'
-              value={getDifficultyValue(difficulty)}
-              onChange={(event) => void handleChangeDifficulty(event.target.value)}
+              id='generation-style-select'
+              className='led-size-btn generation-style-select'
+              title='生成风格'
+              value={String(styleIndex)}
+              onChange={(event) => void handleChangeStyle(Number.parseInt(event.target.value, 10))}
             >
-              <option value='1.0'>原</option>
-              <option value='0.25'>难</option>
-              <option value='0.125'>中</option>
-              <option value='0.0625'>易</option>
-              <option value='custom'>自</option>
+              {GENERATION_STYLES.map((style) => (
+                <option key={style.index} value={style.index}>
+                  {style.name}
+                </option>
+              ))}
             </select>
             <select
               id='led-matrix-size'

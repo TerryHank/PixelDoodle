@@ -30,6 +30,7 @@ Thumbs.db
 
 # Uploaded files
 uploads/
+data/ai-generations/
 
 # Test artifacts
 /tmp/

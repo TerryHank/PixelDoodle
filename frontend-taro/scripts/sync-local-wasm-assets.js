@@ -4,6 +4,7 @@ const crypto = require('node:crypto')
 
 const projectRoot = path.resolve(__dirname, '..')
 const sourceDir = path.join(projectRoot, 'static', 'local-processing', 'wasm')
+const dataDir = path.resolve(projectRoot, '..', 'data')
 const targetDir = path.join(projectRoot, 'src', 'generated', 'local-processing')
 
 const sourceJsPath = path.join(sourceDir, 'beadcraft_wasm.js')
@@ -42,12 +43,24 @@ function syncWasmBinary() {
   fs.copyFileSync(sourceWasmPath, targetWasmPath)
 }
 
+function syncPaletteData() {
+  fs.copyFileSync(
+    path.join(dataDir, 'artkal_m_series.json'),
+    path.join(targetDir, 'artkal-m-series.json')
+  )
+  fs.copyFileSync(
+    path.join(dataDir, 'artkal_presets.json'),
+    path.join(targetDir, 'artkal-presets.json')
+  )
+}
+
 ensureDir(targetDir)
 syncJsWrapper()
 syncWasmMeta()
 syncWasmBinary()
+syncPaletteData()
 
 const legacyBase64Path = path.join(targetDir, 'beadcraft-wasm-bg.base64.ts')
 fs.rmSync(legacyBase64Path, { force: true })
 
-console.log('synced local wasm assets into src/generated/local-processing')
+console.log('synced local processing assets into src/generated/local-processing')
