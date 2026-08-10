@@ -1,0 +1,35 @@
+page {
+  --bg: #ffffff;
+  --bg-secondary: #f7f7f7;
+  --border: #e8e8e8;
+  --border-strong: #bfdbfe;
+  --text-primary: #1a1a1a;
+  --text-secondary: #6b6b6b;
+  --accent: #2563eb;
+  --accent-soft: #eff6ff;
+  --card-radius: 12px;
+  --btn-radius: 8px;
+  --shadow-soft: 0 1px 3px rgba(0, 0, 0, 0.08);
+  min-height: 100%;
+  background: var(--bg);
+  color: var(--text-primary);
+  line-height: 1.5;
+}
+
+view,
+text,
+image,
+button,
+input,
+textarea,
+picker,
+scroll-view,
+swiper,
+swiper-item,
+canvas,
+cover-view,
+cover-image {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}

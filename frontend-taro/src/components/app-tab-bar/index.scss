@@ -1,0 +1,45 @@
+.app-tab-bar {
+  backdrop-filter: blur(16PX);
+  background: rgba(255, 255, 255, 0.96);
+  border-top: 1PX solid rgba(226, 232, 240, 0.92);
+  bottom: 0;
+  display: flex;
+  left: 0;
+  padding: 8PX 14PX calc(env(safe-area-inset-bottom, 0px) + 8PX);
+  position: fixed;
+  right: 0;
+  z-index: 1200;
+}
+
+.app-tab-bar__item {
+  align-items: center;
+  border-radius: 16PX;
+  color: var(--text-secondary);
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 2PX;
+  justify-content: center;
+  min-height: 48PX;
+}
+
+.app-tab-bar__item--hover {
+  background: rgba(239, 246, 255, 0.9);
+}
+
+.app-tab-bar__item--active {
+  background: rgba(239, 246, 255, 0.96);
+  color: var(--accent);
+}
+
+.app-tab-bar__icon {
+  font-size: 14PX;
+  font-weight: 700;
+  line-height: 1;
+}
+
+.app-tab-bar__label {
+  font-size: 11PX;
+  font-weight: 600;
+  line-height: 1.2;
+}

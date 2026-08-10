@@ -1,0 +1,50 @@
+.color-panel {
+  margin-top: 20px;
+  width: 100%;
+  max-width: 600px;
+}
+
+.color-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.color-tag {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 2px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+}
+
+.color-tag--active {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.color-tag--muted {
+  opacity: 0.5;
+}
+
+.color-swatch {
+  width: 20px;
+  height: 20px;
+  border-radius: 4px;
+  border: 1px solid rgba(0, 0, 0, 0.1);
+  flex-shrink: 0;
+}
+
+.color-total,
+.color-panel__empty {
+  margin-top: 12px;
+  font-size: 13px;
+  color: var(--text-secondary);
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+  display: block;
+}

@@ -1,6 +1,11 @@
-services:
+﻿services:
   - type: web
     name: beadcraft
-    runtime: rust
-    buildCommand: cargo build --manifest-path backend-rs/Cargo.toml --release
-    startCommand: ./backend-rs/target/release/beadcraft-server
+    runtime: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.10.0
+      - key: DASHSCOPE_API_KEY
+        sync: false

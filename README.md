@@ -2,18 +2,19 @@
 
 PixelDoodle（像素豆绘）是一个“图片转拼豆图 + ESP32 点阵显示”的完整项目，包含：
 
-**Version: v10**
+**Version: 5.26.41**
 
-- Web 前端（上传、裁剪、浏览器本地生成、导出、BLE 连接）
-- Rust/Axum 后端（静态资源分发、生成 fallback、导出、设备接口）
-- Python 对照基线（仅用于 parity 测试与问题回溯）
-- ESP32 固件（BLE 接收图像、设备 UUID、待机页显示）
+- Web 前端（上传、裁剪、生成、导出、扫码）
+- Taro 多端前端（`frontend-taro/`，支持 H5 / 微信小程序 / RN Android）
+- Python/FastAPI 后端（调色、量化、导出、串口接口）
+- ESP32 固件（BLE 接收图像、设备 UUID、二维码配对页）
 
 ---
 
 ## 1. 当前能力概览
 
-- 图片生成拼豆图（默认浏览器本地 WASM 处理，保留 Rust fallback）
+- 图片生成拼豆图（颜色统计、坐标、导出 PNG/PDF/JSON）
+- AI 图生图后自动转换为拼豆图（MiniMax `image-01`）
 - ESP32 64x64 点阵 BLE 显示
 - 每台 ESP32 有唯一设备码（UUID，12 位 HEX）
 - 前端支持：
@@ -28,10 +29,10 @@ PixelDoodle（像素豆绘）是一个“图片转拼豆图 + ESP32 点阵显示
 
 ```text
 PixelDoodle/
-├─ backend-rs/                # Rust/Axum 主后端
-├─ main.py                    # Python 基线入口（不再作为生产入口）
-├─ requirements.txt           # Python 基线依赖
-├─ core/                      # Python 基线图像处理、串口/BLE 能力
+├─ main.py                    # FastAPI 入口
+├─ frontend-taro/             # Taro 多端前端（H5 / 微信小程序 / RN Android）
+├─ requirements.txt
+├─ core/                      # 图像处理、串口/BLE 后端能力
 ├─ static/                    # 前端 JS/CSS
 ├─ templates/                 # HTML 模板
 ├─ data/                      # 颜色数据
@@ -55,6 +56,16 @@ PixelDoodle/
 - Windows/macOS/Linux
 - Python 3.10+（仅 parity 测试与回溯使用）
 
+### Taro 前端
+
+- Node.js 18+
+- npm 9+
+- 微信开发者工具（调试小程序时）
+- JDK（Android / RN 构建）
+- Android SDK（Android / RN 构建）
+- adb（设备调试）
+- Android Studio（打开 `frontend-taro/android`）
+
 ### 固件
 
 - PlatformIO（CLI）
@@ -69,12 +80,55 @@ PixelDoodle/
 
 ---
 
-## 4. 本地启动（Web）
+## 4. Taro 前端开发
 
 在项目根目录执行：
 
 ```bash
-cargo run --manifest-path backend-rs/Cargo.toml --release
+cd frontend-taro
+npm install
+npm run dev:h5
+# 或
+npm run dev:weapp
+# 或
+npm run dev:rn
+```
+
+构建命令：
+
+```bash
+cd frontend-taro
+npm run build:h5
+npm run build:weapp
+npm run build:rn
+npm run apk:debug
+npm run apk:release
+```
+
+说明：
+
+- `frontend-taro/` 是当前主线前端，目标端为 H5、微信小程序和 RN Android。
+- Taro RN Android 调试命令可直接执行：`cd frontend-taro && npm install && npm run dev:rn`。
+- Android Studio 请直接打开 `frontend-taro/android`。
+- APK 构建命令为 `npm run apk:debug` 和 `npm run apk:release`。
+- 当前 `npm run apk:release` 仍复用 `debug.keystore`，只用于本地开发链路验证，不能作为正式发布包直接分发。
+- 项目根目录下 `static/` 与 `templates/` 中的旧网页前端可作为迁移对照，但不再是新的主开发入口。
+- Taro 前端依赖项目根目录的 FastAPI 服务提供 `/api/palette`、`/api/generate`、`/api/export/*`、`/api/wifi/*` 等接口。
+
+## 5. 本地启动（FastAPI）
+
+在项目根目录执行：
+
+```bash
+pip install -r requirements.txt
+python main.py
+```
+
+FastAPI 仍运行在项目根目录，供 Taro H5 和微信小程序共用：
+
+```bash
+pip install -r requirements.txt
+python main.py
 ```
 
 默认监听：
@@ -85,45 +139,22 @@ cargo run --manifest-path backend-rs/Cargo.toml --release
 
 - `PORT`（默认 `8765`）
 - `HOST`（默认 `0.0.0.0`）
-- `APP_ROOT`（可选，显式指定仓库根目录）
+- `SSL_CERTFILE`
+- `SSL_KEYFILE`
+- `MINIMAX_API_KEY`：MiniMax 服务端 API Key，仅配置在后端或部署平台环境变量中。
+
+MiniMax 图生图的参考图由后端转换为 Base64 Data URL 后直接提交，不需要配置公网图片地址。
+
+本地 PowerShell 示例：
+
+```powershell
+$env:MINIMAX_API_KEY = 'your-key'
+python main.py
+```
 
 ---
 
-## 4.1 浏览器本地处理实验
-
-仓库中额外提供两条浏览器本地生图实验链：
-
-- `TypeScript + Web Worker`
-- `Rust + WebAssembly + Web Worker`
-
-相关文件：
-
-- `frontend-local/src/`
-- `wasm-engine/`
-- `static/local-processing/benchmark.html`
-
-前端实验产物构建：
-
-```bash
-npm install
-npm run build:local-processing
-```
-
-WASM 产物构建：
-
-```bash
-rustup target add wasm32-unknown-unknown --toolchain stable-x86_64-pc-windows-msvc
-cargo +stable-x86_64-pc-windows-msvc build --manifest-path wasm-engine/Cargo.toml --target wasm32-unknown-unknown --release
-wasm-bindgen --target web --out-dir static/local-processing/wasm wasm-engine/target/wasm32-unknown-unknown/release/beadcraft_wasm.wasm
-```
-
-基准页地址：
-
-- `/static/local-processing/benchmark.html`
-
----
-
-## 5. 固件编译与烧录
+## 6. 固件编译与烧录
 
 进入固件目录：
 
@@ -151,7 +182,7 @@ https://10.39.251.173:8765/?u=F42DC97179B4
 
 ---
 
-## 6. 配对与发送流程（推荐）
+## 7. 配对与发送流程（推荐）
 
 1. ESP32 上电，显示二维码和设备 UUID。
 2. 前端点击扫码，或手动输入 UUID。
@@ -166,13 +197,14 @@ https://10.39.251.173:8765/?u=F42DC97179B4
 
 ---
 
-## 7. API 速览
+## 8. API 速览
 
 核心接口在 [main.py](./main.py)：
 
 - `GET /`：主页
 - `GET /api/palette`：调色板与预设
 - `POST /api/generate`：图像转拼豆图
+- `POST /api/ai/generate`：上传参考图，调用 MiniMax 生成图片后转为拼豆图
 - `POST /api/export/png`
 - `POST /api/export/pdf`
 - `POST /api/export/json`
@@ -181,12 +213,15 @@ https://10.39.251.173:8765/?u=F42DC97179B4
 - `POST /api/serial/highlight`
 - `GET /api/ble/devices`（旧后端 BLE 扫描）
 - `POST /api/ble/send`（旧后端 BLE 发送）
+- `POST /api/wifi/register`
+- `POST /api/wifi/send`
+- `POST /api/wifi/highlight`
 
 备注：当前主流程已改为浏览器 Web Bluetooth 直连，`/api/ble/*` 主要用于兼容旧方案。
 
 ---
 
-## 8. 常见问题
+## 9. 常见问题
 
 ### Q1：浏览器提示“找不到兼容设备”
 
@@ -211,14 +246,14 @@ https://10.39.251.173:8765/?u=F42DC97179B4
 
 ---
 
-## 9. 开发建议
+## 10. 开发建议
 
-- 前端调试：优先桌面 Chrome/Edge
+- 前端调试：Taro H5 优先桌面 Chrome/Edge，小程序请使用微信开发者工具
 - BLE 联调：先确认设备名、再确认 GATT UUID
 - 固件改动后：务必重新烧录并观察串口日志
 
 ---
 
-## 10. License
+## 11. License
 
 MIT

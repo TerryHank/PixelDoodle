@@ -1,0 +1,25 @@
+.pattern-thumb {
+  background: #fff;
+  border: 1PX solid rgba(226, 232, 240, 0.95);
+  border-radius: 14PX;
+  display: grid;
+  flex-shrink: 0;
+  grid-template-columns: repeat(12, 1fr);
+  height: 84PX;
+  overflow: hidden;
+  width: 84PX;
+}
+
+.pattern-thumb__cell {
+  aspect-ratio: 1;
+}
+
+.pattern-thumb__cell--empty {
+  background:
+    linear-gradient(45deg, rgba(209, 213, 219, 0.95) 25%, transparent 25%),
+    linear-gradient(-45deg, rgba(209, 213, 219, 0.95) 25%, transparent 25%),
+    linear-gradient(45deg, transparent 75%, rgba(209, 213, 219, 0.95) 75%),
+    linear-gradient(-45deg, transparent 75%, rgba(209, 213, 219, 0.95) 75%);
+  background-position: 0 0, 0 4PX, 4PX -4PX, -4PX 0;
+  background-size: 8PX 8PX;
+}

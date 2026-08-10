@@ -1,26 +1,31 @@
-import uuid
 import io
 import time
 import asyncio
 import json
 import os
+import sqlite3
+import requests
+import base64
+import uuid
 from pathlib import Path
 from datetime import datetime
 from typing import Optional, Dict, Any
 from collections import Counter
 
-from fastapi import FastAPI, File, UploadFile, Form, HTTPException, Request
-from fastapi.responses import HTMLResponse, StreamingResponse, JSONResponse
+from fastapi import FastAPI, File, UploadFile, Form, HTTPException, Request, Query
+from fastapi.responses import HTMLResponse, StreamingResponse, JSONResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from PIL import Image
 
+from core.bg_remove import remove_background
 from core.color_match import ArtkalPalette
 from core.quantizer import process_image
 from core.exporter import export_png, export_pdf, generate_preview_base64
 from core.serial_export import (
     list_available_ports,
     send_to_esp32,
+    pixel_matrix_to_rgb565,
     send_highlight_serial,
 )
 from core.ble_export import (
@@ -32,8 +37,45 @@ from core.ble_export import (
 
 app = FastAPI(title="BeadCraft", description="Perler Bead Pattern Generator", version="1.0.0")
 
+MAX_IMAGE_UPLOAD_BYTES = 20 * 1024 * 1024
+MAX_DASHSCOPE_REFERENCE_BYTES = 10 * 1024 * 1024
+DASHSCOPE_IMAGE_GENERATION_URL = "https://dashscope.aliyuncs.com/api/v1/services/aigc/image-generation/generation"
+AI_GENERATIONS_DIR = Path("data") / "ai-generations"
+DEFAULT_DASHSCOPE_STYLE_INDEX = 34  # 日漫世界  # wanx-style-repaint-v1 style index
+SUPPORTED_ASPECT_RATIOS = {
+    "1:1": 1,
+    "16:9": 16 / 9,
+    "4:3": 4 / 3,
+    "3:2": 3 / 2,
+    "2:3": 2 / 3,
+    "3:4": 3 / 4,
+    "9:16": 9 / 16,
+    "21:9": 21 / 9,
+}
 # Static files and templates
-app.mount("/static", StaticFiles(directory="static"), name="static")
+TARO_H5_DIST_DIR = Path("frontend-taro") / "dist-h5"
+TARO_H5_INDEX = TARO_H5_DIST_DIR / "index.html"
+TARO_H5_JS_DIR = TARO_H5_DIST_DIR / "js"
+TARO_H5_CSS_DIR = TARO_H5_DIST_DIR / "css"
+TARO_H5_STATIC_DIR = TARO_H5_DIST_DIR / "static"
+
+if TARO_H5_JS_DIR.exists():
+    app.mount("/js", StaticFiles(directory=str(TARO_H5_JS_DIR)), name="taro_js")
+
+if TARO_H5_CSS_DIR.exists():
+    app.mount("/css", StaticFiles(directory=str(TARO_H5_CSS_DIR)), name="taro_css")
+
+if TARO_H5_STATIC_DIR.exists():
+    app.mount("/static", StaticFiles(directory=str(TARO_H5_STATIC_DIR)), name="taro_static")
+else:
+    app.mount("/static", StaticFiles(directory="static"), name="static")
+
+AI_GENERATIONS_DIR.mkdir(parents=True, exist_ok=True)
+app.mount(
+    "/ai-generations",
+    StaticFiles(directory=str(AI_GENERATIONS_DIR)),
+    name="ai_generations",
+)
 app.mount("/examples", StaticFiles(directory="docs/examples"), name="examples")
 templates = Jinja2Templates(directory="templates")
 
@@ -42,12 +84,375 @@ palette = ArtkalPalette()
 
 # In-memory session storage
 sessions: Dict[str, Dict[str, Any]] = {}
+wifi_devices: Dict[str, Dict[str, Any]] = {}
+COMMUNITY_DB_PATH = Path("data") / "community.db"
+
+
+def _pick_aspect_ratio(width: int, height: int) -> str:
+    if width <= 0 or height <= 0:
+        return "1:1"
+
+    ratio = width / height
+    return min(SUPPORTED_ASPECT_RATIOS, key=lambda item: abs(SUPPORTED_ASPECT_RATIOS[item] - ratio))
+
+
+def _image_bytes_to_data_url(image_bytes: bytes, media_type: str) -> str:
+    if len(image_bytes) > MAX_DASHSCOPE_REFERENCE_BYTES:
+        raise HTTPException(status_code=400, detail="Reference image exceeds DashScope 10MB limit")
+
+    encoded_image = base64.b64encode(image_bytes).decode("ascii")
+    return f"data:{media_type};base64,{encoded_image}"
+
+
+def _image_suffix(media_type: str, filename: str = "") -> str:
+    suffix = Path(filename).suffix.lower()
+    if suffix in {".png", ".jpg", ".jpeg", ".webp", ".gif"}:
+        return suffix
+    return {
+        "image/png": ".png",
+        "image/jpeg": ".jpg",
+        "image/webp": ".webp",
+        "image/gif": ".gif",
+    }.get(media_type, ".img")
+
+
+def _persist_ai_input(
+    input_bytes: bytes,
+    input_media_type: str,
+    input_filename: str,
+    generation_id: str | None = None,
+) -> tuple[str, Path]:
+    generation_id = generation_id or uuid.uuid4().hex
+    generation_dir = AI_GENERATIONS_DIR / generation_id
+    generation_dir.mkdir(parents=True, exist_ok=True)
+
+    input_path = generation_dir / f"input{_image_suffix(input_media_type, input_filename)}"
+    input_path.write_bytes(input_bytes)
+    return generation_id, input_path
+
+
+def _persist_ai_output(
+    generation_id: str,
+    output_bytes: bytes,
+    output_media_type: str,
+) -> Path:
+    generation_dir = AI_GENERATIONS_DIR / generation_id
+    generation_dir.mkdir(parents=True, exist_ok=True)
+    output_path = generation_dir / f"output{_image_suffix(output_media_type)}"
+    output_path.write_bytes(output_bytes)
+    return output_path
+
+
+def _dashscope_http_error_detail(prefix: str, response: requests.Response | None) -> str:
+    if response is None:
+        return prefix
+
+    details = [f"HTTP {response.status_code}"]
+    try:
+        response_data = response.json()
+    except ValueError:
+        response_data = {}
+
+    error_code = response_data.get("code")
+    error_message = response_data.get("message")
+    request_id = response_data.get("request_id")
+    if error_code:
+        details.append(str(error_code))
+    if error_message:
+        details.append(str(error_message)[:300])
+    if request_id:
+        details.append(f"request_id={request_id}")
+    return f"{prefix}: {'; '.join(details)}"
+
+
+DASHSCOPE_TASK_URL = "https://dashscope.aliyuncs.com/api/v1/tasks"
+_DASHSCOPE_POLL_INTERVAL_S = 2
+_DASHSCOPE_MAX_WAIT_S = 120
+
+
+def _poll_dashscope_task(task_id: str, api_key: str) -> tuple[bytes, str]:
+    """Poll DashScope async task and return (image_bytes, media_type)."""
+    started_at = time.monotonic()
+    while True:
+        elapsed = time.monotonic() - started_at
+        if elapsed > _DASHSCOPE_MAX_WAIT_S:
+            raise HTTPException(status_code=504, detail="DashScope style transfer timed out")
+
+        try:
+            resp = requests.get(
+                f"{DASHSCOPE_TASK_URL}/{task_id}",
+                headers={"Authorization": f"Bearer {api_key}"},
+                timeout=15,
+            )
+            resp.raise_for_status()
+            data = resp.json()
+        except requests.RequestException as exc:
+            raise HTTPException(
+                status_code=502,
+                detail=_dashscope_http_error_detail(
+                    "DashScope task poll failed",
+                    exc.response,
+                ),
+            ) from exc
+
+        output = data.get("output") or {}
+        status = output.get("task_status", "UNKNOWN")
+
+        if status == "SUCCEEDED":
+            results = output.get("results") or []
+            if not results:
+                raise ValueError("DashScope returned no results")
+            result_url = results[0].get("result_url") or results[0].get("url")
+            if not result_url:
+                raise ValueError("DashScope result missing URL")
+
+            img_resp = requests.get(result_url, timeout=30)
+            img_resp.raise_for_status()
+            image_bytes = img_resp.content
+            image = Image.open(io.BytesIO(image_bytes))
+            image.load()
+            return image_bytes, Image.MIME.get(image.format, "image/png")
+
+        if status == "FAILED":
+            error_code = output.get("code") or output.get("error_code")
+            error_message = (
+                output.get("message")
+                or output.get("error_message")
+                or "DashScope style transfer failed"
+            )
+            if error_code:
+                raise ValueError(f"{error_code}: {error_message}")
+            raise ValueError(error_message)
+
+        time.sleep(_DASHSCOPE_POLL_INTERVAL_S)
+
+
+def _generate_dashscope_style(reference_url: str, style_index: int) -> tuple[bytes, str, str | None]:
+    """Submit a style-transfer task to DashScope, poll until complete, return (bytes, media_type, trace_id)."""
+    api_key = os.getenv("DASHSCOPE_API_KEY", "").strip()
+    if not api_key:
+        raise HTTPException(status_code=503, detail="DASHSCOPE_API_KEY is not configured")
+
+    payload = {
+        "model": "wanx-style-repaint-v1",
+        "input": {
+            "image_url": reference_url,
+            "style_index": style_index,
+        },
+    }
+
+    try:
+        submit_resp = requests.post(
+            DASHSCOPE_IMAGE_GENERATION_URL,
+            headers={
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type": "application/json",
+                "X-DashScope-Async": "enable",
+            },
+            json=payload,
+            timeout=30,
+        )
+        submit_resp.raise_for_status()
+        submit_data = submit_resp.json()
+    except requests.RequestException as exc:
+        raise HTTPException(
+            status_code=502,
+            detail=_dashscope_http_error_detail(
+                "DashScope style transfer request failed",
+                exc.response,
+            ),
+        ) from exc
+
+    task_id = (submit_data.get("output") or {}).get("task_id")
+    if not task_id:
+        raise HTTPException(status_code=502, detail="DashScope did not return a task id")
+
+    try:
+        image_bytes, media_type = _poll_dashscope_task(task_id, api_key)
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(
+            status_code=502,
+            detail=f"DashScope style transfer failed: {exc}",
+        ) from exc
+
+    return image_bytes, media_type, task_id
+
+
+def _create_pattern_response(
+    image: Image.Image,
+    *,
+    mode: str,
+    grid_width: int,
+    grid_height: int,
+    led_size: int,
+    pixel_size: int,
+    use_dithering: bool,
+    palette_preset: str,
+    max_colors: int,
+    similarity_threshold: int,
+    remove_bg: bool,
+    contrast: float,
+    saturation: float,
+    sharpness: float,
+) -> Dict[str, Any]:
+    try:
+        result = process_image(
+            image=image,
+            palette=palette,
+            mode=mode,
+            grid_width=grid_width,
+            grid_height=grid_height,
+            pixel_size=pixel_size,
+            use_dithering=use_dithering,
+            palette_preset=palette_preset,
+            max_colors=max_colors,
+            similarity_threshold=similarity_threshold,
+            remove_bg=remove_bg,
+            contrast=contrast,
+            saturation=saturation,
+            sharpness=sharpness,
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Processing failed: {str(exc)}") from exc
+
+    preview_image = generate_preview_base64(result["pixel_matrix"], palette)
+    session_id = str(uuid.uuid4())
+    sessions[session_id] = {
+        "pixel_matrix": result["pixel_matrix"],
+        "color_summary": result["color_summary"],
+        "grid_size": result["grid_size"],
+        "total_beads": result["total_beads"],
+        "led_size": led_size,
+        "created_at": time.time(),
+    }
+
+    if len(sessions) > 50:
+        sorted_keys = sorted(sessions.keys(), key=lambda key: sessions[key].get("created_at", 0))
+        for key in sorted_keys[:-50]:
+            del sessions[key]
+
+    return {
+        "session_id": session_id,
+        "grid_size": result["grid_size"],
+        "pixel_matrix": result["pixel_matrix"],
+        "color_summary": result["color_summary"],
+        "total_beads": result["total_beads"],
+        "palette_preset": palette_preset,
+        "preview_image": preview_image,
+    }
+
+
+def ensure_community_db():
+    COMMUNITY_DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+    with sqlite3.connect(COMMUNITY_DB_PATH) as conn:
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS community_posts (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                title TEXT NOT NULL,
+                description TEXT NOT NULL,
+                author_id TEXT NOT NULL,
+                author_nickname TEXT NOT NULL,
+                author_avatar_seed TEXT NOT NULL,
+                palette_preset TEXT NOT NULL,
+                grid_width INTEGER NOT NULL,
+                grid_height INTEGER NOT NULL,
+                total_beads INTEGER NOT NULL,
+                pixel_matrix TEXT NOT NULL,
+                color_summary TEXT NOT NULL,
+                downloads INTEGER NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS community_comments (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                post_id INTEGER NOT NULL,
+                author_id TEXT NOT NULL,
+                author_nickname TEXT NOT NULL,
+                author_avatar_seed TEXT NOT NULL,
+                content TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                FOREIGN KEY(post_id) REFERENCES community_posts(id) ON DELETE CASCADE
+            )
+            """
+        )
+        conn.commit()
+
+
+def community_db():
+    ensure_community_db()
+    conn = sqlite3.connect(COMMUNITY_DB_PATH)
+    conn.row_factory = sqlite3.Row
+    return conn
+
+
+def _serialize_community_post(row: sqlite3.Row):
+    color_summary = json.loads(row["color_summary"])
+    return {
+        "id": row["id"],
+        "title": row["title"],
+        "description": row["description"],
+        "author": {
+            "id": row["author_id"],
+            "nickname": row["author_nickname"],
+            "avatar_seed": row["author_avatar_seed"],
+        },
+        "palette_preset": row["palette_preset"],
+        "grid_size": {
+            "width": row["grid_width"],
+            "height": row["grid_height"],
+        },
+        "total_beads": row["total_beads"],
+        "pixel_matrix": json.loads(row["pixel_matrix"]),
+        "color_summary": color_summary,
+        "created_at": row["created_at"],
+        "downloads": row["downloads"],
+        "comments_count": row["comments_count"],
+    }
+
+
+def _serialize_community_comment(row: sqlite3.Row):
+    return {
+        "id": row["id"],
+        "post_id": row["post_id"],
+        "author": {
+            "id": row["author_id"],
+            "nickname": row["author_nickname"],
+            "avatar_seed": row["author_avatar_seed"],
+        },
+        "content": row["content"],
+        "created_at": row["created_at"],
+    }
+
+
+def _community_post_row(conn: sqlite3.Connection, post_id: int):
+    return conn.execute(
+        """
+        SELECT
+            p.*,
+            (
+                SELECT COUNT(*)
+                FROM community_comments c
+                WHERE c.post_id = p.id
+            ) AS comments_count
+        FROM community_posts p
+        WHERE p.id = ?
+        """,
+        (post_id,),
+    ).fetchone()
 
 
 @app.get("/", response_class=HTMLResponse)
 async def index(request: Request):
     """Serve the main page."""
-    return templates.TemplateResponse(request, "index.html")
+    if TARO_H5_INDEX.exists():
+        return FileResponse(TARO_H5_INDEX)
+    return templates.TemplateResponse("index.html", {"request": request})
 
 
 @app.get("/api/palette")
@@ -104,7 +509,7 @@ async def generate_pattern(
 
     # Read and validate file size (20MB limit)
     contents = await file.read()
-    if len(contents) > 20 * 1024 * 1024:
+    if len(contents) > MAX_IMAGE_UPLOAD_BYTES:
         raise HTTPException(status_code=400, detail="File size exceeds 20MB limit")
 
     try:
@@ -112,56 +517,130 @@ async def generate_pattern(
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Failed to open image: {str(e)}")
 
-    # Process the image
+    return _create_pattern_response(
+        image,
+        mode=mode,
+        grid_width=grid_width,
+        grid_height=grid_height,
+        led_size=led_size,
+        pixel_size=pixel_size,
+        use_dithering=dithering_enabled,
+        palette_preset=palette_preset,
+        max_colors=max_colors,
+        similarity_threshold=similarity_threshold,
+        remove_bg=remove_bg_enabled,
+        contrast=contrast,
+        saturation=saturation,
+        sharpness=sharpness,
+    )
+
+
+@app.post("/api/ai/generate")
+async def generate_ai_pattern(
+    file: UploadFile = File(...),
+    style_index: int = Form(DEFAULT_DASHSCOPE_STYLE_INDEX),
+    reference_image_url: str = Form(""),
+    aspect_ratio: str = Form(""),
+    mode: str = Form("fixed_grid"),
+    grid_width: int = Form(48),
+    grid_height: int = Form(48),
+    led_size: int = Form(64),
+    pixel_size: int = Form(8),
+    use_dithering: str = Form("false"),
+    palette_preset: str = Form("221"),
+    max_colors: int = Form(0),
+    similarity_threshold: int = Form(0),
+    remove_bg: str = Form("false"),
+    contrast: float = Form(0.0),
+    saturation: float = Form(0.0),
+    sharpness: float = Form(0.0),
+):
+    """Generate an image from an uploaded reference, then convert it to a bead pattern."""
+    request_started_at = time.perf_counter()
+
+    if not file.content_type or not file.content_type.startswith("image/"):
+        raise HTTPException(status_code=400, detail="Please upload an image file")
+
+    contents = await file.read()
+    if len(contents) > MAX_IMAGE_UPLOAD_BYTES:
+        raise HTTPException(status_code=400, detail="File size exceeds 20MB limit")
+
     try:
-        result = process_image(
-            image=image,
-            palette=palette,
-            mode=mode,
-            grid_width=grid_width,
-            grid_height=grid_height,
-            pixel_size=pixel_size,
-            use_dithering=dithering_enabled,
-            palette_preset=palette_preset,
-            max_colors=max_colors,
-            similarity_threshold=similarity_threshold,
-            remove_bg=remove_bg_enabled,
-            contrast=contrast,
-            saturation=saturation,
-            sharpness=sharpness,
-        )
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Processing failed: {str(e)}")
+        reference_image = Image.open(io.BytesIO(contents))
+        reference_image.load()
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail="Failed to open image") from exc
 
-    # Generate preview image
-    preview_image = generate_preview_base64(result['pixel_matrix'], palette)
+    # Remove background before sending to DashScope (keep only subject)
+    try:
+        bg_removed_bytes = await asyncio.to_thread(remove_background, contents)
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Background removal failed: {exc}") from exc
 
-    # Create session
-    session_id = str(uuid.uuid4())
-    sessions[session_id] = {
-        'pixel_matrix': result['pixel_matrix'],
-        'color_summary': result['color_summary'],
-        'grid_size': result['grid_size'],
-        'total_beads': result['total_beads'],
-        'led_size': led_size,
-        'created_at': time.time(),
-    }
+    if style_index not in (-1, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 14, 15, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40):
+        raise HTTPException(status_code=400, detail="Unsupported style_index")
 
-    # Clean up old sessions (keep last 50)
-    if len(sessions) > 50:
-        sorted_keys = sorted(sessions.keys(), key=lambda k: sessions[k].get('created_at', 0))
-        for key in sorted_keys[:-50]:
-            del sessions[key]
+    generation_id, input_path = _persist_ai_input(
+        contents,
+        file.content_type,
+        file.filename or "",
+    )
+    # Save background-removed version for DashScope reference
+    bg_removed_filename = "input_nobg.png"
+    (AI_GENERATIONS_DIR / generation_id / bg_removed_filename).write_bytes(bg_removed_bytes)
 
-    return {
-        'session_id': session_id,
-        'grid_size': result['grid_size'],
-        'pixel_matrix': result['pixel_matrix'],
-        'color_summary': result['color_summary'],
-        'total_beads': result['total_beads'],
-        'palette_preset': palette_preset,
-        'preview_image': preview_image,
-    }
+    if reference_image_url.strip():
+        das_reference = reference_image_url.strip()
+    else:
+        das_reference = _image_bytes_to_data_url(bg_removed_bytes, "image/png")
+    ai_started_at = time.perf_counter()
+    ai_image_bytes, ai_media_type, trace_id = await asyncio.to_thread(
+        _generate_dashscope_style,
+        das_reference,
+        style_index,
+    )
+    ai_generation_ms = round((time.perf_counter() - ai_started_at) * 1000)
+
+    try:
+        ai_image = Image.open(io.BytesIO(ai_image_bytes))
+        ai_image.load()
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail="DashScope returned an unreadable image") from exc
+
+    result = _create_pattern_response(
+        ai_image,
+        mode=mode,
+        grid_width=grid_width,
+        grid_height=grid_height,
+        led_size=led_size,
+        pixel_size=pixel_size,
+        use_dithering=use_dithering.lower() in ("true", "1", "yes"),
+        palette_preset=palette_preset,
+        max_colors=max_colors,
+        similarity_threshold=similarity_threshold,
+        remove_bg=remove_bg.lower() in ("true", "1", "yes"),
+        contrast=contrast,
+        saturation=saturation,
+        sharpness=sharpness,
+    )
+    output_path = _persist_ai_output(
+        generation_id,
+        ai_image_bytes,
+        ai_media_type,
+    )
+    result["ai_image"] = (
+        f"data:{ai_media_type};base64,"
+        f"{base64.b64encode(ai_image_bytes).decode('ascii')}"
+    )
+    result["ai_generation_id"] = generation_id
+    result["ai_input_path"] = input_path.as_posix()
+    result["ai_output_path"] = output_path.as_posix()
+    if das_reference.startswith(("http://", "https://")):
+        result["ai_reference_url"] = das_reference
+    result["ai_trace_id"] = trace_id
+    result["ai_generation_ms"] = ai_generation_ms
+    result["total_generation_ms"] = round((time.perf_counter() - request_started_at) * 1000)
+    return result
 
 
 @app.post("/api/export/png")
@@ -404,10 +883,364 @@ async def send_to_ble(data: dict):
         raise HTTPException(status_code=500, detail=f"BLE send failed: {str(e)}")
 
 
+async def _register_wifi_device_impl(data: dict):
+    device_uuid = (data.get('device_uuid') or '').strip().upper()
+    ip = (data.get('ip') or '').strip()
+    if not device_uuid or not ip:
+        raise HTTPException(status_code=400, detail="device_uuid and ip are required")
+
+    wifi_devices[device_uuid] = {
+        "ip": ip,
+        "updated_at": time.time(),
+    }
+    return {"success": True, "device_uuid": device_uuid, "ip": ip}
+
+
+@app.get("/api/wifi/devices")
+async def list_wifi_devices():
+    """List all registered WiFi devices."""
+    return {"devices": wifi_devices, "count": len(wifi_devices)}
+
+
+async def _send_to_wifi_impl(data: dict):
+    pixel_matrix = data.get('pixel_matrix')
+    if not pixel_matrix:
+        raise HTTPException(status_code=400, detail="pixel_matrix is required")
+
+    device_uuid = (data.get('device_uuid') or '').strip().upper()
+    if not device_uuid:
+        raise HTTPException(status_code=400, detail="device_uuid is required")
+
+    entry = wifi_devices.get(device_uuid)
+    if not entry:
+        raise HTTPException(status_code=404, detail=f"WiFi device {device_uuid} is not registered")
+
+    bg_color = tuple(data.get('background_color', [0, 0, 0]))
+    try:
+        rgb565_data = pixel_matrix_to_rgb565(pixel_matrix, palette, bg_color)
+        
+        # ESP32 expects exactly 8192 bytes (64x64 * 2), pad if smaller
+        EXPECTED_SIZE = 8192
+        if len(rgb565_data) < EXPECTED_SIZE:
+            rgb565_data = rgb565_data + b'\x00' * (EXPECTED_SIZE - len(rgb565_data))
+        elif len(rgb565_data) > EXPECTED_SIZE:
+            rgb565_data = rgb565_data[:EXPECTED_SIZE]
+        
+        response = requests.post(
+            f"http://{entry['ip']}:8766/image",
+            data=rgb565_data,
+            headers={"Content-Type": "application/octet-stream"},
+            timeout=15,
+        )
+        response.raise_for_status()
+        return {
+            "success": True,
+            "bytes_sent": len(rgb565_data),
+            "duration_ms": 0,
+            "device_uuid": device_uuid,
+            "ip": entry["ip"],
+        }
+    except requests.exceptions.ConnectTimeout:
+        raise HTTPException(status_code=504, detail=f"WiFi device {device_uuid} ({entry['ip']}) connection timeout - device may be offline")
+    except requests.exceptions.Timeout:
+        raise HTTPException(status_code=504, detail=f"WiFi device {device_uuid} ({entry['ip']}) response timeout")
+    except requests.exceptions.ConnectionError:
+        raise HTTPException(status_code=503, detail=f"WiFi device {device_uuid} ({entry['ip']}) unreachable - check network connection")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"WiFi send failed: {str(e)}")
+
+
+async def _highlight_wifi_impl(data: dict):
+    device_uuid = (data.get('device_uuid') or '').strip().upper()
+    if not device_uuid:
+        raise HTTPException(status_code=400, detail="device_uuid is required")
+
+    entry = wifi_devices.get(device_uuid)
+    if not entry:
+        raise HTTPException(status_code=404, detail=f"WiFi device {device_uuid} is not registered")
+
+    highlight_colors = data.get('highlight_colors', [])
+    packet = bytearray()
+    if not highlight_colors:
+        packet.append(0x05)
+    else:
+        packet.extend([0x04, len(highlight_colors)])
+        for color in highlight_colors:
+            if len(color) != 3:
+                continue
+            rgb565 = (
+                ((color[0] >> 3) & 0x1F) << 11 |
+                ((color[1] >> 2) & 0x3F) << 5 |
+                ((color[2] >> 3) & 0x1F)
+            )
+            packet.extend(rgb565.to_bytes(2, 'little'))
+
+    try:
+        response = requests.post(
+            f"http://{entry['ip']}:8766/highlight",
+            data=bytes(packet),
+            headers={"Content-Type": "application/octet-stream"},
+            timeout=5,
+        )
+        response.raise_for_status()
+        return {"success": True, "device_uuid": device_uuid, "ip": entry["ip"]}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"WiFi highlight failed: {str(e)}")
+
+
+# Compatible WiFi API routes (keep old and new paths aligned)
+@app.post("/api/wifi/register")
+@app.post("/api/wifi/register/")
+@app.post("/wifi/register")
+@app.post("/wifi/register/")
+async def register_wifi_device(data: dict):
+    return await _register_wifi_device_impl(data)
+
+
+@app.post("/api/wifi/send")
+@app.post("/api/wifi/send/")
+@app.post("/wifi/send")
+@app.post("/wifi/send/")
+async def send_to_wifi(data: dict):
+    return await _send_to_wifi_impl(data)
+
+
+@app.post("/api/wifi/highlight")
+@app.post("/api/wifi/highlight/")
+@app.post("/wifi/highlight")
+@app.post("/wifi/highlight/")
+async def highlight_wifi(data: dict):
+    return await _highlight_wifi_impl(data)
+
+
+@app.get("/api/community/posts")
+async def list_community_posts(limit: int = Query(20, ge=1, le=60)):
+    with community_db() as conn:
+        rows = conn.execute(
+            """
+            SELECT
+                p.*,
+                (
+                    SELECT COUNT(*)
+                    FROM community_comments c
+                    WHERE c.post_id = p.id
+                ) AS comments_count
+            FROM community_posts p
+            ORDER BY p.id DESC
+            LIMIT ?
+            """,
+            (limit,),
+        ).fetchall()
+
+    return {"posts": [_serialize_community_post(row) for row in rows]}
+
+
+@app.post("/api/community/posts")
+async def create_community_post(data: dict):
+    required_fields = [
+        "title",
+        "author_id",
+        "author_nickname",
+        "author_avatar_seed",
+        "palette_preset",
+        "grid_size",
+        "total_beads",
+        "pixel_matrix",
+        "color_summary",
+    ]
+    for field in required_fields:
+        if field not in data:
+            raise HTTPException(status_code=400, detail=f"{field} is required")
+
+    grid_size = data.get("grid_size") or {}
+    created_at = datetime.now().isoformat()
+
+    with community_db() as conn:
+        cursor = conn.execute(
+            """
+            INSERT INTO community_posts (
+                title,
+                description,
+                author_id,
+                author_nickname,
+                author_avatar_seed,
+                palette_preset,
+                grid_width,
+                grid_height,
+                total_beads,
+                pixel_matrix,
+                color_summary,
+                downloads,
+                created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?)
+            """,
+            (
+                str(data.get("title") or "").strip() or "未命名图案",
+                str(data.get("description") or "").strip(),
+                str(data.get("author_id") or "").strip(),
+                str(data.get("author_nickname") or "").strip() or "像素玩家",
+                str(data.get("author_avatar_seed") or "").strip() or "像素玩家",
+                str(data.get("palette_preset") or "221"),
+                int(grid_size.get("width") or 0),
+                int(grid_size.get("height") or 0),
+                int(data.get("total_beads") or 0),
+                json.dumps(data.get("pixel_matrix"), ensure_ascii=False),
+                json.dumps(data.get("color_summary"), ensure_ascii=False),
+                created_at,
+            ),
+        )
+        post_id = int(cursor.lastrowid)
+        conn.commit()
+        row = _community_post_row(conn, post_id)
+
+    if row is None:
+        raise HTTPException(status_code=500, detail="Failed to load created community post")
+
+    return _serialize_community_post(row)
+
+
+@app.get("/api/community/posts/{post_id}")
+async def get_community_post(post_id: int):
+    with community_db() as conn:
+        row = _community_post_row(conn, post_id)
+        if row is None:
+            raise HTTPException(status_code=404, detail="Community post not found")
+        comments = conn.execute(
+            """
+            SELECT *
+            FROM community_comments
+            WHERE post_id = ?
+            ORDER BY id ASC
+            """,
+            (post_id,),
+        ).fetchall()
+
+    post = _serialize_community_post(row)
+    post["comments"] = [_serialize_community_comment(comment) for comment in comments]
+    return post
+
+
+@app.post("/api/community/posts/{post_id}/comments")
+async def create_community_comment(post_id: int, data: dict):
+    content = str(data.get("content") or "").strip()
+    if not content:
+        raise HTTPException(status_code=400, detail="content is required")
+
+    with community_db() as conn:
+        row = _community_post_row(conn, post_id)
+        if row is None:
+            raise HTTPException(status_code=404, detail="Community post not found")
+        conn.execute(
+            """
+            INSERT INTO community_comments (
+                post_id,
+                author_id,
+                author_nickname,
+                author_avatar_seed,
+                content,
+                created_at
+            ) VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (
+                post_id,
+                str(data.get("author_id") or "").strip(),
+                str(data.get("author_nickname") or "").strip() or "像素玩家",
+                str(data.get("author_avatar_seed") or "").strip() or "像素玩家",
+                content,
+                datetime.now().isoformat(),
+            ),
+        )
+        conn.commit()
+        comments = conn.execute(
+            """
+            SELECT *
+            FROM community_comments
+            WHERE post_id = ?
+            ORDER BY id ASC
+            """,
+            (post_id,),
+        ).fetchall()
+        row = _community_post_row(conn, post_id)
+
+    post = _serialize_community_post(row)
+    post["comments"] = [_serialize_community_comment(comment) for comment in comments]
+    return post
+
+
+@app.get("/api/community/posts/{post_id}/download/json")
+async def download_community_post_json(post_id: int):
+    with community_db() as conn:
+        row = _community_post_row(conn, post_id)
+        if row is None:
+            raise HTTPException(status_code=404, detail="Community post not found")
+        conn.execute(
+            "UPDATE community_posts SET downloads = downloads + 1 WHERE id = ?",
+            (post_id,),
+        )
+        conn.commit()
+
+    payload = {
+        "version": "1.0",
+        "exported_at": datetime.now().isoformat(),
+        "dimensions": {
+            "width": row["grid_width"],
+            "height": row["grid_height"],
+        },
+        "pixel_matrix": json.loads(row["pixel_matrix"]),
+        "color_summary": json.loads(row["color_summary"]),
+    }
+    body = json.dumps(payload, indent=2, ensure_ascii=False).encode("utf-8")
+    filename = f"community_pattern_{post_id}.json"
+    return StreamingResponse(
+        io.BytesIO(body),
+        media_type="application/json",
+        headers={"Content-Disposition": f"attachment; filename={filename}"},
+    )
+
+
+@app.get("/api/community/posts/{post_id}/download/png")
+async def download_community_post_png(post_id: int):
+    with community_db() as conn:
+        row = _community_post_row(conn, post_id)
+        if row is None:
+            raise HTTPException(status_code=404, detail="Community post not found")
+        conn.execute(
+            "UPDATE community_posts SET downloads = downloads + 1 WHERE id = ?",
+            (post_id,),
+        )
+        conn.commit()
+
+    pixel_matrix = json.loads(row["pixel_matrix"])
+    color_summary = json.loads(row["color_summary"])
+    color_data = {entry["code"]: entry["hex"] for entry in color_summary}
+    png_bytes = export_png(
+        pixel_matrix,
+        color_data,
+        color_summary,
+        16,
+        True,
+        True,
+        True,
+        row["palette_preset"],
+    )
+    filename = f"community_pattern_{post_id}.png"
+    return StreamingResponse(
+        io.BytesIO(png_bytes),
+        media_type="image/png",
+        headers={"Content-Disposition": f"attachment; filename={filename}"},
+    )
+
+
 if __name__ == "__main__":
     import uvicorn
     port = int(os.getenv("PORT", "8765"))
     host = os.getenv("HOST", "0.0.0.0")
+    reload_enabled = os.getenv("UVICORN_RELOAD", "false").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
     cert_file = Path(os.getenv("SSL_CERTFILE", "certs/localhost-cert.pem"))
     key_file = Path(os.getenv("SSL_KEYFILE", "certs/localhost-key.pem"))
 
@@ -415,7 +1248,7 @@ if __name__ == "__main__":
         "app": "main:app",
         "host": host,
         "port": port,
-        "reload": True,
+        "reload": reload_enabled,
     }
 
     # if cert_file.exists() and key_file.exists():

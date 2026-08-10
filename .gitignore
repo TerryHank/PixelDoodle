@@ -2,7 +2,6 @@
 __pycache__/
 *.py[cod]
 *$py.class
-
 *.so
 *.egg-info/
 dist/
@@ -31,19 +30,31 @@ Thumbs.db
 
 # Uploaded files
 uploads/
+data/ai-generations/
 
 # Test artifacts
 /tmp/
 
-# Local brainstorming artifacts
+# Superpowers / worktrees / codex artifacts
 .superpowers/
+.worktrees/
+.codex-artifacts/
 
-# Rust build artifacts
+# Frontend build outputs
+frontend-taro/dist/
+frontend-taro/dist-rn/
+frontend-taro/dist-weapp/
+frontend-taro/.temp/
+frontend-taro/.metro/
+frontend-taro/node_modules/
+frontend-taro/.swc/
+frontend-taro/android/.gradle/
+frontend-taro/android/app/build/
+
+# Rust / WASM build outputs
 backend-rs/target/
 wasm-engine/target/
 
-# Node / browser-local build workspace
+# Node / scratch files
 node_modules/
-
-# Local scratch files
 .tmp-serial-monitor.py
