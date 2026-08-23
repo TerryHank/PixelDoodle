@@ -12,8 +12,8 @@ PixelDoodle（像素豆绘）是一个“图片转拼豆图 + ESP32 点阵显示
 Tauri 2 Android 调试 APK 的一键构建与验收信息见
 [frontend-taro/ANDROID_TAURI_BUILD.md](./frontend-taro/ANDROID_TAURI_BUILD.md)。
 
-版本边界：v11 的 Tauri 2 Android APK 是当前已完成构建验收的稳定基线；v12
-新增的万相 CloudBase 接入仅用于微信小程序，不能据此声称 Android/Tauri 已接通万相。
+版本边界：v11 保留为此前的 Android 稳定基线；v12.0.1 已生成新的 Tauri 2 Android
+调试 APK，但 v12 新增的万相 CloudBase 接入仍仅用于微信小程序，Android/Tauri 未接通万相。
 
 ---
 

@@ -13,7 +13,8 @@
 ```
 
 `DASHSCOPE_API_KEY` 只允许存在于 CloudBase 云函数环境变量中，禁止写入前端代码、
-小程序包、配置文件或 Git。Android/Tauri 不使用这条链路；v11 APK 仍是已验收的稳定基线。
+小程序包、配置文件或 Git。Android/Tauri 不使用这条链路；v12.0.1 Android 调试 APK
+只是现有 H5/Tauri 功能的测试包，不包含可用的万相生图能力。
 
 ## 2. 云函数契约
 
