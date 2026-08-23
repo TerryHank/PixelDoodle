@@ -1,6 +1,6 @@
 [package]
 name = "pixeldoodle"
-version = "11.0.0"
+version = "12.0.0"
 description = "PixelDoodle Android application shell"
 authors = ["PixelDoodle"]
 license = ""

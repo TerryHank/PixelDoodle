@@ -2,7 +2,7 @@
 
 PixelDoodle（像素豆绘）是一个“图片转拼豆图 + ESP32 点阵显示”的完整项目，包含：
 
-**Version: 11.0.0**
+**Version: 12.0.0**
 
 - Web 前端（上传、裁剪、生成、导出、扫码）
 - Taro 多端前端（`frontend-taro/`，支持 H5 / 微信小程序 / RN Android）
@@ -12,12 +12,15 @@ PixelDoodle（像素豆绘）是一个“图片转拼豆图 + ESP32 点阵显示
 Tauri 2 Android 调试 APK 的一键构建与验收信息见
 [frontend-taro/ANDROID_TAURI_BUILD.md](./frontend-taro/ANDROID_TAURI_BUILD.md)。
 
+版本边界：v11 的 Tauri 2 Android APK 是当前已完成构建验收的稳定基线；v12
+新增的万相 CloudBase 接入仅用于微信小程序，不能据此声称 Android/Tauri 已接通万相。
+
 ---
 
 ## 1. 当前能力概览
 
 - 图片生成拼豆图（颜色统计、坐标、导出 PNG/PDF/JSON）
-- AI 图生图后自动转换为拼豆图（MiniMax `image-01`）
+- AI 图生图后自动转换为拼豆图（DashScope `wanx-style-repaint-v1`）
 - ESP32 64x64 点阵 BLE 显示
 - 每台 ESP32 有唯一设备码（UUID，12 位 HEX）
 - 前端支持：
@@ -106,6 +109,7 @@ npm run build:weapp
 npm run build:rn
 npm run apk:debug
 npm run apk:release
+npm run test:cloudfunctions
 ```
 
 说明：
@@ -115,6 +119,7 @@ npm run apk:release
 - Android Studio 请直接打开 `frontend-taro/android`。
 - APK 构建命令为 `npm run apk:debug` 和 `npm run apk:release`。
 - 当前 `npm run apk:release` 仍复用 `debug.keystore`，只用于本地开发链路验证，不能作为正式发布包直接分发。
+- v12 微信小程序通过 CloudBase 云函数异步调用万相；部署步骤见 [frontend-taro/WANXIANG_CLOUDBASE.md](./frontend-taro/WANXIANG_CLOUDBASE.md)。
 - 项目根目录下 `static/` 与 `templates/` 中的旧网页前端可作为迁移对照，但不再是新的主开发入口。
 - Taro 前端依赖项目根目录的 FastAPI 服务提供 `/api/palette`、`/api/generate`、`/api/export/*`、`/api/wifi/*` 等接口。
 
@@ -144,16 +149,23 @@ python main.py
 - `HOST`（默认 `0.0.0.0`）
 - `SSL_CERTFILE`
 - `SSL_KEYFILE`
-- `MINIMAX_API_KEY`：MiniMax 服务端 API Key，仅配置在后端或部署平台环境变量中。
+- `DASHSCOPE_API_KEY`：DashScope 服务端 API Key，仅配置在 FastAPI 后端或 CloudBase 云函数环境变量中，严禁写入前端、小程序包或 Git。
+- `DASHSCOPE_API_BASE_URL`：可选的 `/api/v1` 根地址；北京地域可配置业务空间专属地址。
 
-MiniMax 图生图的参考图由后端转换为 Base64 Data URL 后直接提交，不需要配置公网图片地址。
+FastAPI 兼容链路会将图生图参考图转换为 Base64 Data URL，再提交给 DashScope
+`wanx-style-repaint-v1`，不需要配置公网图片地址。
 
 本地 PowerShell 示例：
 
 ```powershell
-$env:MINIMAX_API_KEY = 'your-key'
+$env:DASHSCOPE_API_KEY = 'your-key'
 python main.py
 ```
+
+v12 微信小程序使用独立的 CloudBase 异步链路：前端上传参考图，调用
+`submitStyleTransfer` 提交任务，再调用 `queryStyleTransfer` 轮询并取得云存储结果。
+此链路不经过前端保存密钥。现有 FastAPI `POST /api/ai/generate` 保留为后端兼容链路，
+两条链路不要混淆。
 
 ---
 
@@ -209,7 +221,7 @@ https://10.39.251.173:8765/?u=F42DC97179B4
 - `GET /`：主页
 - `GET /api/palette`：调色板与预设
 - `POST /api/generate`：图像转拼豆图
-- `POST /api/ai/generate`：上传参考图，调用 MiniMax 生成图片后转为拼豆图
+- `POST /api/ai/generate`：后端兼容链路；上传参考图，调用 DashScope `wanx-style-repaint-v1` 后转为拼豆图
 - `POST /api/export/png`
 - `POST /api/export/pdf`
 - `POST /api/export/json`

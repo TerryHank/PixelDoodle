@@ -11,11 +11,13 @@ from starlette.datastructures import Headers, UploadFile
 
 from main import (
     DEFAULT_DASHSCOPE_STYLE_INDEX,
+    SUPPORTED_DASHSCOPE_STYLE_INDEXES,
     _dashscope_http_error_detail,
     _image_bytes_to_data_url,
     _persist_ai_input,
     _persist_ai_output,
     _pick_aspect_ratio,
+    _validate_dashscope_image_dimensions,
     generate_ai_pattern,
 )
 
@@ -28,6 +30,21 @@ class DashScopeImageGenerationTests(unittest.TestCase):
 
     def test_default_style_is_japanese_anime_world(self):
         self.assertEqual(DEFAULT_DASHSCOPE_STYLE_INDEX, 34)
+
+    def test_only_implemented_preset_styles_are_accepted(self):
+        self.assertNotIn(-1, SUPPORTED_DASHSCOPE_STYLE_INDEXES)
+        self.assertIn(34, SUPPORTED_DASHSCOPE_STYLE_INDEXES)
+
+    def test_validates_documented_dashscope_image_dimensions(self):
+        _validate_dashscope_image_dimensions(256, 256)
+        _validate_dashscope_image_dimensions(3240, 5760)
+
+        for size in ((255, 256), (5761, 3240), (1024, 511)):
+            with self.subTest(size=size), self.assertRaisesRegex(
+                Exception,
+                "DashScope reference image",
+            ):
+                _validate_dashscope_image_dimensions(*size)
 
     def test_encodes_reference_bytes_to_base64_data_url(self):
         image_buffer = io.BytesIO()
@@ -63,7 +80,13 @@ class DashScopeImageGenerationTests(unittest.TestCase):
         self.assertIn("request_id=request-123", detail)
 
     def test_dashscope_submit_uses_async_header_and_image_url(self):
-        with patch.dict("main.os.environ", {"DASHSCOPE_API_KEY": "test-key"}), patch(
+        with patch.dict(
+            "main.os.environ",
+            {
+                "DASHSCOPE_API_KEY": "test-key",
+                "DASHSCOPE_API_BASE_URL": "https://workspace.example/api/v1/",
+            },
+        ), patch(
             "main.requests.post"
         ) as post_mock, patch(
             "main._poll_dashscope_task",
@@ -78,6 +101,10 @@ class DashScopeImageGenerationTests(unittest.TestCase):
 
             call_args = post_mock.call_args
             self.assertEqual(
+                call_args.args[0],
+                "https://workspace.example/api/v1/services/aigc/image-generation/generation",
+            )
+            self.assertEqual(
                 call_args.kwargs["headers"]["X-DashScope-Async"], "enable"
             )
             payload = call_args.kwargs["json"]
@@ -86,7 +113,7 @@ class DashScopeImageGenerationTests(unittest.TestCase):
             self.assertEqual(payload["input"]["style_index"], 3)
 
     def test_ai_endpoint_uses_base64_and_passes_style_index_to_dashscope(self):
-        source = Image.new("RGB", (16, 16), "white")
+        source = Image.new("RGB", (256, 256), "white")
         buf = io.BytesIO()
         source.save(buf, format="PNG")
 

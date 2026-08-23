@@ -16,7 +16,8 @@ if (!fs.existsSync(sourceConfigPath) || !fs.existsSync(path.join(projectRoot, ou
 const config = JSON.parse(fs.readFileSync(sourceConfigPath, 'utf8'))
 const outputConfig = {
   ...config,
-  miniprogramRoot: './'
+  miniprogramRoot: './',
+  cloudfunctionRoot: '../cloudfunctions/'
 }
 
 fs.writeFileSync(outputConfigPath, `${JSON.stringify(outputConfig, null, 2)}\n`, 'utf8')

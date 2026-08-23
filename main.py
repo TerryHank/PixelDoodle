@@ -45,9 +45,20 @@ app = FastAPI(title="BeadCraft", description="Perler Bead Pattern Generator", ve
 
 MAX_IMAGE_UPLOAD_BYTES = 20 * 1024 * 1024
 MAX_DASHSCOPE_REFERENCE_BYTES = 10 * 1024 * 1024
-DASHSCOPE_IMAGE_GENERATION_URL = "https://dashscope.aliyuncs.com/api/v1/services/aigc/image-generation/generation"
+DEFAULT_DASHSCOPE_API_BASE_URL = "https://dashscope.aliyuncs.com/api/v1"
 AI_GENERATIONS_DIR = Path("data") / "ai-generations"
 DEFAULT_DASHSCOPE_STYLE_INDEX = 34  # 日漫世界  # wanx-style-repaint-v1 style index
+SUPPORTED_DASHSCOPE_STYLE_INDEXES = {
+    0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 14, 15,
+    30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40,
+}
+SUPPORTED_DASHSCOPE_MEDIA_TYPES = {
+    "image/jpeg",
+    "image/jpg",
+    "image/png",
+    "image/bmp",
+    "image/webp",
+}
 SUPPORTED_ASPECT_RATIOS = {
     "1:1": 1,
     "16:9": 16 / 9,
@@ -58,6 +69,12 @@ SUPPORTED_ASPECT_RATIOS = {
     "9:16": 9 / 16,
     "21:9": 21 / 9,
 }
+
+
+def _dashscope_api_url(path: str) -> str:
+    configured_base_url = os.getenv("DASHSCOPE_API_BASE_URL", "").strip()
+    base_url = (configured_base_url or DEFAULT_DASHSCOPE_API_BASE_URL).rstrip("/")
+    return f"{base_url}/{path.lstrip('/')}"
 # Static files and templates
 TARO_H5_DIST_DIR = Path("frontend-taro") / "dist-h5"
 TARO_H5_INDEX = TARO_H5_DIST_DIR / "index.html"
@@ -229,6 +246,28 @@ def _image_bytes_to_data_url(image_bytes: bytes, media_type: str) -> str:
     return f"data:{media_type};base64,{encoded_image}"
 
 
+def _validate_dashscope_image_dimensions(width: int, height: int) -> None:
+    """Validate the documented wanx-style-repaint-v1 input limits."""
+    if width < 256 or height < 256:
+        raise HTTPException(
+            status_code=400,
+            detail="DashScope reference image must be at least 256x256",
+        )
+
+    long_side = max(width, height)
+    short_side = min(width, height)
+    if long_side > 5760 or short_side > 3240:
+        raise HTTPException(
+            status_code=400,
+            detail="DashScope reference image exceeds the 5760x3240 limit",
+        )
+    if long_side / short_side > 2:
+        raise HTTPException(
+            status_code=400,
+            detail="DashScope reference image aspect ratio exceeds 2:1",
+        )
+
+
 def _image_suffix(media_type: str, filename: str = "") -> str:
     suffix = Path(filename).suffix.lower()
     if suffix in {".png", ".jpg", ".jpeg", ".webp", ".gif"}:
@@ -290,7 +329,6 @@ def _dashscope_http_error_detail(prefix: str, response: requests.Response | None
     return f"{prefix}: {'; '.join(details)}"
 
 
-DASHSCOPE_TASK_URL = "https://dashscope.aliyuncs.com/api/v1/tasks"
 _DASHSCOPE_POLL_INTERVAL_S = 2
 _DASHSCOPE_MAX_WAIT_S = 120
 
@@ -305,7 +343,7 @@ def _poll_dashscope_task(task_id: str, api_key: str) -> tuple[bytes, str]:
 
         try:
             resp = requests.get(
-                f"{DASHSCOPE_TASK_URL}/{task_id}",
+                _dashscope_api_url(f"tasks/{task_id}"),
                 headers={"Authorization": f"Bearer {api_key}"},
                 timeout=15,
             )
@@ -368,7 +406,7 @@ def _generate_dashscope_style(reference_url: str, style_index: int) -> tuple[byt
 
     try:
         submit_resp = requests.post(
-            DASHSCOPE_IMAGE_GENERATION_URL,
+            _dashscope_api_url("services/aigc/image-generation/generation"),
             headers={
                 "Authorization": f"Bearer {api_key}",
                 "Content-Type": "application/json",
@@ -685,6 +723,12 @@ async def generate_ai_pattern(
 
     if not file.content_type or not file.content_type.startswith("image/"):
         raise HTTPException(status_code=400, detail="Please upload an image file")
+    upload_media_type = file.content_type.lower()
+    if upload_media_type not in SUPPORTED_DASHSCOPE_MEDIA_TYPES:
+        raise HTTPException(
+            status_code=400,
+            detail="DashScope supports JPEG, PNG, BMP and WEBP images",
+        )
 
     contents = await file.read()
     if len(contents) > MAX_IMAGE_UPLOAD_BYTES:
@@ -695,10 +739,13 @@ async def generate_ai_pattern(
         reference_image.load()
     except Exception as exc:
         raise HTTPException(status_code=400, detail="Failed to open image") from exc
+    _validate_dashscope_image_dimensions(*reference_image.size)
 
     remove_bg_enabled = remove_bg.lower() in ("true", "1", "yes")
     dashscope_reference_bytes = contents
-    dashscope_reference_media_type = file.content_type
+    dashscope_reference_media_type = (
+        "image/jpeg" if upload_media_type == "image/jpg" else upload_media_type
+    )
 
     if remove_bg_enabled:
         try:
@@ -707,12 +754,12 @@ async def generate_ai_pattern(
         except Exception as exc:
             raise HTTPException(status_code=500, detail=f"Background removal failed: {exc}") from exc
 
-    if style_index not in (-1, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 14, 15, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40):
+    if style_index not in SUPPORTED_DASHSCOPE_STYLE_INDEXES:
         raise HTTPException(status_code=400, detail="Unsupported style_index")
 
     generation_id, input_path = _persist_ai_input(
         contents,
-        file.content_type,
+        upload_media_type,
         file.filename or "",
     )
     if remove_bg_enabled:

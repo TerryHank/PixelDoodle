@@ -1,5 +1,6 @@
 {
   "miniprogramRoot": "dist-weapp/",
+  "cloudfunctionRoot": "cloudfunctions/",
   "projectname": "frontend-taro",
   "description": "PixelDoodle Taro app",
   "appid": "wxeb83424947e1f779",
