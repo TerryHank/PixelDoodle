@@ -1,4 +1,7 @@
 import {
+  BLE_ACTIVATION_COMMIT_PACKET,
+  BLE_ACTIVATION_DATA_PACKET,
+  BLE_ACTIVATION_START_PACKET,
   BLE_IMAGE_CANVAS_SIZE,
   BLE_IMAGE_PAYLOAD_BYTES
 } from '@/constants/ble'
@@ -7,6 +10,59 @@ import type { WifiScanResult } from '../types/device'
 
 const RGB565_BLACK = 0x0000
 const RGB565_TRANSPARENT_MARKER = 0x0001
+const DEVICE_GRANT_BYTES = 51
+
+function decodeBase64Url(value: string) {
+  const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_'
+  const normalized = value.trim().replace(/=+$/, '')
+  const bytes: number[] = []
+  let buffer = 0
+  let bits = 0
+
+  for (const character of normalized) {
+    const index = alphabet.indexOf(character)
+    if (index < 0) {
+      throw new Error('设备授权令牌编码无效')
+    }
+    buffer = (buffer << 6) | index
+    bits += 6
+    if (bits >= 8) {
+      bits -= 8
+      bytes.push((buffer >> bits) & 0xff)
+      buffer &= (1 << bits) - 1
+    }
+  }
+  return Uint8Array.from(bytes)
+}
+
+export function buildDeviceActivationPackets(
+  accessToken: string,
+  chunkSize = 19
+) {
+  const grant = decodeBase64Url(accessToken)
+  if (grant.length !== DEVICE_GRANT_BYTES) {
+    throw new Error('设备授权令牌长度无效')
+  }
+  if (!Number.isInteger(chunkSize) || chunkSize < 1 || chunkSize > 19) {
+    throw new Error('设备授权分包大小必须为 1 到 19 字节')
+  }
+
+  const packets = [
+    Uint8Array.from([
+      BLE_ACTIVATION_START_PACKET,
+      grant.length & 0xff,
+      (grant.length >> 8) & 0xff
+    ])
+  ]
+  splitBlePayload(grant, chunkSize).forEach((chunk) => {
+    const packet = new Uint8Array(chunk.length + 1)
+    packet[0] = BLE_ACTIVATION_DATA_PACKET
+    packet.set(chunk, 1)
+    packets.push(packet)
+  })
+  packets.push(Uint8Array.from([BLE_ACTIVATION_COMMIT_PACKET]))
+  return packets
+}
 
 export function splitBlePayload(payload: Uint8Array, chunkSize: number) {
   const chunks: Uint8Array[] = []

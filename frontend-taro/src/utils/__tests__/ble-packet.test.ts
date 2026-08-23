@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
+  buildDeviceActivationPackets,
   buildHighlightPacket,
   parseWifiScanResult,
   splitBlePayload
@@ -17,6 +18,20 @@ describe('splitBlePayload', () => {
 
   it('builds the highlight packet in rgb565 format', () => {
     expect(Array.from(buildHighlightPacket([[255, 0, 0]]))).toEqual([0x04, 0x01, 0x00, 0xf8])
+  })
+
+  it('builds the fixed 51-byte v2 signed device activation handshake', () => {
+    const packets = buildDeviceActivationPackets(
+      'AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8gISIjJCUmJygpKissLS4vMDEy'
+    )
+
+    expect(packets.map((packet) => Array.from(packet))).toEqual([
+      [0x0b, 51, 0],
+      [0x0c, ...Array.from({ length: 19 }, (_, index) => index)],
+      [0x0c, ...Array.from({ length: 19 }, (_, index) => index + 19)],
+      [0x0c, ...Array.from({ length: 13 }, (_, index) => index + 38)],
+      [0x0d]
+    ])
   })
 
   it('parses wifi scan payload into network list', () => {

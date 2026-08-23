@@ -19,6 +19,7 @@
 
 .profile-card,
 .profile-form,
+.profile-business-card,
 .history-empty,
 .history-card {
   background: rgba(255, 255, 255, 0.98);
@@ -97,7 +98,8 @@
 }
 
 .profile-form__toggle,
-.history-section__clear {
+.history-section__clear,
+.history-card__continue {
   align-items: center;
   background: rgba(239, 246, 255, 0.96);
   border: 1PX solid rgba(191, 219, 254, 0.95);
@@ -110,6 +112,23 @@
   justify-content: center;
   min-width: 84PX;
   padding: 0 12PX;
+}
+
+.profile-business-card {
+  align-items: center;
+  display: flex;
+  justify-content: space-between;
+  padding: 18PX;
+}
+
+.profile-business-card__arrow {
+  color: var(--accent);
+  font-size: 13PX;
+  font-weight: 700;
+}
+
+.history-card__continue {
+  flex: 0 0 auto;
 }
 
 .profile-form__toggle--active {

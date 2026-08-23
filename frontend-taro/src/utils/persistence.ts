@@ -19,8 +19,9 @@ export function readPersistedState<T>(key: string, fallback: T): T {
 export function writePersistedState<T>(key: string, value: T) {
   try {
     Taro.setStorageSync(key, value)
+    return true
   } catch {
-    // Ignore persistence failures and keep the in-memory state usable.
+    return false
   }
 }
 

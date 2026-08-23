@@ -1,5 +1,8 @@
 import Taro from '@tarojs/taro'
 import {
+  BLE_ACTIVATION_NOTIFICATION,
+  BLE_ACTIVATION_TIMEOUT_MS,
+  BLE_ACTIVATION_UNLOCKED,
   BLE_CHARACTERISTIC_UUID,
   BLE_CHUNK_SIZE,
   BLE_PREFERRED_MTU,
@@ -15,6 +18,7 @@ import {
   BLE_WIFI_SCAN_PACKET
 } from '@/constants/ble'
 import {
+  buildDeviceActivationPackets,
   buildHighlightPacket,
   buildImagePackets,
   buildWifiConnectPacket,
@@ -78,6 +82,7 @@ interface PendingWaiter<TValue> {
 
 let wifiScanWaiters: PendingWaiter<WifiScanResult[]>[] = []
 let wifiConnectWaiters: PendingWaiter<string>[] = []
+let activationWaiters: PendingWaiter<number>[] = []
 
 function normalizeBleDeviceUuid(name?: string | null) {
   const match = name?.match(/BeadCraft-([0-9A-F]{12})/i)
@@ -172,6 +177,7 @@ function resetWifiSyncState() {
   currentImageWriteType = 'write'
   clearWaiters(wifiScanWaiters, '蓝牙连接已断开')
   clearWaiters(wifiConnectWaiters, '蓝牙连接已断开')
+  clearWaiters(activationWaiters, '蓝牙连接已断开')
 }
 
 function normalizeCharacteristicId(value: string) {
@@ -244,6 +250,24 @@ function ensureBleListener() {
     }
 
     const characteristicId = normalizeCharacteristicId(result.characteristicId)
+    const imageCharacteristicId = normalizeCharacteristicId(
+      currentImageCharacteristicId || BLE_CHARACTERISTIC_UUID
+    )
+    const code = bytes[0]
+
+    if (
+      characteristicId === imageCharacteristicId &&
+      code === BLE_ACTIVATION_NOTIFICATION &&
+      bytes.length >= 2
+    ) {
+      const waiter = activationWaiters.shift()
+      if (waiter) {
+        clearTimeout(waiter.timer)
+        waiter.resolve(bytes[1])
+      }
+      return
+    }
+
     const wifiCharacteristicId = normalizeCharacteristicId(
       currentWifiCharacteristicId || BLE_WIFI_SCAN_CHARACTERISTIC_UUID
     )
@@ -251,7 +275,6 @@ function ensureBleListener() {
       return
     }
 
-    const code = bytes[0]
     const status = String.fromCharCode(code)
     const payload = decodeUtf8(bytes.slice(1))
 
@@ -469,6 +492,44 @@ function waitForWifiConnect(timeoutMs: number) {
 
     wifiConnectWaiters.push(waiter)
   })
+}
+
+function waitForActivation(timeoutMs = BLE_ACTIVATION_TIMEOUT_MS) {
+  return new Promise<number>((resolve, reject) => {
+    const waiter: PendingWaiter<number> = {
+      timer: setTimeout(() => {
+        const index = activationWaiters.indexOf(waiter)
+        if (index >= 0) {
+          activationWaiters.splice(index, 1)
+        }
+        reject(new Error('设备解锁响应超时'))
+      }, timeoutMs),
+      resolve,
+      reject
+    }
+    activationWaiters.push(waiter)
+  })
+}
+
+function rejectLatestActivationWaiter(error: Error) {
+  const waiter = activationWaiters.pop()
+  if (!waiter) return
+  clearTimeout(waiter.timer)
+  waiter.reject(error)
+}
+
+function activationError(status: number) {
+  return new Error(
+    ({
+      0x00: '设备仍处于锁定状态',
+      0x02: '设备授权令牌格式错误',
+      0x03: '授权令牌不属于当前设备',
+      0x04: '设备授权签名校验失败',
+      0x05: '设备授权序列已使用或已被更新令牌取代',
+      0x06: '设备尚未烧录授权密钥',
+      0x07: '设备授权令牌已超过绝对有效期'
+    } as Record<number, string>)[status] || `设备解锁失败（状态 ${status}）`
+  )
 }
 
 async function ensureBleCharacteristicConfig(deviceId: string) {
@@ -690,6 +751,24 @@ export const weappBleAdapter: BleAdapter = {
         value: toArrayBuffer(packet),
         writeType: currentImageWriteType
       })
+    }
+  },
+
+  async activateDevice(accessToken) {
+    ensureConnectedDevice()
+    const statusPromise = waitForActivation()
+    try {
+      for (const packet of buildDeviceActivationPackets(accessToken)) {
+        await writeCommand(packet)
+      }
+    } catch (error) {
+      rejectLatestActivationWaiter(
+        error instanceof Error ? error : new Error('设备授权包发送失败')
+      )
+    }
+    const status = await statusPromise
+    if (status !== BLE_ACTIVATION_UNLOCKED) {
+      throw activationError(status)
     }
   },
 

@@ -3,12 +3,13 @@ import {
   DEFAULT_GENERATION_STYLE_INDEX,
   GENERATION_STYLES
 } from '@/constants/generation-styles'
+import { BOARD_SIZE_OPTIONS } from '@/features/pixel-editor/model'
 import type { ToolbarProps } from './types'
 import './index.h5.scss'
 
 export function Toolbar({
   removeBackground = false,
-  ledSizeValue = 64,
+  boardSizeValue = { width: 29, height: 29 },
   styleIndexValue = DEFAULT_GENERATION_STYLE_INDEX,
   modeQuickLabel,
   modeQuickConnected = false,
@@ -17,11 +18,14 @@ export function Toolbar({
   onPickImage,
   onOpenPairSheet,
   onOpenSettings,
-  onChangeLedSize,
+  onChangeBoardSize,
   onChangeStyle
 }: ToolbarProps) {
-  function handleLedSizeChange(event: ChangeEvent<HTMLSelectElement>) {
-    onChangeLedSize?.(Number(event.target.value))
+  function handleBoardSizeChange(event: ChangeEvent<HTMLSelectElement>) {
+    const selected = BOARD_SIZE_OPTIONS.find((item) => item.id === event.target.value)
+    if (selected) {
+      onChangeBoardSize?.({ width: selected.width, height: selected.height })
+    }
   }
 
   function handleStyleChange(event: ChangeEvent<HTMLSelectElement>) {
@@ -62,13 +66,14 @@ export function Toolbar({
       </select>
       <select
         className='led-size-btn'
-        onChange={handleLedSizeChange}
-        value={String(ledSizeValue)}
+        onChange={handleBoardSizeChange}
+        value={`${boardSizeValue.width}x${boardSizeValue.height}`}
       >
-        <option value='16'>16</option>
-        <option value='32'>32</option>
-        <option value='52'>52</option>
-        <option value='64'>64</option>
+        {BOARD_SIZE_OPTIONS.map((option) => (
+          <option key={option.id} value={option.id}>
+            {option.label}
+          </option>
+        ))}
       </select>
       <button
         className={`toolbar-btn mode-quick-btn ${modeQuickConnected ? 'mode-quick-btn--connected' : 'mode-quick-btn--disconnected'}`}

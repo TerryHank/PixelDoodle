@@ -2,7 +2,7 @@ import Taro from '@tarojs/taro'
 import { Text, View } from '@tarojs/components'
 import './index.scss'
 
-export type AppTabKey = 'community' | 'tool' | 'profile'
+export type AppTabKey = 'community' | 'materials' | 'tool' | 'profile'
 
 const TAB_CONFIG: Record<
   AppTabKey,
@@ -13,9 +13,14 @@ const TAB_CONFIG: Record<
     url: '/pages/community/index',
     icon: '社'
   },
+  materials: {
+    label: '素材',
+    url: '/pages/materials/index',
+    icon: '材'
+  },
   tool: {
     label: '工具',
-    url: '/pages/tool/index',
+    url: '/pages/home/index',
     icon: '工'
   },
   profile: {
@@ -42,7 +47,7 @@ export function AppTabBar({ current }: AppTabBarProps) {
 
   return (
     <View className='app-tab-bar'>
-      {(['community', 'tool', 'profile'] as AppTabKey[]).map((tab) => {
+      {(['community', 'materials', 'tool', 'profile'] as AppTabKey[]).map((tab) => {
         const item = TAB_CONFIG[tab]
         const active = tab === current
 

@@ -129,6 +129,44 @@ describe('local-generation-js', () => {
     ])
   })
 
+  it('renders the exact selected rectangular board dimensions', () => {
+    const result = generatePatternLocalJs({
+      sourceWidth: 1040,
+      sourceHeight: 740,
+      selectionRaster: createSolidRaster(16, 16, [255, 255, 255]),
+      midRaster: createSolidRaster(104 * 4, 74 * 4, [255, 255, 255]),
+      options: {
+        mode: 'fixed_grid',
+        grid_width: 104,
+        grid_height: 74,
+        led_size: 64,
+        pixel_size: 8,
+        use_dithering: false,
+        palette_preset: '221',
+        max_colors: 1,
+        similarity_threshold: 0,
+        remove_bg: false,
+        contrast: 0,
+        saturation: 0,
+        sharpness: 0
+      },
+      colors: [
+        {
+          code: 'A1',
+          name: 'White',
+          name_zh: '白色',
+          hex: '#FFFFFF',
+          rgb: [255, 255, 255]
+        }
+      ],
+      presets: {}
+    })
+
+    expect(result.grid_size).toEqual({ width: 104, height: 74 })
+    expect(result.pixel_matrix).toHaveLength(74)
+    expect(result.pixel_matrix.every((row) => row.length === 104)).toBe(true)
+  })
+
   it('cleans rare colors and smooths isolated pixels like the Rust engine', () => {
     const paletteState = __localGenerationJsInternals.buildPaletteState(
       [

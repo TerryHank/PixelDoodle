@@ -109,3 +109,50 @@ describe('h5BleAdapter.connectKnownDevice', () => {
     expect(authorizedDevice.gatt.connect).toHaveBeenCalledTimes(1)
   })
 })
+
+describe('h5BleAdapter.readStatus', () => {
+  it('separates the brightness status notification from image ACKs', async () => {
+    let notificationHandler: ((event: Event) => void) | undefined
+    const imageCharacteristic = {
+      startNotifications: vi.fn().mockResolvedValue(undefined),
+      addEventListener: vi.fn((_name: string, handler: (event: Event) => void) => {
+        notificationHandler = handler
+      }),
+      writeValueWithoutResponse: vi.fn().mockImplementation(async () => {
+        const bytes = Uint8Array.from([0x26, 72])
+        notificationHandler?.({
+          target: {
+            value: new DataView(bytes.buffer)
+          }
+        } as unknown as Event)
+      })
+    }
+    const wifiCharacteristic = createCharacteristic()
+    const device = createBleDevice('BeadCraft-ABCD1234EF56')
+    device.gatt.connect.mockImplementation(async () => {
+      device.gatt.connected = true
+      return {
+        getPrimaryService: vi.fn().mockResolvedValue({
+          getCharacteristic: vi
+            .fn()
+            .mockResolvedValueOnce(imageCharacteristic)
+            .mockResolvedValueOnce(wifiCharacteristic)
+        })
+      }
+    })
+
+    vi.stubGlobal('navigator', {
+      bluetooth: {
+        requestDevice: vi.fn().mockResolvedValue(device)
+      }
+    })
+
+    const { h5BleAdapter } = await import('../h5')
+    await h5BleAdapter.connectTargetDevice('ABCD1234EF56')
+
+    await expect(h5BleAdapter.readStatus?.()).resolves.toEqual({ brightness: 72 })
+    expect(imageCharacteristic.writeValueWithoutResponse).toHaveBeenCalledWith(
+      Uint8Array.from([0x0A])
+    )
+  })
+})

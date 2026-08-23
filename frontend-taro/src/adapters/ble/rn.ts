@@ -9,6 +9,10 @@ export const rnBleAdapter: BleAdapter = {
     throw new Error('RN Android 端 BLE 发送尚未完成')
   },
 
+  async activateDevice() {
+    throw new Error('RN Android 端设备支付解锁尚未完成')
+  },
+
   async sendHighlight() {
     throw new Error('RN Android 端 BLE 高亮尚未完成')
   },

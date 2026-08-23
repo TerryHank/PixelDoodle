@@ -20,7 +20,8 @@ import {
   buildLocalGenerateOptions,
   getLocalGenerationUnavailableReason,
   isLocalGenerationAvailable,
-  normalizeGeneratePatternResponse
+  normalizeGeneratePatternResponse,
+  validateLocalGenerationGrid
 } from './local-generation'
 
 afterEach(() => {
@@ -107,6 +108,42 @@ describe('local-generation helpers', () => {
     expect(response.preview_image).toBe('')
     expect(response.palette_preset).toBe('221')
     expect(response.session_id.length).toBeGreaterThan(0)
+  })
+
+  it('rejects fixed-grid output that does not match the selected board', () => {
+    const options = buildLocalGenerateOptions({
+      mode: 'fixed_grid',
+      grid_width: '104',
+      grid_height: '74'
+    })
+    const mismatched = normalizeGeneratePatternResponse(
+      {
+        grid_size: { width: 104, height: 74 },
+        pixel_matrix: Array.from({ length: 74 }, () => Array(103).fill('A1'))
+      },
+      '221'
+    )
+
+    expect(() => validateLocalGenerationGrid(mismatched, options)).toThrow(
+      '本地图案尺寸不匹配'
+    )
+  })
+
+  it('accepts fixed-grid output with the exact selected width and height', () => {
+    const options = buildLocalGenerateOptions({
+      mode: 'fixed_grid',
+      grid_width: '104',
+      grid_height: '74'
+    })
+    const matching = normalizeGeneratePatternResponse(
+      {
+        grid_size: { width: 104, height: 74 },
+        pixel_matrix: Array.from({ length: 74 }, () => Array(104).fill('A1'))
+      },
+      '221'
+    )
+
+    expect(validateLocalGenerationGrid(matching, options)).toBe(matching)
   })
 
   it('explains when weapp local raster loader has not been registered yet', () => {

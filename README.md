@@ -2,12 +2,15 @@
 
 PixelDoodle（像素豆绘）是一个“图片转拼豆图 + ESP32 点阵显示”的完整项目，包含：
 
-**Version: 5.26.41**
+**Version: 11.0.0**
 
 - Web 前端（上传、裁剪、生成、导出、扫码）
 - Taro 多端前端（`frontend-taro/`，支持 H5 / 微信小程序 / RN Android）
 - Python/FastAPI 后端（调色、量化、导出、串口接口）
 - ESP32 固件（BLE 接收图像、设备 UUID、二维码配对页）
+
+Tauri 2 Android 调试 APK 的一键构建与验收信息见
+[frontend-taro/ANDROID_TAURI_BUILD.md](./frontend-taro/ANDROID_TAURI_BUILD.md)。
 
 ---
 
@@ -200,6 +203,8 @@ https://10.39.251.173:8765/?u=F42DC97179B4
 ## 8. API 速览
 
 核心接口在 [main.py](./main.py)：
+
+支付、设备锁、用户私有云与分润的生产接入边界和适配器契约见 [支付设备锁私有云分润接口接入说明.md](./支付设备锁私有云分润接口接入说明.md)。
 
 - `GET /`：主页
 - `GET /api/palette`：调色板与预设

@@ -49,7 +49,7 @@ void applyBrightness(uint8_t value, bool persist)
     // Match the reference project's brightness path: clear the DMA buffer first,
     // then redraw the active screen so the new OE timing is applied everywhere.
     dma_display->clearScreen();
-    if (bleReceiver && bleReceiver->hasImage()) {
+    if (bleReceiver && bleReceiver->hasImage() && bleReceiver->isUnlocked()) {
       bleReceiver->displayStoredImage();
     } else if (receiver) {
       receiver->displayDeviceCodeScreen(getDeviceCode());
@@ -120,7 +120,14 @@ void setup()
   dma_display->clearScreen();
 
   receiver = new BeadCraftReceiver(dma_display);
-  bleReceiver = new BLEImageReceiver(dma_display, applyBrightness, getBrightness);
+  bleReceiver = new BLEImageReceiver(
+    dma_display,
+    applyBrightness,
+    getBrightness,
+    []() {
+      if (receiver) receiver->displayDeviceCodeScreen(getDeviceCode());
+    }
+  );
 
   const String deviceCode = getDeviceCode();
 

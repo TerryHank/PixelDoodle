@@ -7,6 +7,7 @@ import sqlite3
 import requests
 import base64
 import uuid
+import ipaddress
 from pathlib import Path
 from datetime import datetime
 from typing import Optional, Dict, Any
@@ -33,6 +34,11 @@ from core.ble_export import (
     send_to_esp32_ble_sync,
     send_highlight_ble_sync,
 )
+from core.auth import IdentityError, resolve_request_identity, verify_admin_key
+from core.commerce.device_registry import DeviceRegistryError
+from core.business_api import build_default_business_services, create_business_router
+from core.commerce.payment import PaymentAccessDeniedError, PaymentDomainError
+from core.gallery_archive import GalleryArchive
 
 
 app = FastAPI(title="BeadCraft", description="Perler Bead Pattern Generator", version="1.0.0")
@@ -86,6 +92,125 @@ palette = ArtkalPalette()
 sessions: Dict[str, Dict[str, Any]] = {}
 wifi_devices: Dict[str, Dict[str, Any]] = {}
 COMMUNITY_DB_PATH = Path("data") / "community.db"
+GALLERY_DATA_DIR = Path(
+    os.environ.get("PIXELDOODLE_GALLERY_DATA_DIR", "perler-beads/data/gallery")
+)
+gallery_archive = GalleryArchive(GALLERY_DATA_DIR)
+business_services = build_default_business_services()
+app.include_router(create_business_router(business_services))
+
+
+def _device_lock_enabled() -> bool:
+    return os.environ.get("PIXELDOODLE_DEVICE_LOCK_ENABLED", "true").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+
+
+def _wifi_device_auth_enabled() -> bool:
+    """Whether the deployed WiFi receiver verifies the signed device grant.
+
+    The firmware in this repository currently enforces grants over BLE only.
+    WiFi image delivery therefore stays fail-closed while paid-device locking is
+    enabled, unless an authenticated receiver is explicitly deployed.
+    """
+    return os.environ.get(
+        "PIXELDOODLE_WIFI_DEVICE_AUTH_ENABLED", "false"
+    ).strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _require_admin_request(request: Request) -> None:
+    if not verify_admin_key(request.headers):
+        raise HTTPException(status_code=403, detail="admin key is required")
+
+
+def _validated_wifi_device_ip(value: str) -> str:
+    try:
+        address = ipaddress.ip_address(value)
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail="ip must be a valid IPv4 address") from error
+    allowed_networks = (
+        ipaddress.ip_network("10.0.0.0/8"),
+        ipaddress.ip_network("172.16.0.0/12"),
+        ipaddress.ip_network("192.168.0.0/16"),
+    )
+    if address.version != 4 or not any(address in network for network in allowed_networks):
+        raise HTTPException(
+            status_code=400,
+            detail="WiFi device ip must be an RFC1918 private IPv4 address",
+        )
+    return str(address)
+
+
+def _require_authenticated_wifi_receiver() -> None:
+    if _device_lock_enabled() and not _wifi_device_auth_enabled():
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "WiFi device-side grant verification is not configured; "
+                "paid-device commands remain locked. Use BLE or deploy an "
+                "authenticated WiFi receiver first."
+            ),
+        )
+
+
+def _require_paid_serial_transport() -> None:
+    if _device_lock_enabled():
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "Serial receiver does not verify paid-device grants; commands "
+                "remain locked. Use the authenticated BLE transport."
+            ),
+        )
+
+
+def _authorize_device_command(data: dict, request: Request) -> tuple[str, str] | None:
+    if not _device_lock_enabled():
+        return None
+
+    device_id = (data.get("device_id") or data.get("device_uuid") or "").strip().upper()
+    access_token = (
+        request.headers.get("x-pixeldoodle-device-grant")
+        or data.get("access_token")
+        or ""
+    ).strip()
+    if not device_id or not access_token:
+        raise HTTPException(
+            status_code=403,
+            detail="设备保持锁定：请先支付并提交 device_id 与设备授权令牌",
+        )
+
+    try:
+        user_id = resolve_request_identity(request.headers).user_id
+        business_services.payments.authorize_device_access(
+            user_id=user_id,
+            device_id=device_id,
+            access_token=access_token,
+        )
+    except IdentityError as error:
+        raise HTTPException(status_code=401, detail=str(error)) from error
+    except PaymentAccessDeniedError as error:
+        raise HTTPException(status_code=403, detail=str(error)) from error
+    except PaymentDomainError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+    return device_id, access_token
+
+
+def _record_device_activation(request: Request, device_id: str, access_token: str) -> None:
+    try:
+        user_id = resolve_request_identity(request.headers).user_id
+        business_services.payments.record_device_activation(
+            user_id=user_id,
+            device_id=device_id,
+            access_token=access_token,
+        )
+    except (IdentityError, PaymentDomainError):
+        # The transfer already succeeded. A later device heartbeat can reconcile
+        # this audit marker, so do not misreport the hardware operation as failed.
+        pass
 
 
 def _pick_aspect_ratio(width: int, height: int) -> str:
@@ -571,11 +696,16 @@ async def generate_ai_pattern(
     except Exception as exc:
         raise HTTPException(status_code=400, detail="Failed to open image") from exc
 
-    # Remove background before sending to DashScope (keep only subject)
-    try:
-        bg_removed_bytes = await asyncio.to_thread(remove_background, contents)
-    except Exception as exc:
-        raise HTTPException(status_code=500, detail=f"Background removal failed: {exc}") from exc
+    remove_bg_enabled = remove_bg.lower() in ("true", "1", "yes")
+    dashscope_reference_bytes = contents
+    dashscope_reference_media_type = file.content_type
+
+    if remove_bg_enabled:
+        try:
+            dashscope_reference_bytes = await asyncio.to_thread(remove_background, contents)
+            dashscope_reference_media_type = "image/png"
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=f"Background removal failed: {exc}") from exc
 
     if style_index not in (-1, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 14, 15, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40):
         raise HTTPException(status_code=400, detail="Unsupported style_index")
@@ -585,14 +715,19 @@ async def generate_ai_pattern(
         file.content_type,
         file.filename or "",
     )
-    # Save background-removed version for DashScope reference
-    bg_removed_filename = "input_nobg.png"
-    (AI_GENERATIONS_DIR / generation_id / bg_removed_filename).write_bytes(bg_removed_bytes)
+    if remove_bg_enabled:
+        bg_removed_filename = "input_nobg.png"
+        (AI_GENERATIONS_DIR / generation_id / bg_removed_filename).write_bytes(
+            dashscope_reference_bytes
+        )
 
     if reference_image_url.strip():
         das_reference = reference_image_url.strip()
     else:
-        das_reference = _image_bytes_to_data_url(bg_removed_bytes, "image/png")
+        das_reference = _image_bytes_to_data_url(
+            dashscope_reference_bytes,
+            dashscope_reference_media_type,
+        )
     ai_started_at = time.perf_counter()
     ai_image_bytes, ai_media_type, trace_id = await asyncio.to_thread(
         _generate_dashscope_style,
@@ -618,7 +753,7 @@ async def generate_ai_pattern(
         palette_preset=palette_preset,
         max_colors=max_colors,
         similarity_threshold=similarity_threshold,
-        remove_bg=remove_bg.lower() in ("true", "1", "yes"),
+        remove_bg=remove_bg_enabled,
         contrast=contrast,
         saturation=saturation,
         sharpness=sharpness,
@@ -785,6 +920,7 @@ async def send_to_serial(data: dict):
         background_color: List[int] (optional, default [0,0,0])
         led_matrix_size: str (optional, default "64x64")
     """
+    _require_paid_serial_transport()
     pixel_matrix = data.get('pixel_matrix')
     if not pixel_matrix:
         raise HTTPException(status_code=400, detail="pixel_matrix is required")
@@ -826,6 +962,7 @@ async def highlight_serial(data: dict):
         highlight_colors: List[List[int]] (RGB colors to highlight)
         port: str
     """
+    _require_paid_serial_transport()
     highlight_colors = data.get('highlight_colors', [])
     port = data.get('port')
 
@@ -856,7 +993,7 @@ async def get_ble_devices():
 
 
 @app.post("/api/ble/send")
-async def send_to_ble(data: dict):
+async def send_to_ble(data: dict, request: Request):
     """Send pixel matrix to ESP32 via BLE.
 
     Expected JSON body:
@@ -870,24 +1007,37 @@ async def send_to_ble(data: dict):
 
     device_address = data.get('device_address')
     bg_color = data.get('background_color', [0, 0, 0])
+    authorization = _authorize_device_command(data, request)
 
     try:
         result = send_to_esp32_ble_sync(
             pixel_matrix=pixel_matrix,
             palette=palette,
             device_address=device_address,
+            device_uuid=authorization[0] if authorization else data.get('device_id'),
+            access_token=authorization[1] if authorization else None,
             background_color=tuple(bg_color),
         )
+        if authorization:
+            _record_device_activation(request, authorization[0], authorization[1])
         return result
+    except PermissionError as e:
+        raise HTTPException(status_code=403, detail=f"BLE device remains locked: {str(e)}")
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"BLE send failed: {str(e)}")
 
 
-async def _register_wifi_device_impl(data: dict):
+async def _register_wifi_device_impl(data: dict, request: Request):
+    _require_admin_request(request)
     device_uuid = (data.get('device_uuid') or '').strip().upper()
-    ip = (data.get('ip') or '').strip()
+    ip = _validated_wifi_device_ip((data.get('ip') or '').strip())
     if not device_uuid or not ip:
         raise HTTPException(status_code=400, detail="device_uuid and ip are required")
+
+    try:
+        business_services.devices.get_enabled(device_uuid)
+    except DeviceRegistryError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
 
     wifi_devices[device_uuid] = {
         "ip": ip,
@@ -897,12 +1047,51 @@ async def _register_wifi_device_impl(data: dict):
 
 
 @app.get("/api/wifi/devices")
-async def list_wifi_devices():
-    """List all registered WiFi devices."""
+async def list_wifi_devices(request: Request):
+    """List registered WiFi devices for administrators only."""
+    _require_admin_request(request)
     return {"devices": wifi_devices, "count": len(wifi_devices)}
 
 
-async def _send_to_wifi_impl(data: dict):
+@app.get("/api/gallery/list")
+async def list_gallery_works(
+    work_id: Optional[int] = Query(default=None, alias="id", ge=1),
+    page: int = Query(default=1, ge=1),
+    per_page: int = Query(default=20, ge=1, le=100),
+    q: str = Query(default=""),
+    source: str = Query(default=""),
+    category: str = Query(default=""),
+    max_width: Optional[int] = Query(default=None, ge=1),
+    max_height: Optional[int] = Query(default=None, ge=1),
+):
+    """Search the local normalized material archive or load one work."""
+    try:
+        if work_id is not None:
+            work = await asyncio.to_thread(gallery_archive.get_work, work_id)
+            if work is None:
+                raise HTTPException(status_code=404, detail="图纸不存在")
+            return {"work": work}
+
+        return await asyncio.to_thread(
+            gallery_archive.list_works,
+            page=page,
+            per_page=per_page,
+            query=q,
+            source=source,
+            category=category,
+            max_width=max_width,
+            max_height=max_height,
+        )
+    except HTTPException:
+        raise
+    except (FileNotFoundError, json.JSONDecodeError, KeyError, TypeError, ValueError) as error:
+        raise HTTPException(
+            status_code=503,
+            detail=f"画廊数据读取失败：{error}。请先生成画廊数据。",
+        ) from error
+
+
+async def _send_to_wifi_impl(data: dict, request: Request):
     pixel_matrix = data.get('pixel_matrix')
     if not pixel_matrix:
         raise HTTPException(status_code=400, detail="pixel_matrix is required")
@@ -910,6 +1099,9 @@ async def _send_to_wifi_impl(data: dict):
     device_uuid = (data.get('device_uuid') or '').strip().upper()
     if not device_uuid:
         raise HTTPException(status_code=400, detail="device_uuid is required")
+
+    _require_authenticated_wifi_receiver()
+    authorization = _authorize_device_command(data, request)
 
     entry = wifi_devices.get(device_uuid)
     if not entry:
@@ -926,20 +1118,31 @@ async def _send_to_wifi_impl(data: dict):
         elif len(rgb565_data) > EXPECTED_SIZE:
             rgb565_data = rgb565_data[:EXPECTED_SIZE]
         
+        outgoing_headers = {"Content-Type": "application/octet-stream"}
+        if authorization:
+            outgoing_headers.update(
+                {
+                    "X-PixelDoodle-Device-Id": authorization[0],
+                    "X-PixelDoodle-Device-Grant": authorization[1],
+                }
+            )
         response = requests.post(
             f"http://{entry['ip']}:8766/image",
             data=rgb565_data,
-            headers={"Content-Type": "application/octet-stream"},
+            headers=outgoing_headers,
             timeout=15,
         )
         response.raise_for_status()
-        return {
+        result = {
             "success": True,
             "bytes_sent": len(rgb565_data),
             "duration_ms": 0,
             "device_uuid": device_uuid,
             "ip": entry["ip"],
         }
+        if authorization:
+            _record_device_activation(request, authorization[0], authorization[1])
+        return result
     except requests.exceptions.ConnectTimeout:
         raise HTTPException(status_code=504, detail=f"WiFi device {device_uuid} ({entry['ip']}) connection timeout - device may be offline")
     except requests.exceptions.Timeout:
@@ -950,10 +1153,13 @@ async def _send_to_wifi_impl(data: dict):
         raise HTTPException(status_code=500, detail=f"WiFi send failed: {str(e)}")
 
 
-async def _highlight_wifi_impl(data: dict):
+async def _highlight_wifi_impl(data: dict, request: Request):
     device_uuid = (data.get('device_uuid') or '').strip().upper()
     if not device_uuid:
         raise HTTPException(status_code=400, detail="device_uuid is required")
+
+    _require_authenticated_wifi_receiver()
+    authorization = _authorize_device_command(data, request)
 
     entry = wifi_devices.get(device_uuid)
     if not entry:
@@ -976,13 +1182,23 @@ async def _highlight_wifi_impl(data: dict):
             packet.extend(rgb565.to_bytes(2, 'little'))
 
     try:
+        outgoing_headers = {"Content-Type": "application/octet-stream"}
+        if authorization:
+            outgoing_headers.update(
+                {
+                    "X-PixelDoodle-Device-Id": authorization[0],
+                    "X-PixelDoodle-Device-Grant": authorization[1],
+                }
+            )
         response = requests.post(
             f"http://{entry['ip']}:8766/highlight",
             data=bytes(packet),
-            headers={"Content-Type": "application/octet-stream"},
+            headers=outgoing_headers,
             timeout=5,
         )
         response.raise_for_status()
+        if authorization:
+            _record_device_activation(request, authorization[0], authorization[1])
         return {"success": True, "device_uuid": device_uuid, "ip": entry["ip"]}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"WiFi highlight failed: {str(e)}")
@@ -993,24 +1209,24 @@ async def _highlight_wifi_impl(data: dict):
 @app.post("/api/wifi/register/")
 @app.post("/wifi/register")
 @app.post("/wifi/register/")
-async def register_wifi_device(data: dict):
-    return await _register_wifi_device_impl(data)
+async def register_wifi_device(data: dict, request: Request):
+    return await _register_wifi_device_impl(data, request)
 
 
 @app.post("/api/wifi/send")
 @app.post("/api/wifi/send/")
 @app.post("/wifi/send")
 @app.post("/wifi/send/")
-async def send_to_wifi(data: dict):
-    return await _send_to_wifi_impl(data)
+async def send_to_wifi(data: dict, request: Request):
+    return await _send_to_wifi_impl(data, request)
 
 
 @app.post("/api/wifi/highlight")
 @app.post("/api/wifi/highlight/")
 @app.post("/wifi/highlight")
 @app.post("/wifi/highlight/")
-async def highlight_wifi(data: dict):
-    return await _highlight_wifi_impl(data)
+async def highlight_wifi(data: dict, request: Request):
+    return await _highlight_wifi_impl(data, request)
 
 
 @app.get("/api/community/posts")

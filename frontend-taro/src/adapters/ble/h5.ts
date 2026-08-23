@@ -1,4 +1,7 @@
 import {
+  BLE_ACTIVATION_NOTIFICATION,
+  BLE_ACTIVATION_TIMEOUT_MS,
+  BLE_ACTIVATION_UNLOCKED,
   BLE_ACK_TIMEOUT_MS,
   BLE_CHARACTERISTIC_UUID,
   BLE_CHUNK_SIZE,
@@ -12,18 +15,34 @@ import {
   BLE_WIFI_SCAN_END,
   BLE_WIFI_SCAN_ERROR,
   BLE_WIFI_SCAN_PACKET,
-  BLE_WIFI_SCAN_TIMEOUT_MS
+  BLE_WIFI_SCAN_TIMEOUT_MS,
+  BLE_GET_STATUS_PACKET,
+  BLE_STATUS_NOTIFICATION,
+  BLE_STATUS_TIMEOUT_MS
 } from '@/constants/ble'
 import {
+  buildDeviceActivationPackets,
   buildWifiConnectPacket,
   buildHighlightPacket,
   buildImagePackets,
   decodeUtf8,
   parseWifiScanResult
 } from '@/utils/ble-packet'
-import type { BleAdapter, BleKnownDevice } from './types'
+import type { BleAdapter, BleDeviceStatus, BleKnownDevice } from './types'
 
 interface AckWaiter {
+  timer: ReturnType<typeof setTimeout>
+  resolve: (value: number) => void
+  reject: (error: Error) => void
+}
+
+interface StatusWaiter {
+  timer: ReturnType<typeof setTimeout>
+  resolve: (value: BleDeviceStatus) => void
+  reject: (error: Error) => void
+}
+
+interface ActivationWaiter {
   timer: ReturnType<typeof setTimeout>
   resolve: (value: number) => void
   reject: (error: Error) => void
@@ -35,6 +54,8 @@ let wifiCharacteristic: BluetoothRemoteGATTCharacteristic | null = null
 let imageNotifyReady = false
 let wifiNotifyReady = false
 let ackWaiters: AckWaiter[] = []
+let statusWaiters: StatusWaiter[] = []
+let activationWaiters: ActivationWaiter[] = []
 
 function wait(ms: number) {
   return new Promise<void>((resolve) => {
@@ -110,6 +131,22 @@ function resetBluetoothState() {
       waiter.reject(new Error('Bluetooth disconnected'))
     }
   }
+
+  while (statusWaiters.length) {
+    const waiter = statusWaiters.shift()
+    if (waiter) {
+      clearTimeout(waiter.timer)
+      waiter.reject(new Error('Bluetooth disconnected'))
+    }
+  }
+
+  while (activationWaiters.length) {
+    const waiter = activationWaiters.shift()
+    if (waiter) {
+      clearTimeout(waiter.timer)
+      waiter.reject(new Error('Bluetooth disconnected'))
+    }
+  }
 }
 
 function handleBluetoothDisconnect() {
@@ -125,6 +162,31 @@ function handleAckNotification(event: Event) {
   }
 
   const bytes = new Uint8Array(value.buffer, value.byteOffset, value.byteLength)
+  const code = bytes[0]
+
+  if (code === BLE_ACTIVATION_NOTIFICATION && bytes.length >= 2) {
+    const waiter = activationWaiters.shift()
+    if (waiter) {
+      clearTimeout(waiter.timer)
+      waiter.resolve(bytes[1])
+    }
+    return
+  }
+
+  if (code === BLE_STATUS_NOTIFICATION && bytes.length >= 2) {
+    const status = { brightness: bytes[1] }
+    const statusWaiter = statusWaiters.shift()
+    if (statusWaiter) {
+      clearTimeout(statusWaiter.timer)
+      statusWaiter.resolve(status)
+    }
+    return
+  }
+
+  if (code !== 0x06 && code !== 0x15) {
+    return
+  }
+
   const waiter = ackWaiters.shift()
 
   if (!waiter) {
@@ -132,7 +194,7 @@ function handleAckNotification(event: Event) {
   }
 
   clearTimeout(waiter.timer)
-  waiter.resolve(bytes[0])
+  waiter.resolve(code)
 }
 
 function waitForAck(timeoutMs = BLE_ACK_TIMEOUT_MS) {
@@ -151,6 +213,72 @@ function waitForAck(timeoutMs = BLE_ACK_TIMEOUT_MS) {
 
     ackWaiters.push(waiter)
   })
+}
+
+function waitForStatus(timeoutMs = BLE_STATUS_TIMEOUT_MS) {
+  return new Promise<BleDeviceStatus>((resolve, reject) => {
+    const waiter: StatusWaiter = {
+      timer: setTimeout(() => {
+        const index = statusWaiters.indexOf(waiter)
+        if (index >= 0) {
+          statusWaiters.splice(index, 1)
+        }
+        reject(new Error('BLE status timeout'))
+      }, timeoutMs),
+      resolve,
+      reject
+    }
+
+    statusWaiters.push(waiter)
+  })
+}
+
+function waitForActivation(timeoutMs = BLE_ACTIVATION_TIMEOUT_MS) {
+  return new Promise<number>((resolve, reject) => {
+    const waiter: ActivationWaiter = {
+      timer: setTimeout(() => {
+        const index = activationWaiters.indexOf(waiter)
+        if (index >= 0) {
+          activationWaiters.splice(index, 1)
+        }
+        reject(new Error('设备解锁响应超时'))
+      }, timeoutMs),
+      resolve,
+      reject
+    }
+    activationWaiters.push(waiter)
+  })
+}
+
+function rejectLatestActivationWaiter(error: Error) {
+  const waiter = activationWaiters.pop()
+  if (!waiter) return
+  clearTimeout(waiter.timer)
+  waiter.reject(error)
+}
+
+function activationError(status: number) {
+  return new Error(
+    ({
+      0x00: '设备仍处于锁定状态',
+      0x02: '设备授权令牌格式错误',
+      0x03: '授权令牌不属于当前设备',
+      0x04: '设备授权签名校验失败',
+      0x05: '设备授权序列已使用或已被更新令牌取代',
+      0x06: '设备尚未烧录授权密钥',
+      0x07: '设备授权令牌已超过绝对有效期'
+    } as Record<number, string>)[status] || `设备解锁失败（状态 ${status}）`
+  )
+}
+
+function rejectLatestStatusWaiter(error: Error) {
+  const waiter = statusWaiters.pop()
+  if (!waiter) {
+    return false
+  }
+  clearTimeout(waiter.timer)
+  waiter.reject(error)
+  return true
 }
 
 async function writePacket(
@@ -329,13 +457,15 @@ async function ensureCharacteristics(uuid?: string) {
 export const h5BleAdapter: BleAdapter = {
   async connectTargetDevice(uuid) {
     await ensureCharacteristics(uuid)
-    return normalizeBleDeviceUuid(bleDevice?.name) || null
+    const deviceId = normalizeBleDeviceUuid(bleDevice?.name)
+    return deviceId || null
   },
 
   async addTargetDevice() {
     await requestBleDevice(undefined, true)
     await ensureCharacteristics(normalizeBleDeviceUuid(bleDevice?.name) || undefined)
-    return normalizeBleDeviceUuid(bleDevice?.name) || null
+    const deviceId = normalizeBleDeviceUuid(bleDevice?.name)
+    return deviceId || null
   },
 
   async getAuthorizedDevices() {
@@ -345,6 +475,41 @@ export const h5BleAdapter: BleAdapter = {
 
   async connectKnownDevice(deviceKey) {
     return await connectKnownAuthorizedDevice(deviceKey)
+  },
+
+  async readStatus() {
+    const { imageCharacteristic } = await ensureCharacteristics()
+    const statusPromise = waitForStatus()
+    try {
+      await writePacket(
+        imageCharacteristic,
+        Uint8Array.from([BLE_GET_STATUS_PACKET])
+      )
+    } catch (error) {
+      const reason = error instanceof Error ? error : new Error('BLE status request failed')
+      if (!rejectLatestStatusWaiter(reason)) {
+        throw reason
+      }
+    }
+    return await statusPromise
+  },
+
+  async activateDevice(accessToken) {
+    const { imageCharacteristic } = await ensureCharacteristics()
+    const statusPromise = waitForActivation()
+    try {
+      for (const packet of buildDeviceActivationPackets(accessToken)) {
+        await writePacket(imageCharacteristic, packet)
+      }
+    } catch (error) {
+      rejectLatestActivationWaiter(
+        error instanceof Error ? error : new Error('设备授权包发送失败')
+      )
+    }
+    const status = await statusPromise
+    if (status !== BLE_ACTIVATION_UNLOCKED) {
+      throw activationError(status)
+    }
   },
 
   async sendImage(payload) {

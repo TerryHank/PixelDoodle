@@ -7,6 +7,7 @@ import {
   GENERATION_STYLE_NAMES,
   GENERATION_STYLES
 } from '@/constants/generation-styles'
+import { BOARD_SIZE_OPTIONS } from '@/features/pixel-editor/model'
 import type { ToolbarProps } from './types'
 import './index.scss'
 
@@ -32,40 +33,45 @@ export function ToolbarPickerLabel({ value }: { value: string }) {
 
 export function Toolbar({
   removeBackground = false,
-  ledSizeLabel,
+  boardSizeLabel,
   styleLabel,
   modeQuickLabel,
   modeQuickConnected = false,
-  ledSizeValue = 64,
+  boardSizeValue = { width: 29, height: 29 },
   styleIndexValue = DEFAULT_GENERATION_STYLE_INDEX,
   onToggleBackground,
   onClear,
   onPickImage,
   onOpenPairSheet,
   onOpenSettings,
-  onChangeLedSize,
+  onChangeBoardSize,
   onChangeStyle
 }: ToolbarProps) {
-  const matrixOptions = [16, 32, 52, 64] as const
   const selectedStyleOptionIndex = Math.max(
     0,
     GENERATION_STYLES.findIndex((item) => item.index === styleIndexValue)
   )
 
   async function handlePickMatrixSize() {
-    if (!onChangeLedSize) return
+    if (!onChangeBoardSize) return
 
     const currentIndex = Math.max(
       0,
-      matrixOptions.findIndex((item) => item === ledSizeValue)
+      BOARD_SIZE_OPTIONS.findIndex(
+        (item) =>
+          item.width === boardSizeValue.width && item.height === boardSizeValue.height
+      )
     )
 
     try {
       const result = await Taro.showActionSheet({
-        itemList: matrixOptions.map((item) => String(item)),
+        itemList: BOARD_SIZE_OPTIONS.map((item) => item.label),
         alertText: '选择尺寸'
       })
-      onChangeLedSize(matrixOptions[result.tapIndex])
+      const selected = BOARD_SIZE_OPTIONS[result.tapIndex]
+      if (selected) {
+        onChangeBoardSize({ width: selected.width, height: selected.height })
+      }
     } catch (error) {
       if (
         error &&
@@ -75,7 +81,8 @@ export function Toolbar({
       ) {
         return
       }
-      onChangeLedSize(matrixOptions[currentIndex])
+      const current = BOARD_SIZE_OPTIONS[currentIndex]
+      onChangeBoardSize({ width: current.width, height: current.height })
     }
   }
 
@@ -117,7 +124,7 @@ export function Toolbar({
         onClick={handlePickMatrixSize}
         {...TOOLBAR_HOVER_PROPS}
       >
-        <ToolbarPickerLabel value={ledSizeLabel} />
+        <ToolbarPickerLabel value={boardSizeLabel} />
       </View>
       <View
         className={`toolbar-btn mode-quick-btn ${modeQuickConnected ? 'mode-quick-btn--connected' : 'mode-quick-btn--disconnected'}`}

@@ -14,19 +14,54 @@ import type { BleKnownDevice } from '@/adapters/ble/types'
 import { fileAdapter } from '@/adapters/file'
 import { AppTabBar } from '@/components/app-tab-bar'
 import { CropDialogH5 } from '@/components/crop-dialog/index.h5'
+import { DeviceMonitorPanel } from '@/components/device-monitor-panel'
 import { PairSheetH5, type PairSheetBleOption } from '@/components/pair-sheet/index.h5'
 import { PatternThumb } from '@/components/pattern-thumb'
 import { ProfileAvatar } from '@/components/profile-avatar'
 import { SettingsSheetH5 } from '@/components/settings-sheet/index.h5'
 import { ToastHost } from '@/components/toast-host'
-import { GENERATION_STYLES } from '@/constants/generation-styles'
+import { PixelEditorH5 } from '@/features/pixel-editor/index.h5'
+import {
+  BOARD_SIZE_OPTIONS,
+  buildPixelColorSummary,
+  countPlacedBeads,
+  createEmptyPixelMatrix,
+  getBoardSize,
+  resizePixelMatrix
+} from '@/features/pixel-editor/model'
+import {
+  clampCropRect,
+  createAspectCropRect,
+  zoomCropRect,
+  type CropRect
+} from '@/features/image-calibration/model'
 import { autoSendGeneratedPattern } from '@/services/ble-image-sync'
 import { publishCommunityPost } from '@/services/community-service'
+import { consumePendingCloudWorkEdit } from '@/services/cloud-work-edit'
+import {
+  buildPrivateCloudCanvasDocument,
+  createPrivateCloudWork,
+  updatePrivateCloudWork
+} from '@/services/private-cloud-service'
+import {
+  acknowledgeDeviceAlert,
+  reportBleAck,
+  reportBleNack,
+  reportBleTimeout,
+  reportDeviceConnection,
+  reportDeviceHeartbeat,
+  startDeviceOfflineMonitor
+} from '@/services/device-monitoring-service'
+import {
+  applyMaterialPatternImport,
+  consumePendingMaterialImport
+} from '@/services/material-pattern-import'
 import {
   exportPattern,
   type ExportKind
 } from '@/services/pattern-service'
 import { useDeviceStore } from '@/store/device-store'
+import { useDeviceMonitorStore } from '@/store/device-monitor-store'
 import { useHistoryStore } from '@/store/history-store'
 import { usePatternStore } from '@/store/pattern-store'
 import { useUIStore } from '@/store/ui-store'
@@ -37,38 +72,57 @@ import {
   getExportMimeType
 } from '@/utils/export'
 import {
-  buildCanvasRenderModel,
-  drawCanvasRenderModel,
   formatColorTotalText
 } from './h5-canvas'
 import { deriveH5HomeViewState, getBleConnectedToastMessage } from './h5-runtime'
 import { hideLoadingSafely } from '@/utils/loading'
+import { readPersistedState, writePersistedState } from '@/utils/persistence'
 
 const VALID_IMAGE_TYPES = ['image/jpeg', 'image/png', 'image/gif', 'image/webp']
-const CANVAS_VIRTUAL_MAX_DIM = 640
+const LOCAL_DRAFT_STORAGE_KEY = 'pixeldoodle:pixel-editor-draft'
 
-function resolveH5DisplayMaxPatternDim() {
-  if (typeof window === 'undefined') {
-    return CANVAS_VIRTUAL_MAX_DIM
+interface PixelEditorDraft {
+  version: 1
+  title: string
+  updatedAt: string
+  boardSize: {
+    width: number
+    height: number
   }
-
-  return Math.max(
-    160,
-    Math.min(CANVAS_VIRTUAL_MAX_DIM, Math.floor(window.innerWidth - 28))
-  )
+  palettePreset: string
+  pixelMatrix: Array<Array<string | null>>
+  cloudWork?: {
+    id: string
+    version: number
+  } | null
+  cloudSynced?: boolean
 }
 
-interface CropBoxState {
-  x: number
-  y: number
-  size: number
+function readPixelEditorDraft() {
+  const draft = readPersistedState<PixelEditorDraft | null>(
+    LOCAL_DRAFT_STORAGE_KEY,
+    null
+  )
+
+  if (
+    draft?.version !== 1 ||
+    !Array.isArray(draft.pixelMatrix) ||
+    draft.pixelMatrix.length === 0 ||
+    !draft.pixelMatrix.every((row) => Array.isArray(row))
+  ) {
+    return null
+  }
+
+  return draft
 }
 
 interface CropState {
   file: File | null
   img: HTMLImageElement | null
   scale: number
-  box: CropBoxState
+  baseBox: CropRect
+  box: CropRect
+  zoom: number
   dragging: boolean
   startX: number
   startY: number
@@ -153,14 +207,16 @@ function getBgToggleStyle(removeBackground: boolean) {
 
 export default function HomePageH5() {
   const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
-  const canvasRef = useRef<HTMLCanvasElement | null>(null)
+  const lastAlertToastRef = useRef<string | null>(null)
   const fileInputRef = useRef<HTMLInputElement | null>(null)
   const cropImageRef = useRef<HTMLImageElement | null>(null)
   const cropStateRef = useRef<CropState>({
     file: null,
     img: null,
     scale: 1,
-    box: { x: 0, y: 0, size: 0 },
+    baseBox: { x: 0, y: 0, width: 0, height: 0 },
+    box: { x: 0, y: 0, width: 0, height: 0 },
+    zoom: 1,
     dragging: false,
     startX: 0,
     startY: 0
@@ -169,6 +225,7 @@ export default function HomePageH5() {
   const [bleConnectedUuid, setBleConnectedUuid] = useState<string | null>(null)
   const [difficultyMode, setDifficultyMode] = useState('0.25')
   const [customPixelSize, setCustomPixelSize] = useState(8)
+  const [cropZoom, setCropZoom] = useState(1)
   const [cropImageUrl, setCropImageUrl] = useState('')
   const [cropImageStyle, setCropImageStyle] = useState<Record<string, string>>({})
   const [cropBoxStyle, setCropBoxStyle] = useState<Record<string, string>>({})
@@ -176,9 +233,66 @@ export default function HomePageH5() {
   const [shareTitle, setShareTitle] = useState('')
   const [shareDescription, setShareDescription] = useState('')
   const [isPublishing, setIsPublishing] = useState(false)
+  const [isCloudSaving, setIsCloudSaving] = useState(false)
+  const [cloudWork, setCloudWork] = useState<PixelEditorDraft['cloudWork']>(
+    () => readPixelEditorDraft()?.cloudWork ?? null
+  )
+  const [isCloudSynced, setIsCloudSynced] = useState(() => {
+    const draft = readPixelEditorDraft()
+    return Boolean(draft?.cloudWork && draft.cloudSynced !== false)
+  })
+  const [hasLocalDraft, setHasLocalDraft] = useState(
+    () => readPixelEditorDraft() !== null
+  )
 
   useEffect(() => {
-    document.title = 'BeadCraft - Perler Bead Pattern Generator'
+    document.title = 'PixelDoodle - 拼豆像素创作工作台'
+  }, [])
+
+  useEffect(() => {
+    const pendingCloudWork = consumePendingCloudWorkEdit()
+    if (pendingCloudWork) {
+      const { document } = pendingCloudWork
+      usePatternStore.getState().setBoardSize(document.grid_size)
+      usePatternStore.setState({
+        originalImage: null,
+        generatedImage: null,
+        exampleImage: null,
+        pixelMatrix: document.pixel_matrix,
+        gridSize: document.grid_size,
+        colorSummary: document.color_summary,
+        totalBeads: document.total_beads,
+        palettePreset: document.palette_preset,
+        sessionId: `cloud-${pendingCloudWork.id}`
+      })
+      const revision = {
+        id: pendingCloudWork.id,
+        version: pendingCloudWork.version
+      }
+      setShareTitle(pendingCloudWork.title)
+      setCloudWork(revision)
+      setIsCloudSynced(true)
+      persistEditorDraft(
+        document.pixel_matrix,
+        pendingCloudWork.title,
+        revision,
+        true
+      )
+      showToast(`已打开云端作品：${pendingCloudWork.title}`)
+      return
+    }
+
+    const pendingMaterial = consumePendingMaterialImport()
+    if (!pendingMaterial) {
+      return
+    }
+
+    applyMaterialPatternImport(pendingMaterial)
+    setShareTitle(pendingMaterial.title)
+    setCloudWork(null)
+    setIsCloudSynced(false)
+    persistEditorDraft(pendingMaterial.pixelMatrix, pendingMaterial.title, null, false)
+    showToast(`已套用素材：${pendingMaterial.title}`)
   }, [])
 
   useEffect(() => {
@@ -188,15 +302,13 @@ export default function HomePageH5() {
         return
       }
 
-      let nextX = (event.clientX - cropState.startX) / cropState.scale
-      let nextY = (event.clientY - cropState.startY) / cropState.scale
-      nextX = Math.max(0, Math.min(nextX, cropState.img.width - cropState.box.size))
-      nextY = Math.max(0, Math.min(nextY, cropState.img.height - cropState.box.size))
-      cropState.box = {
-        ...cropState.box,
-        x: nextX,
-        y: nextY
-      }
+      const nextX = (event.clientX - cropState.startX) / cropState.scale
+      const nextY = (event.clientY - cropState.startY) / cropState.scale
+      cropState.box = clampCropRect(
+        { ...cropState.box, x: nextX, y: nextY },
+        cropState.img.width,
+        cropState.img.height
+      )
       updateCropBox()
     }
 
@@ -211,15 +323,13 @@ export default function HomePageH5() {
       }
 
       const touch = event.touches[0]
-      let nextX = (touch.clientX - cropState.startX) / cropState.scale
-      let nextY = (touch.clientY - cropState.startY) / cropState.scale
-      nextX = Math.max(0, Math.min(nextX, cropState.img.width - cropState.box.size))
-      nextY = Math.max(0, Math.min(nextY, cropState.img.height - cropState.box.size))
-      cropState.box = {
-        ...cropState.box,
-        x: nextX,
-        y: nextY
-      }
+      const nextX = (touch.clientX - cropState.startX) / cropState.scale
+      const nextY = (touch.clientY - cropState.startY) / cropState.scale
+      cropState.box = clampCropRect(
+        { ...cropState.box, x: nextX, y: nextY },
+        cropState.img.width,
+        cropState.img.height
+      )
       updateCropBox()
     }
 
@@ -242,13 +352,12 @@ export default function HomePageH5() {
 
   const pixelMatrix = usePatternStore((state) => state.pixelMatrix)
   const colorSummary = usePatternStore((state) => state.colorSummary)
-  const fullPalette = usePatternStore((state) => state.fullPalette)
   const fullPaletteList = usePatternStore((state) => state.fullPaletteList)
-  const gridSize = usePatternStore((state) => state.gridSize)
+  const presets = usePatternStore((state) => state.presets)
+  const palettePreset = usePatternStore((state) => state.palettePreset)
+  const boardSize = usePatternStore((state) => state.boardSize)
   const totalBeads = usePatternStore((state) => state.totalBeads)
   const removeBackground = usePatternStore((state) => state.removeBackground)
-  const ledSize = usePatternStore((state) => state.ledSize)
-  const styleIndex = usePatternStore((state) => state.styleIndex)
   const difficulty = usePatternStore((state) => state.difficulty)
   const isGenerating = usePatternStore((state) => state.isGenerating)
   const targetDeviceUuid = useDeviceStore((state) => state.targetDeviceUuid)
@@ -256,6 +365,8 @@ export default function HomePageH5() {
   const bleCharacteristicStatus = useDeviceStore((state) => state.bleCharacteristicStatus)
   const activeHighlightCodes = useDeviceStore((state) => state.activeHighlightCodes)
   const historyEntries = useHistoryStore((state) => state.entries)
+  const monitoredDevices = useDeviceMonitorStore((state) => state.devices)
+  const deviceAlerts = useDeviceMonitorStore((state) => state.alerts)
   const userId = useUserStore((state) => state.id)
   const userNickname = useUserStore((state) => state.nickname)
   const userAvatarSeed = useUserStore((state) => state.avatarSeed)
@@ -329,13 +440,165 @@ export default function HomePageH5() {
     }, 2400)
   }
 
+  function persistEditorDraft(
+    nextMatrix: Array<Array<string | null>>,
+    title = shareTitle,
+    nextCloudWork = cloudWork,
+    nextCloudSynced = isCloudSynced
+  ) {
+    const currentState = usePatternStore.getState()
+    const draft: PixelEditorDraft = {
+      version: 1,
+      title: sanitizePatternTitle(title || '未命名作品'),
+      updatedAt: new Date().toISOString(),
+      boardSize: currentState.boardSize,
+      palettePreset: currentState.palettePreset,
+      pixelMatrix: nextMatrix,
+      cloudWork: nextCloudWork,
+      cloudSynced: nextCloudSynced
+    }
+    const saved = writePersistedState(LOCAL_DRAFT_STORAGE_KEY, draft)
+    setHasLocalDraft(saved)
+    return saved
+  }
+
+  function syncEditedPattern(nextMatrix: Array<Array<string | null>>) {
+    const summary = buildPixelColorSummary(nextMatrix, fullPaletteList)
+    usePatternStore.setState((state) => ({
+      pixelMatrix: nextMatrix,
+      colorSummary: summary,
+      gridSize: {
+        width: nextMatrix[0]?.length ?? state.boardSize.width,
+        height: nextMatrix.length || state.boardSize.height
+      },
+      totalBeads: countPlacedBeads(nextMatrix),
+      previewImage: null,
+      sessionId: state.sessionId || `local-edit-${Date.now()}`
+    }))
+    setIsCloudSynced(false)
+    persistEditorDraft(nextMatrix, shareTitle, cloudWork, false)
+  }
+
+  function handleCreateBlankCanvas() {
+    const currentState = usePatternStore.getState()
+    const nextMatrix = createEmptyPixelMatrix(
+      currentState.boardSize.width,
+      currentState.boardSize.height
+    )
+    usePatternStore.getState().clear()
+    usePatternStore.setState({
+      pixelMatrix: nextMatrix,
+      gridSize: currentState.boardSize,
+      totalBeads: 0,
+      colorSummary: [],
+      sessionId: `local-edit-${Date.now()}`
+    })
+    setShareTitle('未命名作品')
+    setCloudWork(null)
+    setIsCloudSynced(false)
+    persistEditorDraft(nextMatrix, '未命名作品', null, false)
+  }
+
+  function handleRestoreLocalDraft() {
+    const draft = readPixelEditorDraft()
+    if (!draft) {
+      setHasLocalDraft(false)
+      showToast('没有可恢复的本地草稿')
+      return
+    }
+
+    const supportedBoard = BOARD_SIZE_OPTIONS.find(
+      (option) =>
+        option.width === draft.boardSize.width && option.height === draft.boardSize.height
+    )
+    if (!supportedBoard) {
+      showToast('草稿尺寸已不受支持')
+      return
+    }
+
+    const summary = buildPixelColorSummary(draft.pixelMatrix, fullPaletteList)
+    usePatternStore.getState().setBoardSize(draft.boardSize)
+    usePatternStore.setState({
+      originalImage: null,
+      generatedImage: null,
+      exampleImage: null,
+      pixelMatrix: draft.pixelMatrix,
+      gridSize: draft.boardSize,
+      colorSummary: summary,
+      totalBeads: countPlacedBeads(draft.pixelMatrix),
+      palettePreset: draft.palettePreset,
+      sessionId: `local-edit-${Date.now()}`
+    })
+    setShareTitle(draft.title)
+    setCloudWork(draft.cloudWork ?? null)
+    setIsCloudSynced(Boolean(draft.cloudWork && draft.cloudSynced !== false))
+    showToast('已恢复本地草稿')
+  }
+
+  function handleSaveEditor() {
+    const currentState = usePatternStore.getState()
+    if (currentState.totalBeads === 0) {
+      showToast('请先在画布上完成一些创作')
+      return
+    }
+
+    if (!persistEditorDraft(currentState.pixelMatrix)) {
+      showToast('本机存储空间不足或不可用，保存失败')
+      return
+    }
+    rememberGeneratedPattern({
+      title: shareTitle || '未命名作品',
+      sourceLabel: currentState.originalImage ? '图片创作' : '自由创作'
+    })
+    showToast('作品已保存到本机')
+  }
+
+  async function handleSaveCloudEditor() {
+    const currentState = usePatternStore.getState()
+    if (currentState.totalBeads === 0) {
+      showToast('请先在画布上完成一些创作')
+      return
+    }
+
+    setIsCloudSaving(true)
+    try {
+      const document = buildPrivateCloudCanvasDocument({
+        gridSize: currentState.gridSize,
+        pixelMatrix: currentState.pixelMatrix,
+        colorSummary: currentState.colorSummary,
+        palettePreset: currentState.palettePreset
+      })
+      const saved = cloudWork
+        ? await updatePrivateCloudWork(userId, cloudWork.id, {
+            expected_version: cloudWork.version,
+            title: sanitizePatternTitle(shareTitle || '未命名作品'),
+            source_label: currentState.originalImage ? '图片创作' : '自由创作',
+            document
+          })
+        : await createPrivateCloudWork(userId, {
+            title: sanitizePatternTitle(shareTitle || '未命名作品'),
+            source_label: currentState.originalImage ? '图片创作' : '自由创作',
+            document
+          })
+      const revision = { id: saved.id, version: saved.version }
+      setCloudWork(revision)
+      setIsCloudSynced(true)
+      persistEditorDraft(currentState.pixelMatrix, shareTitle, revision, true)
+      showToast(`作品已保存到私有云（版本 ${saved.version}）`)
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : '私有云保存失败')
+    } finally {
+      setIsCloudSaving(false)
+    }
+  }
+
   function updateCropBox() {
     const cropState = cropStateRef.current
     setCropBoxStyle({
       left: `${cropState.box.x * cropState.scale}px`,
       top: `${cropState.box.y * cropState.scale}px`,
-      width: `${cropState.box.size * cropState.scale}px`,
-      height: `${cropState.box.size * cropState.scale}px`
+      width: `${cropState.box.width * cropState.scale}px`,
+      height: `${cropState.box.height * cropState.scale}px`
     })
   }
 
@@ -344,7 +607,9 @@ export default function HomePageH5() {
       file: null,
       img: null,
       scale: 1,
-      box: { x: 0, y: 0, size: 0 },
+      baseBox: { x: 0, y: 0, width: 0, height: 0 },
+      box: { x: 0, y: 0, width: 0, height: 0 },
+      zoom: 1,
       dragging: false,
       startX: 0,
       startY: 0
@@ -352,6 +617,7 @@ export default function HomePageH5() {
     setCropImageStyle({})
     setCropBoxStyle({})
     setCropImageUrl('')
+    setCropZoom(1)
   }
 
   function getCropViewportBounds() {
@@ -408,12 +674,15 @@ export default function HomePageH5() {
           Math.round(image.height * cropStateRef.current.scale)
         )
 
-        const minDimension = Math.min(image.width, image.height)
-        cropStateRef.current.box = {
-          x: (image.width - minDimension) / 2,
-          y: (image.height - minDimension) / 2,
-          size: minDimension
-        }
+        const cropRect = createAspectCropRect(
+          image.width,
+          image.height,
+          boardSize.width,
+          boardSize.height
+        )
+        cropStateRef.current.baseBox = cropRect
+        cropStateRef.current.box = cropRect
+        cropStateRef.current.zoom = 1
 
         setCropImageStyle({
           width: `${renderedWidth}px`,
@@ -448,13 +717,13 @@ export default function HomePageH5() {
     const image = cropState.img
     const file = cropState.file
 
-    if (!image || !file || !cropState.box.size) {
+    if (!image || !file || !cropState.box.width || !cropState.box.height) {
       return
     }
 
     const canvas = document.createElement('canvas')
-    canvas.width = cropState.box.size
-    canvas.height = cropState.box.size
+    canvas.width = Math.max(1, Math.round(cropState.box.width))
+    canvas.height = Math.max(1, Math.round(cropState.box.height))
     const context = canvas.getContext('2d')
 
     if (!context) {
@@ -466,12 +735,12 @@ export default function HomePageH5() {
       image,
       cropState.box.x,
       cropState.box.y,
-      cropState.box.size,
-      cropState.box.size,
+      cropState.box.width,
+      cropState.box.height,
       0,
       0,
-      cropState.box.size,
-      cropState.box.size
+      canvas.width,
+      canvas.height
     )
 
     const blob = await new Promise<Blob | null>((resolve) => {
@@ -515,6 +784,9 @@ export default function HomePageH5() {
       })
       useDeviceStore.getState().clearHighlightCodes()
       const nextTitle = sanitizePatternTitle(fileName || shareTitle || '未命名图案')
+      setCloudWork(null)
+      setIsCloudSynced(false)
+      persistEditorDraft(response.pixel_matrix, nextTitle, null, false)
       rememberGeneratedPattern({
         title: nextTitle,
         sourceLabel: fileName ? '上传图片' : '示例图'
@@ -532,7 +804,10 @@ export default function HomePageH5() {
         const patternState = usePatternStore.getState()
         const deviceState = useDeviceStore.getState()
 
-        if (!deviceState.isSending) {
+        if (
+          !deviceState.isSending &&
+          patternState.gridSize.width === patternState.gridSize.height
+        ) {
           deviceState.setIsSending(true)
           sentToBle = await autoSendGeneratedPattern({
             bleConnectionStatus: deviceState.bleConnectionStatus,
@@ -547,8 +822,34 @@ export default function HomePageH5() {
       } catch (error) {
         sendErrorMessage =
           error instanceof Error ? error.message : '蓝牙发送失败'
+        const deviceId = bleConnectedUuid || targetDeviceUuid
+        if (deviceId) {
+          if (sendErrorMessage.toLowerCase().includes('rejected')) {
+            reportBleNack({
+              deviceId,
+              operation: '图像发送',
+              message: sendErrorMessage
+            })
+          } else {
+            reportBleTimeout({
+              deviceId,
+              operation: '图像发送',
+              message: sendErrorMessage
+            })
+          }
+        }
       } finally {
         useDeviceStore.getState().setIsSending(false)
+      }
+
+      if (sentToBle) {
+        const deviceId = bleConnectedUuid || targetDeviceUuid
+        if (deviceId) {
+          reportBleAck({
+            deviceId,
+            operation: '图像发送'
+          })
+        }
       }
 
       if (autoShareToCommunity) {
@@ -730,42 +1031,54 @@ export default function HomePageH5() {
     })
   }
 
-  async function handleChangeLedSize(nextLedSize: number) {
-    if (!Number.isFinite(nextLedSize) || nextLedSize <= 0) {
-      return
-    }
-
-    usePatternStore.getState().setLedSize(nextLedSize)
-
+  async function handleChangeBoardSize(boardId: string) {
+    const nextBoard = getBoardSize(boardId)
     const store = usePatternStore.getState()
-    if (!store.originalImage) {
+    const previousMatrix = store.pixelMatrix
+    store.setBoardSize({ width: nextBoard.width, height: nextBoard.height })
+
+    if (store.originalImage) {
+      try {
+        await runGenerate(store.originalImage)
+      } catch (error) {
+        showToast(error instanceof Error ? error.message : '重新生成失败')
+      }
       return
     }
 
-    try {
-      await runGenerate(store.originalImage)
-    } catch (error) {
-      showToast(error instanceof Error ? error.message : '重新生成失败')
+    if (hasGeneratedPattern(previousMatrix)) {
+      syncEditedPattern(
+        resizePixelMatrix(previousMatrix, nextBoard.width, nextBoard.height)
+      )
+      showToast(`画布已调整为 ${nextBoard.label}`)
     }
   }
 
-  async function handleChangeStyle(nextStyleIndex: number) {
-    if (!GENERATION_STYLES.some((style) => style.index === nextStyleIndex)) {
+  function handleCropZoomChange(nextZoom: number) {
+    const cropState = cropStateRef.current
+    if (!cropState.img || !Number.isFinite(nextZoom)) {
       return
     }
 
-    usePatternStore.getState().setStyleIndex(nextStyleIndex)
+    const normalizedZoom = Math.max(1, Math.min(3, nextZoom))
+    cropState.box = zoomCropRect(
+      cropState.baseBox,
+      cropState.box,
+      cropState.img.width,
+      cropState.img.height,
+      normalizedZoom
+    )
+    cropState.zoom = normalizedZoom
+    setCropZoom(normalizedZoom)
+    updateCropBox()
+  }
 
-    const store = usePatternStore.getState()
-    if (!store.originalImage) {
-      return
-    }
-
-    try {
-      await runGenerate(store.originalImage)
-    } catch (error) {
-      showToast(error instanceof Error ? error.message : '重新生成失败')
-    }
+  function handleResetCrop() {
+    const cropState = cropStateRef.current
+    cropState.box = { ...cropState.baseBox }
+    cropState.zoom = 1
+    setCropZoom(1)
+    updateCropBox()
   }
 
   async function handleChangeDifficulty(nextDifficultyValue: string) {
@@ -883,6 +1196,11 @@ export default function HomePageH5() {
     useDeviceStore.getState().setBleConnectionStatus('connected')
     useDeviceStore.getState().setBleCharacteristicStatus('ready')
     setBleConnectedUuid(normalizedUuid)
+    reportDeviceConnection({
+      deviceId: normalizedUuid,
+      transport: 'ble',
+      state: 'online'
+    })
     useUIStore.setState({
       isPairSheetOpen: false
     })
@@ -907,6 +1225,14 @@ export default function HomePageH5() {
       useDeviceStore.getState().setBleConnectionStatus(isCancelled ? 'idle' : 'error')
       useDeviceStore.getState().setBleCharacteristicStatus(isCancelled ? 'idle' : 'error')
       setBleConnectedUuid(null)
+      if (!isCancelled && targetDeviceUuid) {
+        reportDeviceConnection({
+          deviceId: targetDeviceUuid,
+          transport: 'ble',
+          state: 'error',
+          message: error instanceof Error ? error.message : '蓝牙连接失败'
+        })
+      }
       await refreshBleDevices()
       if (!isCancelled) {
         showToast(error instanceof Error ? error.message : '蓝牙连接失败')
@@ -973,6 +1299,10 @@ export default function HomePageH5() {
   }
 
   const hasPattern = hasGeneratedPattern(pixelMatrix)
+  const selectedBoard =
+    BOARD_SIZE_OPTIONS.find(
+      (option) => option.width === boardSize.width && option.height === boardSize.height
+    ) ?? BOARD_SIZE_OPTIONS[0]
   const isRestoringGeneratedState = isGenerating && !hasPattern
   const bgToggleStyle = useMemo(
     () => getBgToggleStyle(removeBackground),
@@ -982,6 +1312,74 @@ export default function HomePageH5() {
     bleConnectionStatus === 'connected' && bleCharacteristicStatus === 'ready'
   const bleAvailable =
     typeof navigator !== 'undefined' && !!navigator.bluetooth
+  const monitoredDeviceId = (bleConnectedUuid || targetDeviceUuid).trim().toUpperCase()
+  const monitoredDevice = monitoredDeviceId
+    ? monitoredDevices[monitoredDeviceId] ?? null
+    : null
+  const monitoredAlerts = monitoredDeviceId
+    ? deviceAlerts.filter((alert) => alert.deviceId === monitoredDeviceId)
+    : []
+  const latestUnacknowledgedAlert = monitoredAlerts.find(
+    (alert) => alert.resolvedAt == null && alert.acknowledgedAt == null
+  )
+
+  useEffect(() => startDeviceOfflineMonitor(), [])
+
+  useEffect(() => {
+    if (!isBleReady || !bleConnectedUuid || typeof bleAdapter.readStatus !== 'function') {
+      return
+    }
+
+    let disposed = false
+    let polling = false
+    const pollStatus = async () => {
+      if (disposed || polling) {
+        return
+      }
+      polling = true
+      try {
+        const status = await bleAdapter.readStatus?.()
+        if (!disposed && status) {
+          reportDeviceHeartbeat({
+            deviceId: bleConnectedUuid,
+            transport: 'ble',
+            telemetry: status
+          })
+        }
+      } catch (error) {
+        if (!disposed) {
+          reportBleTimeout({
+            deviceId: bleConnectedUuid,
+            operation: '状态心跳',
+            message: error instanceof Error ? error.message : '设备状态读取失败'
+          })
+        }
+      } finally {
+        polling = false
+      }
+    }
+
+    void pollStatus()
+    const timer = setInterval(() => {
+      void pollStatus()
+    }, 10_000)
+
+    return () => {
+      disposed = true
+      clearInterval(timer)
+    }
+  }, [bleConnectedUuid, isBleReady])
+
+  useEffect(() => {
+    if (
+      !latestUnacknowledgedAlert ||
+      lastAlertToastRef.current === latestUnacknowledgedAlert.id
+    ) {
+      return
+    }
+    lastAlertToastRef.current = latestUnacknowledgedAlert.id
+    showToast(`设备预警：${latestUnacknowledgedAlert.message}`)
+  }, [latestUnacknowledgedAlert?.id])
   const homeViewState = useMemo(
     () =>
       deriveH5HomeViewState({
@@ -1063,53 +1461,6 @@ export default function HomePageH5() {
       ? 'ready'
       : 'default'
 
-  const canvasRenderModel = useMemo(() => {
-    if (!hasPattern) {
-      return null
-    }
-
-    return buildCanvasRenderModel({
-      gridWidth: gridSize.width || pixelMatrix[0]?.length || 0,
-      gridHeight: gridSize.height || pixelMatrix.length,
-      activeCodes: new Set(activeHighlightCodes),
-      pixelMatrix,
-      maxPatternDim: CANVAS_VIRTUAL_MAX_DIM,
-      displayMaxPatternDim: resolveH5DisplayMaxPatternDim()
-    })
-  }, [activeHighlightCodes, gridSize.height, gridSize.width, hasPattern, pixelMatrix])
-
-  useEffect(() => {
-    const canvas = canvasRef.current
-    if (!canvas || !canvasRenderModel) {
-      return
-    }
-
-    const context = canvas.getContext('2d')
-    if (!context) {
-      return
-    }
-
-    canvas.width = canvasRenderModel.canvasWidth
-    canvas.height = canvasRenderModel.canvasHeight
-
-    const colorLookup = colorSummary.reduce<Record<string, string>>((accumulator, item) => {
-      accumulator[item.code] = item.hex
-      return accumulator
-    }, {})
-
-    Object.entries(fullPalette).forEach(([code, item]) => {
-      if (!colorLookup[code]) {
-        colorLookup[code] = item.hex
-      }
-    })
-
-    drawCanvasRenderModel({
-      context,
-      model: canvasRenderModel,
-      colorLookup
-    })
-  }, [canvasRenderModel, colorSummary, fullPalette])
-
   return (
     <div className='template-home-page'>
       <div className='site-version-badge'>v11</div>
@@ -1163,28 +1514,18 @@ export default function HomePageH5() {
               onChange={(event) => handleUploadFileSelection(event.target.files?.[0] ?? null)}
             />
             <select
-              id='generation-style-select'
-              className='led-size-btn generation-style-select'
-              title='生成风格'
-              value={String(styleIndex)}
-              onChange={(event) => void handleChangeStyle(Number.parseInt(event.target.value, 10))}
+              id='board-size'
+              className='led-size-btn board-size-select'
+              title='钉板尺寸'
+              aria-label='钉板尺寸'
+              value={selectedBoard.id}
+              onChange={(event) => void handleChangeBoardSize(event.target.value)}
             >
-              {GENERATION_STYLES.map((style) => (
-                <option key={style.index} value={style.index}>
-                  {style.name}
+              {BOARD_SIZE_OPTIONS.map((option) => (
+                <option key={option.id} value={option.id}>
+                  {option.label}
                 </option>
               ))}
-            </select>
-            <select
-              id='led-matrix-size'
-              className='led-size-btn'
-              value={String(ledSize)}
-              onChange={(event) => void handleChangeLedSize(Number.parseInt(event.target.value, 10))}
-            >
-              <option value='16'>16</option>
-              <option value='32'>32</option>
-              <option value='52'>52</option>
-              <option value='64'>64</option>
             </select>
             <button
               id='mode-quick-btn'
@@ -1217,33 +1558,87 @@ export default function HomePageH5() {
             </button>
           </div>
 
-          <div className='canvas-container' style={{ margin: '0 auto', position: 'relative' }}>
-            {homeViewState.showUploadArea && !isRestoringGeneratedState ? (
-              <label
-                id='upload-area'
-                className={homeViewState.uploadAreaClassName}
-                htmlFor='file-input'
-              >
-              <div className='upload-area-icon'>{homeViewState.uploadAreaIcon}</div>
-              <div className='upload-area-text'>{homeViewState.uploadAreaText}</div>
-              <div className='upload-area-hint'>{homeViewState.uploadAreaHint}</div>
-            </label>
-          ) : (
-              <div className='preview-section'>
-                <canvas
-                  id='pattern-canvas'
-                  ref={canvasRef}
-                  style={
-                    canvasRenderModel
-                      ? {
-                          display: 'block',
-                          width: `${canvasRenderModel.displayWidth}px`,
-                          height: `${canvasRenderModel.displayHeight}px`
-                        }
-                      : { display: 'none' }
-                  }
-                />
-              </div>
+          <div
+            className={`canvas-container ${hasPattern ? 'canvas-container--editor' : ''}`}
+            style={{ margin: '0 auto', position: 'relative' }}
+          >
+            {isRestoringGeneratedState ? (
+              <div className='creation-loading'>正在智能像素化并生成拼豆图纸...</div>
+            ) : hasPattern ? (
+              <PixelEditorH5
+                matrix={pixelMatrix}
+                colors={fullPaletteList}
+                presets={presets}
+                palettePreset={palettePreset}
+                boardLabel={selectedBoard.label}
+                onChange={syncEditedPattern}
+                onPalettePresetChange={(preset) => {
+                  usePatternStore.getState().setPalettePreset(preset)
+                  setIsCloudSynced(false)
+                  persistEditorDraft(
+                    usePatternStore.getState().pixelMatrix,
+                    shareTitle,
+                    cloudWork,
+                    false
+                  )
+                }}
+                onSave={handleSaveEditor}
+                onCloudSave={() => {
+                  void handleSaveCloudEditor()
+                }}
+                isCloudSaving={isCloudSaving}
+                cloudSaved={isCloudSynced}
+              />
+            ) : (
+              <section className='creation-launcher' aria-labelledby='creation-launcher-title'>
+                <div className='creation-launcher__copy'>
+                  <span className='creation-launcher__eyebrow'>PixelDoodle Web Studio</span>
+                  <h1 id='creation-launcher-title'>从想法到拼豆图纸，一处完成</h1>
+                  <p>
+                    当前尺寸 {selectedBoard.label}。可直接自由创作，也可导入照片智能像素化，设备连接不是创作前提。
+                  </p>
+                </div>
+                <div className='creation-launcher__actions'>
+                  <button
+                    className='creation-launcher__card creation-launcher__card--primary'
+                    type='button'
+                    onClick={handleCreateBlankCanvas}
+                  >
+                    <strong>新建空白画布</strong>
+                    <span>画笔、橡皮、填充、撤销与缩放</span>
+                  </button>
+                  <button
+                    id='upload-area'
+                    className='creation-launcher__card'
+                    type='button'
+                    onClick={() => fileInputRef.current?.click()}
+                  >
+                    <strong>导入图片生成</strong>
+                    <span>按钉板比例校准后，一键智能像素化</span>
+                  </button>
+                  <button
+                    className='creation-launcher__card'
+                    type='button'
+                    onClick={() => {
+                      void Taro.redirectTo({
+                        url: '/pages/materials/index'
+                      })
+                    }}
+                  >
+                    <strong>从海量素材库开始</strong>
+                    <span>分类筛选图纸，一键适配并继续二次编辑</span>
+                  </button>
+                </div>
+                {hasLocalDraft ? (
+                  <button
+                    className='creation-launcher__restore'
+                    type='button'
+                    onClick={handleRestoreLocalDraft}
+                  >
+                    恢复上次本地草稿
+                  </button>
+                ) : null}
+              </section>
             )}
           </div>
 
@@ -1254,13 +1649,14 @@ export default function HomePageH5() {
               style={{ marginTop: '12px' }}
             >
               <div className='section-title' data-i18n='examples.title'>
-                示例图片
+                精选入门素材
               </div>
               <div className='examples-gallery'>
                 {EXAMPLE_ITEMS.map((item) => (
-                  <div
+                  <button
                     key={item.id}
                     className='example-item'
+                    type='button'
                     onClick={() => void handleSelectExample(item)}
                   >
                     <img
@@ -1268,8 +1664,8 @@ export default function HomePageH5() {
                       alt={item.title}
                       className='example-thumb'
                     />
-                    <div className='example-name'>{item.title}</div>
-                  </div>
+                    <div className='example-name'>{item.title} · 套用并编辑</div>
+                  </button>
                 ))}
               </div>
             </div>
@@ -1339,7 +1735,7 @@ export default function HomePageH5() {
             </div>
           </div>
 
-          {hasPattern ? (
+          {totalBeads > 0 ? (
             <div className='community-share-card'>
               <div className='community-share-card__header'>
                 <div>
@@ -1382,7 +1778,17 @@ export default function HomePageH5() {
                 type='text'
                 value={shareTitle}
                 onChange={(event) => {
-                  setShareTitle(event.target.value)
+                  const nextTitle = event.target.value
+                  setShareTitle(nextTitle)
+                  if (cloudWork) {
+                    setIsCloudSynced(false)
+                  }
+                  persistEditorDraft(
+                    usePatternStore.getState().pixelMatrix,
+                    nextTitle,
+                    cloudWork,
+                    false
+                  )
                 }}
               />
               <textarea
@@ -1418,6 +1824,11 @@ export default function HomePageH5() {
               </button>
             </div>
           ) : null}
+          <DeviceMonitorPanel
+            device={monitoredDevice}
+            alerts={monitoredAlerts}
+            onAcknowledgeAlert={acknowledgeDeviceAlert}
+          />
         </div>
       </div>
 
@@ -1443,8 +1854,14 @@ export default function HomePageH5() {
         cropImageRef={cropImageRef}
         cropImageStyle={cropImageStyle}
         cropBoxStyle={cropBoxStyle}
+        boardLabel={selectedBoard.label}
+        gridWidth={selectedBoard.width}
+        gridHeight={selectedBoard.height}
+        zoom={cropZoom}
         onCancel={cancelCrop}
         onConfirm={() => void confirmCrop()}
+        onReset={handleResetCrop}
+        onZoomChange={handleCropZoomChange}
         onMouseDown={(event) => {
           event.preventDefault()
           const cropState = cropStateRef.current

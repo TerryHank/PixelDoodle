@@ -1,0 +1,42 @@
+{
+  "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
+  "productName": "PixelDoodle",
+  "version": "11.0.0",
+  "identifier": "com.terry.pixeldoodle",
+  "build": {
+    "frontendDist": "../dist-h5",
+    "devUrl": "http://localhost:10086",
+    "beforeDevCommand": "npm run dev:h5",
+    "beforeBuildCommand": "npm run build:h5"
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "PixelDoodle",
+        "width": 800,
+        "height": 600,
+        "resizable": true,
+        "fullscreen": false
+      }
+    ],
+    "security": {
+      "csp": "default-src 'self' customprotocol: asset:; connect-src 'self' ipc: http://ipc.localhost https:; img-src 'self' asset: http://asset.localhost data: blob: https:; style-src 'self' 'unsafe-inline'; script-src 'self' 'wasm-unsafe-eval'; worker-src 'self' blob:; font-src 'self' data:; media-src 'self' data: blob:"
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ],
+    "android": {
+      "debugApplicationIdSuffix": ".debug",
+      "minSdkVersion": 24,
+      "versionCode": 110000
+    }
+  }
+}

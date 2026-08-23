@@ -1,1 +1,57 @@
-/* H5 dialog styling intentionally reuses the legacy selectors from template-h5.scss. */
+/*postcss-pxtransform disable*/
+
+.crop-dialog__subtitle {
+  margin: 3px 0 0;
+  color: #64748b;
+  font-size: 12px;
+  font-weight: 400;
+}
+
+.crop-dialog__controls {
+  display: grid;
+  grid-template-columns: auto auto minmax(120px, 1fr) auto auto auto;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 16px;
+  border-top: 1px solid #e2e8f0;
+  border-bottom: 1px solid #e2e8f0;
+  background: #f8fafc;
+  color: #475569;
+  font-size: 12px;
+}
+
+.crop-dialog__controls input {
+  margin: 0;
+}
+
+.crop-dialog__controls button {
+  height: 30px;
+  padding: 0 10px;
+  border: 1px solid #cbd5e1;
+  border-radius: 8px;
+  background: #ffffff;
+  color: #334155;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.crop-dialog__controls button:disabled {
+  cursor: not-allowed;
+  opacity: 0.4;
+}
+
+.crop-box {
+  background-image:
+    linear-gradient(to right, rgba(255, 255, 255, 0.48) 1px, transparent 1px),
+    linear-gradient(to bottom, rgba(255, 255, 255, 0.48) 1px, transparent 1px);
+}
+
+@media (max-width: 560px) {
+  .crop-dialog__controls {
+    grid-template-columns: auto auto minmax(80px, 1fr) auto auto;
+  }
+
+  .crop-dialog__controls button:last-child {
+    grid-column: 1 / -1;
+  }
+}

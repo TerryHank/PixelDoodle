@@ -1,0 +1,134 @@
+.device-monitor {
+  display: flex;
+  flex-direction: column;
+  gap: 14PX;
+  margin: 16PX 0;
+  padding: 16PX;
+  border: 1PX solid rgba(203, 213, 225, 0.92);
+  border-radius: 18PX;
+  background: rgba(255, 255, 255, 0.98);
+  box-shadow: 0 16PX 40PX rgba(15, 23, 42, 0.08);
+}
+
+.device-monitor--warning {
+  border-color: rgba(245, 158, 11, 0.65);
+}
+
+.device-monitor--critical {
+  border-color: rgba(220, 38, 38, 0.72);
+}
+
+.device-monitor__header,
+.device-monitor__metrics,
+.device-monitor__alert {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12PX;
+}
+
+.device-monitor__eyebrow,
+.device-monitor__title,
+.device-monitor__metric-value,
+.device-monitor__metric-label,
+.device-monitor__hint,
+.device-monitor__alert-message,
+.device-monitor__alert-meta {
+  display: block;
+}
+
+.device-monitor__eyebrow {
+  color: #2563eb;
+  font-size: 11PX;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+}
+
+.device-monitor__title {
+  margin-top: 3PX;
+  color: #172033;
+  font-size: 18PX;
+  font-weight: 800;
+}
+
+.device-monitor__device-id {
+  padding: 5PX 9PX;
+  border-radius: 999PX;
+  color: #475569;
+  background: #f1f5f9;
+  font-family: monospace;
+  font-size: 11PX;
+}
+
+.device-monitor__metric {
+  flex: 1;
+  min-width: 0;
+  padding: 10PX;
+  border-radius: 12PX;
+  text-align: center;
+  background: #f8fafc;
+}
+
+.device-monitor__metric-value {
+  color: #172033;
+  font-size: 15PX;
+  font-weight: 800;
+}
+
+.device-monitor__metric-label,
+.device-monitor__hint,
+.device-monitor__alert-meta {
+  margin-top: 3PX;
+  color: #64748b;
+  font-size: 11PX;
+}
+
+.device-monitor__alerts {
+  display: flex;
+  flex-direction: column;
+  gap: 8PX;
+}
+
+.device-monitor__alert {
+  padding: 10PX 12PX;
+  border-radius: 12PX;
+  background: #fff7ed;
+}
+
+.device-monitor__alert--critical {
+  background: #fef2f2;
+}
+
+.device-monitor__alert-copy {
+  min-width: 0;
+}
+
+.device-monitor__alert-message {
+  color: #7c2d12;
+  font-size: 12PX;
+  font-weight: 700;
+}
+
+.device-monitor__alert--critical .device-monitor__alert-message {
+  color: #991b1b;
+}
+
+.device-monitor__acknowledge,
+.device-monitor__acknowledged {
+  flex: 0 0 auto;
+  color: #2563eb;
+  font-size: 11PX;
+  font-weight: 700;
+}
+
+.device-monitor__acknowledge {
+  padding: 6PX 9PX;
+  border: 0;
+  border-radius: 9PX;
+  background: #dbeafe;
+  line-height: normal;
+}
+
+.device-monitor__acknowledge::after {
+  border: 0;
+}

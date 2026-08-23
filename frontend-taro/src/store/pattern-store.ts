@@ -18,6 +18,10 @@ import type {
 
 const DEFAULT_DIFFICULTY = 0.25
 const DEFAULT_GRID_SIZE = 64
+const DEFAULT_BOARD_SIZE: GridSize = {
+  width: 29,
+  height: 29
+}
 
 export interface PatternState {
   originalImage: string | null
@@ -31,6 +35,7 @@ export interface PatternState {
   fullPaletteList: PaletteColor[]
   presets: PalettePresetMap
   gridSize: GridSize
+  boardSize: GridSize
   totalBeads: number
   palettePreset: string
   styleIndex: number
@@ -44,8 +49,10 @@ export interface PatternState {
   setExampleImage: (exampleImage: string | null) => void
   setOriginalImage: (filePath: string | null) => void
   setLedSize: (ledSize: number) => void
+  setBoardSize: (boardSize: GridSize) => void
   setDifficulty: (difficulty: number) => void
   setStyleIndex: (styleIndex: number) => void
+  setPalettePreset: (palettePreset: string) => void
   toggleRemoveBackground: () => void
   generateFromFile: (
     filePath: string,
@@ -57,6 +64,8 @@ export interface PatternState {
       palettePreset?: string
       removeBackground?: boolean
       ledSize?: number
+      gridWidth?: number
+      gridHeight?: number
       mode?: 'fixed_grid' | 'pixel_size'
       pixelSize?: number
     }
@@ -78,6 +87,7 @@ export const usePatternStore = create<PatternState>((set, get) => ({
     width: 0,
     height: 0
   },
+  boardSize: DEFAULT_BOARD_SIZE,
   totalBeads: 0,
   palettePreset: DEFAULT_PALETTE_PRESET,
   styleIndex: DEFAULT_GENERATION_STYLE_INDEX,
@@ -133,6 +143,13 @@ export const usePatternStore = create<PatternState>((set, get) => ({
     set(() => ({
       ledSize
     })),
+  setBoardSize: (boardSize) =>
+    set(() => ({
+      boardSize: {
+        width: Math.max(1, Math.round(boardSize.width)),
+        height: Math.max(1, Math.round(boardSize.height))
+      }
+    })),
   setDifficulty: (difficulty) =>
     set(() => ({
       difficulty
@@ -140,6 +157,10 @@ export const usePatternStore = create<PatternState>((set, get) => ({
   setStyleIndex: (styleIndex) =>
     set(() => ({
       styleIndex
+    })),
+  setPalettePreset: (palettePreset) =>
+    set(() => ({
+      palettePreset
     })),
   toggleRemoveBackground: () =>
     set((state) => ({
@@ -155,19 +176,29 @@ export const usePatternStore = create<PatternState>((set, get) => ({
     try {
       const state = get()
       const mode = options.mode ?? 'fixed_grid'
-      const selectedGridSize = options.ledSize ?? state.ledSize
-      const gridSize =
-        Number.isFinite(selectedGridSize) && selectedGridSize > 0
-          ? Math.round(selectedGridSize)
+      const selectedGridWidth = options.gridWidth ?? state.boardSize.width
+      const selectedGridHeight = options.gridHeight ?? state.boardSize.height
+      const gridWidth =
+        Number.isFinite(selectedGridWidth) && selectedGridWidth > 0
+          ? Math.round(selectedGridWidth)
+          : DEFAULT_GRID_SIZE
+      const gridHeight =
+        Number.isFinite(selectedGridHeight) && selectedGridHeight > 0
+          ? Math.round(selectedGridHeight)
+          : DEFAULT_GRID_SIZE
+      const selectedLedSize = options.ledSize ?? state.ledSize
+      const ledSize =
+        Number.isFinite(selectedLedSize) && selectedLedSize > 0
+          ? Math.round(selectedLedSize)
           : DEFAULT_GRID_SIZE
       const fields = buildGenerateFields({
         mode,
-        gridWidth: gridSize,
-        gridHeight: gridSize,
+        gridWidth,
+        gridHeight,
         styleIndex: options.styleIndex ?? state.styleIndex,
         prompt: options.prompt,
         referenceImageUrl: options.referenceImageUrl,
-        ledSize: gridSize,
+        ledSize,
         pixelSize: options.pixelSize ?? 8,
         palettePreset: options.palettePreset ?? state.palettePreset,
         removeBackground: options.removeBackground ?? state.removeBackground

@@ -1,8 +1,11 @@
 #pragma once
 #include <Arduino.h>
+#include <time.h>
 #include <functional>
+#include <Preferences.h>
 #include <NimBLEDevice.h>
 #include <ESP32-HUB75-MatrixPanel-I2S-DMA.h>
+#include <mbedtls/md.h>
 
 // BLE Service UUID (custom for BeadCraft)
 #define SERVICE_UUID           "4fafc201-1fb5-459e-8fcc-c5c9c331914b"
@@ -23,8 +26,39 @@ const uint16_t TRANSPARENT_RGB565 = 0x0001;
 #define PKT_SHOW_ALL       0x05
 #define PKT_SET_BRIGHTNESS 0x09
 #define PKT_GET_BRIGHTNESS 0x0A
+#define PKT_ACTIVATION_START  0x0B
+#define PKT_ACTIVATION_DATA   0x0C
+#define PKT_ACTIVATION_COMMIT 0x0D
+#define PKT_GET_LOCK_STATUS   0x0E
 
 #define NTF_BRIGHTNESS      0x26
+#define NTF_ACTIVATION_STATUS 0x27
+
+#define ACTIVATION_LOCKED          0x00
+#define ACTIVATION_UNLOCKED        0x01
+#define ACTIVATION_MALFORMED       0x02
+#define ACTIVATION_WRONG_DEVICE    0x03
+#define ACTIVATION_INVALID_SIG     0x04
+#define ACTIVATION_REPLAYED        0x05
+#define ACTIVATION_SECRET_MISSING  0x06
+#define ACTIVATION_EXPIRED         0x07
+
+#ifndef BEADCRAFT_DEVICE_LOCK_ENABLED
+#define BEADCRAFT_DEVICE_LOCK_ENABLED 1
+#endif
+
+// Provision this per device. An empty value deliberately fails closed.
+#ifndef BEADCRAFT_DEVICE_SECRET
+#define BEADCRAFT_DEVICE_SECRET ""
+#endif
+
+const uint8_t DEVICE_GRANT_VERSION = 2;
+const size_t DEVICE_GRANT_BODY_SIZE = 35;
+const size_t DEVICE_GRANT_SIGNATURE_SIZE = 16;
+const size_t DEVICE_GRANT_SIZE = DEVICE_GRANT_BODY_SIZE + DEVICE_GRANT_SIGNATURE_SIZE;
+const uint32_t DEVICE_GRANT_MIN_SECONDS = 30;
+const uint32_t DEVICE_GRANT_MAX_SECONDS = 3600;
+const uint64_t DEVICE_GRANT_MIN_VALID_EPOCH = 1700000000ULL;
 
 class BLEImageReceiver : public NimBLEServerCallbacks, public NimBLECharacteristicCallbacks {
 private:
@@ -40,6 +74,7 @@ private:
     bool _highlightMode;
     std::function<void(uint8_t, bool)> _setBrightness;
     std::function<uint8_t(void)> _getBrightness;
+    std::function<void(void)> _showLockedScreen;
     
     // BLE state
     size_t _recvIndex;
@@ -50,6 +85,192 @@ private:
     bool _loading;
     uint8_t _loadingFrame;
     unsigned long _lastLoadingAnimMs;
+    String _deviceCode;
+    uint8_t _grantBuffer[DEVICE_GRANT_SIZE];
+    size_t _grantExpected;
+    size_t _grantReceived;
+    unsigned long _unlockedUntilMs;
+    bool _wasUnlocked;
+    Preferences _accessPreferences;
+
+    bool isUnlockedNow() {
+#if BEADCRAFT_DEVICE_LOCK_ENABLED
+        if (_unlockedUntilMs == 0) return false;
+        return static_cast<int32_t>(_unlockedUntilMs - millis()) > 0;
+#else
+        return true;
+#endif
+    }
+
+    void sendActivationStatus(uint8_t status) {
+        if (!_pCharacteristic || !_deviceConnected) return;
+        uint8_t payload[] = {NTF_ACTIVATION_STATUS, status};
+        _pCharacteristic->setValue(payload, sizeof(payload));
+        _pCharacteristic->notify(true);
+        delay(12);
+    }
+
+    void showLockedScreen() {
+        _loading = false;
+        _recvIndex = 0;
+        if (_showLockedScreen) {
+            _showLockedScreen();
+        } else {
+            _display->fillScreen(0);
+        }
+    }
+
+    bool requireUnlocked() {
+        if (isUnlockedNow()) return true;
+        _unlockedUntilMs = 0;
+        _wasUnlocked = false;
+        showLockedScreen();
+        sendActivationStatus(ACTIVATION_LOCKED);
+        Serial.println("BLE: Rejected while device locked");
+        return false;
+    }
+
+    int8_t hexNibble(char value) const {
+        if (value >= '0' && value <= '9') return value - '0';
+        if (value >= 'A' && value <= 'F') return 10 + value - 'A';
+        if (value >= 'a' && value <= 'f') return 10 + value - 'a';
+        return -1;
+    }
+
+    bool grantMatchesDevice(const uint8_t* grantDevice) const {
+        if (_deviceCode.length() != 12) return false;
+        for (size_t i = 0; i < 6; i++) {
+            const int8_t high = hexNibble(_deviceCode.charAt(i * 2));
+            const int8_t low = hexNibble(_deviceCode.charAt(i * 2 + 1));
+            if (high < 0 || low < 0 || grantDevice[i] != ((high << 4) | low)) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    uint32_t readLittleEndian32(const uint8_t* value) const {
+        return static_cast<uint32_t>(value[0]) |
+            (static_cast<uint32_t>(value[1]) << 8) |
+            (static_cast<uint32_t>(value[2]) << 16) |
+            (static_cast<uint32_t>(value[3]) << 24);
+    }
+
+    uint64_t readLittleEndian64(const uint8_t* value) const {
+        uint64_t result = 0;
+        for (size_t i = 0; i < 8; i++) {
+            result |= static_cast<uint64_t>(value[i]) << (i * 8);
+        }
+        return result;
+    }
+
+    uint64_t storedGrantSequence() {
+        uint8_t encoded[8] = {0};
+        if (_accessPreferences.getBytesLength("grantSeq") != sizeof(encoded)) {
+            return 0;
+        }
+        if (_accessPreferences.getBytes("grantSeq", encoded, sizeof(encoded)) !=
+            sizeof(encoded)) {
+            return UINT64_MAX;
+        }
+        return readLittleEndian64(encoded);
+    }
+
+    bool persistGrantSequence(uint64_t sequence) {
+        uint8_t encoded[8] = {0};
+        for (size_t i = 0; i < sizeof(encoded); i++) {
+            encoded[i] = static_cast<uint8_t>((sequence >> (i * 8)) & 0xFF);
+        }
+        return _accessPreferences.putBytes("grantSeq", encoded, sizeof(encoded)) ==
+            sizeof(encoded);
+    }
+
+    bool signatureValid() const {
+        const char* secret = BEADCRAFT_DEVICE_SECRET;
+        if (strlen(secret) < 16) return false;
+        const mbedtls_md_info_t* mdInfo = mbedtls_md_info_from_type(MBEDTLS_MD_SHA256);
+        if (!mdInfo) return false;
+        uint8_t digest[32] = {0};
+        if (mbedtls_md_hmac(
+                mdInfo,
+                reinterpret_cast<const unsigned char*>(secret),
+                strlen(secret),
+                _grantBuffer,
+                DEVICE_GRANT_BODY_SIZE,
+                digest
+            ) != 0) {
+            return false;
+        }
+        uint8_t difference = 0;
+        for (size_t i = 0; i < DEVICE_GRANT_SIGNATURE_SIZE; i++) {
+            difference |= digest[i] ^ _grantBuffer[DEVICE_GRANT_BODY_SIZE + i];
+        }
+        return difference == 0;
+    }
+
+    void commitActivationGrant() {
+#if !BEADCRAFT_DEVICE_LOCK_ENABLED
+        sendActivationStatus(ACTIVATION_UNLOCKED);
+        return;
+#endif
+        if (_grantExpected != DEVICE_GRANT_SIZE || _grantReceived != DEVICE_GRANT_SIZE ||
+            _grantBuffer[0] != DEVICE_GRANT_VERSION) {
+            sendActivationStatus(ACTIVATION_MALFORMED);
+            return;
+        }
+        if (!grantMatchesDevice(_grantBuffer + 1)) {
+            sendActivationStatus(ACTIVATION_WRONG_DEVICE);
+            return;
+        }
+        if (strlen(BEADCRAFT_DEVICE_SECRET) < 16) {
+            sendActivationStatus(ACTIVATION_SECRET_MISSING);
+            Serial.println("BLE: BEADCRAFT_DEVICE_SECRET is not provisioned");
+            return;
+        }
+        if (!signatureValid()) {
+            sendActivationStatus(ACTIVATION_INVALID_SIG);
+            return;
+        }
+        const uint32_t duration = readLittleEndian32(_grantBuffer + 7);
+        if (duration < DEVICE_GRANT_MIN_SECONDS || duration > DEVICE_GRANT_MAX_SECONDS) {
+            sendActivationStatus(ACTIVATION_MALFORMED);
+            return;
+        }
+        const uint64_t notAfterEpoch = readLittleEndian64(_grantBuffer + 11);
+        if (notAfterEpoch < DEVICE_GRANT_MIN_VALID_EPOCH) {
+            sendActivationStatus(ACTIVATION_MALFORMED);
+            return;
+        }
+        const time_t nowEpoch = time(nullptr);
+        if (nowEpoch >= static_cast<time_t>(DEVICE_GRANT_MIN_VALID_EPOCH) &&
+            static_cast<uint64_t>(nowEpoch) >= notAfterEpoch) {
+            sendActivationStatus(ACTIVATION_EXPIRED);
+            return;
+        }
+        const uint64_t grantSequence = readLittleEndian64(_grantBuffer + 19);
+        const uint64_t highWater = storedGrantSequence();
+        if (grantSequence == 0 || highWater == UINT64_MAX) {
+            sendActivationStatus(ACTIVATION_MALFORMED);
+            return;
+        }
+        if (grantSequence == highWater && isUnlockedNow()) {
+            // BLE retransmission ACK only: never extend the original unlock deadline.
+            sendActivationStatus(ACTIVATION_UNLOCKED);
+            return;
+        }
+        if (grantSequence <= highWater) {
+            sendActivationStatus(ACTIVATION_REPLAYED);
+            return;
+        }
+        if (!persistGrantSequence(grantSequence)) {
+            sendActivationStatus(ACTIVATION_MALFORMED);
+            return;
+        }
+        _unlockedUntilMs = millis() + duration * 1000UL;
+        _wasUnlocked = true;
+        sendActivationStatus(ACTIVATION_UNLOCKED);
+        Serial.printf("BLE: Device unlocked for %lu seconds\n", static_cast<unsigned long>(duration));
+    }
 
     uint16_t rgbTo565(uint8_t r, uint8_t g, uint8_t b) {
         return ((r & 0xF8) << 8) | ((g & 0xFC) << 3) | (b >> 3);
@@ -120,8 +341,10 @@ public:
     BLEImageReceiver(
         MatrixPanel_I2S_DMA* display,
         std::function<void(uint8_t, bool)> setBrightness,
-        std::function<uint8_t(void)> getBrightness
-    ) : _display(display), _setBrightness(setBrightness), _getBrightness(getBrightness) {
+        std::function<uint8_t(void)> getBrightness,
+        std::function<void(void)> showLockedScreen
+    ) : _display(display), _setBrightness(setBrightness), _getBrightness(getBrightness),
+        _showLockedScreen(showLockedScreen) {
         _hasImage = false;
         _highlightCount = 0;
         _highlightMode = false;
@@ -133,11 +356,19 @@ public:
         _loading = false;
         _loadingFrame = 0;
         _lastLoadingAnimMs = 0;
+        _grantExpected = 0;
+        _grantReceived = 0;
+        _unlockedUntilMs = 0;
+        _wasUnlocked = false;
         memset(_imageBuffer, 0, IMAGE_SIZE);
         memset(_highlightColors, 0, sizeof(_highlightColors));
+        memset(_grantBuffer, 0, sizeof(_grantBuffer));
     }
 
     void begin(const String& deviceCode) {
+        _deviceCode = deviceCode;
+        _deviceCode.toUpperCase();
+        _accessPreferences.begin("beadaccess", false);
         String bleName = "BeadCraft-" + deviceCode;
         NimBLEDevice::init(bleName.c_str());
         NimBLEDevice::setPower(ESP_PWR_LVL_P9);
@@ -167,6 +398,7 @@ public:
         _deviceConnected = true;
         Serial.println("BLE Connected");
         sendBrightnessNotification();
+        sendActivationStatus(isUnlockedNow() ? ACTIVATION_UNLOCKED : ACTIVATION_LOCKED);
     };
 
     void onDisconnect(NimBLEServer* pServer) override {
@@ -185,7 +417,38 @@ public:
         uint8_t packetType = data[0];
         
         switch (packetType) {
+            case PKT_ACTIVATION_START:
+                _grantReceived = 0;
+                _grantExpected = len >= 3 ? (data[1] | (data[2] << 8)) : 0;
+                memset(_grantBuffer, 0, sizeof(_grantBuffer));
+                if (_grantExpected != DEVICE_GRANT_SIZE) {
+                    _grantExpected = 0;
+                    sendActivationStatus(ACTIVATION_MALFORMED);
+                }
+                break;
+
+            case PKT_ACTIVATION_DATA:
+                if (_grantExpected == DEVICE_GRANT_SIZE && len > 1 &&
+                    _grantReceived + len - 1 <= DEVICE_GRANT_SIZE) {
+                    memcpy(_grantBuffer + _grantReceived, data + 1, len - 1);
+                    _grantReceived += len - 1;
+                } else {
+                    _grantExpected = 0;
+                    _grantReceived = 0;
+                    sendActivationStatus(ACTIVATION_MALFORMED);
+                }
+                break;
+
+            case PKT_ACTIVATION_COMMIT:
+                commitActivationGrant();
+                break;
+
+            case PKT_GET_LOCK_STATUS:
+                sendActivationStatus(isUnlockedNow() ? ACTIVATION_UNLOCKED : ACTIVATION_LOCKED);
+                break;
+
             case PKT_START_IMAGE:
+                if (!requireUnlocked()) break;
                 _recvIndex = 0;
                 _recvChecksum = 0;
                 _loading = true;
@@ -196,6 +459,7 @@ public:
                 break;
                 
             case PKT_IMAGE_DATA:
+                if (!isUnlockedNow()) break;
                 // Data chunk: [0x02][data...]
                 if (len > 1 && _recvIndex + len - 1 <= IMAGE_SIZE) {
                     memcpy(_imageBuffer + _recvIndex, data + 1, len - 1);
@@ -208,6 +472,7 @@ public:
                 break;
                 
             case PKT_END_IMAGE: {
+                if (!requireUnlocked()) break;
                 Serial.printf("BLE: Image done, %d bytes\n", _recvIndex);
                 _loading = false;
                 uint16_t expectedChecksum = _recvChecksum;
@@ -228,6 +493,7 @@ public:
             }
                 
             case PKT_HIGHLIGHT:
+                if (!requireUnlocked()) break;
                 // Highlight: [0x04][count][RGB565...]
                 if (len >= 2) {
                     _highlightCount = min(data[1], (uint8_t)MAX_HIGHLIGHT_COLORS);
@@ -246,6 +512,7 @@ public:
                 break;
                 
             case PKT_SHOW_ALL:
+                if (!requireUnlocked()) break;
                 // Show all: [0x05]
                 _highlightMode = false;
                 Serial.println("BLE: Show all");
@@ -303,6 +570,7 @@ public:
     }
 
     void applyHighlightPacket(const uint8_t* data, size_t len) {
+        if (!requireUnlocked()) return;
         if (len == 0) return;
         if (data[0] == PKT_SHOW_ALL) {
             _highlightMode = false;
@@ -328,8 +596,17 @@ public:
 
     bool isConnected() { return _deviceConnected; }
     bool hasImage() { return _hasImage; }
+    bool isUnlocked() { return isUnlockedNow(); }
     
     void update() {
+        const bool unlocked = isUnlockedNow();
+        if (_wasUnlocked && !unlocked) {
+            _unlockedUntilMs = 0;
+            _wasUnlocked = false;
+            showLockedScreen();
+            sendActivationStatus(ACTIVATION_LOCKED);
+            Serial.println("BLE: Device grant expired; locked");
+        }
         if (_loading) {
             drawLoadingSpinner();
         }

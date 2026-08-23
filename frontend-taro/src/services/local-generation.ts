@@ -62,7 +62,7 @@ interface PendingRequest {
   resolve: (value: GeneratePatternResponse) => void
   reject: (error: Error) => void
   timeoutId: ReturnType<typeof setTimeout>
-  palettePreset: string
+  options: LocalGenerateOptions
 }
 
 let localGenerationWorker: Worker | null = null
@@ -163,6 +163,34 @@ export function normalizeGeneratePatternResponse(
   }
 }
 
+export function validateLocalGenerationGrid(
+  response: GeneratePatternResponse,
+  options: LocalGenerateOptions
+) {
+  if (options.mode !== 'fixed_grid') {
+    return response
+  }
+
+  const expectedWidth = Math.max(1, options.grid_width)
+  const expectedHeight = Math.max(1, options.grid_height)
+  const hasExpectedMatrixShape =
+    response.pixel_matrix.length === expectedHeight &&
+    response.pixel_matrix.every((row) => row.length === expectedWidth)
+  const hasExpectedGridSize =
+    response.grid_size.width === expectedWidth &&
+    response.grid_size.height === expectedHeight
+
+  if (!hasExpectedGridSize || !hasExpectedMatrixShape) {
+    const matrixWidth = response.pixel_matrix[0]?.length ?? 0
+    const matrixHeight = response.pixel_matrix.length
+    throw new Error(
+      `本地图案尺寸不匹配：期望 ${expectedWidth}×${expectedHeight}，响应 ${response.grid_size.width}×${response.grid_size.height}，矩阵 ${matrixWidth}×${matrixHeight}`
+    )
+  }
+
+  return response
+}
+
 function ensureLocalGenerationWorker() {
   if (!isLocalGenerationAvailable()) {
     throw new Error('Local generation is unavailable')
@@ -193,12 +221,19 @@ function ensureLocalGenerationWorker() {
       return
     }
 
-    pending.resolve(
-      normalizeGeneratePatternResponse(
-        event.data.result,
-        pending.palettePreset
+    try {
+      pending.resolve(
+        validateLocalGenerationGrid(
+          normalizeGeneratePatternResponse(
+            event.data.result,
+            pending.options.palette_preset
+          ),
+          pending.options
+        )
       )
-    )
+    } catch (error) {
+      pending.reject(error instanceof Error ? error : new Error('本地图案尺寸校验失败'))
+    }
   })
 
   worker.addEventListener('error', (event) => {
@@ -248,17 +283,20 @@ async function generatePatternLocallyForWeapp(
     )
   ])
 
-  return normalizeGeneratePatternResponse(
-    generatePatternLocalJs({
-      sourceWidth: Number(imageInfo.width || 0),
-      sourceHeight: Number(imageInfo.height || 0),
-      selectionRaster,
-      midRaster,
-      options,
-      colors: paletteData.colors,
-      presets: paletteData.presets
-    }),
-    fields.palette_preset ?? '221'
+  return validateLocalGenerationGrid(
+    normalizeGeneratePatternResponse(
+      generatePatternLocalJs({
+        sourceWidth: Number(imageInfo.width || 0),
+        sourceHeight: Number(imageInfo.height || 0),
+        selectionRaster,
+        midRaster,
+        options,
+        colors: paletteData.colors,
+        presets: paletteData.presets
+      }),
+      fields.palette_preset ?? '221'
+    ),
+    options
   )
 }
 
@@ -286,7 +324,7 @@ async function generatePatternLocallyForH5(
       resolve,
       reject,
       timeoutId,
-      palettePreset: options.palette_preset
+      options
     })
 
     const payload: WorkerRequest = {

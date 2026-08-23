@@ -102,7 +102,7 @@ class DashScopeImageGenerationTests(unittest.TestCase):
         ), patch(
             "main.remove_background",
             return_value=buf.getvalue(),
-        ), patch(
+        ) as remove_background_mock, patch(
             "main._generate_dashscope_style",
             return_value=(gen_buf.getvalue(), "image/png", "task-42"),
         ) as generate_mock, patch(
@@ -136,6 +136,7 @@ class DashScopeImageGenerationTests(unittest.TestCase):
             )
 
         reference_value, selected_style = generate_mock.call_args.args
+        remove_background_mock.assert_not_called()
         self.assertTrue(reference_value.startswith("data:image/png;base64,"))
         self.assertEqual(
             base64.b64decode(reference_value.split(",", 1)[1]),

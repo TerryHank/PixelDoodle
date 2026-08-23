@@ -1,9 +1,13 @@
+import Taro from '@tarojs/taro'
 import { Input, ScrollView, Text, Textarea, View } from '@tarojs/components'
 import { AppTabBar } from '@/components/app-tab-bar'
 import { PatternThumb } from '@/components/pattern-thumb'
 import { ProfileAvatar } from '@/components/profile-avatar'
+import { buildPatternStateFromHistory } from '@/features/pixel-editor/history'
 import { useHistoryStore } from '@/store/history-store'
+import { usePatternStore } from '@/store/pattern-store'
 import { useUserStore } from '@/store/user-store'
+import type { PatternHistoryEntry } from '@/types/community'
 import './index.scss'
 
 export default function ProfilePage() {
@@ -16,6 +20,13 @@ export default function ProfilePage() {
   const setAutoShareToCommunity = useUserStore((state) => state.setAutoShareToCommunity)
   const entries = useHistoryStore((state) => state.entries)
   const clearHistory = useHistoryStore((state) => state.clearHistory)
+
+  async function handleContinueEditing(entry: PatternHistoryEntry) {
+    usePatternStore.setState(buildPatternStateFromHistory(entry))
+    await Taro.redirectTo({
+      url: '/pages/home/index'
+    })
+  }
 
   return (
     <View className='profile-page'>
@@ -62,12 +73,25 @@ export default function ProfilePage() {
             </View>
           </View>
 
+          <View
+            className='profile-business-card'
+            onClick={() => {
+              void Taro.redirectTo({ url: '/pages/account/index' })
+            }}
+          >
+            <View>
+              <Text className='history-section__title'>云端与设备中心</Text>
+              <Text className='history-section__subtitle'>私有云作品、支付启动设备、收益查询与导出</Text>
+            </View>
+            <Text className='profile-business-card__arrow'>进入 →</Text>
+          </View>
+
           <View className='history-section'>
             <View className='history-section__header'>
               <View>
                 <Text className='history-section__title'>历史生成</Text>
                 <Text className='history-section__subtitle'>
-                  保存最近上传或示例生成过的图案，方便再次发布或参考。
+                  保存最近上传或示例生成过的图案，可随时继续编辑。
                 </Text>
               </View>
               <View className='history-section__clear' onClick={clearHistory}>
@@ -94,6 +118,14 @@ export default function ProfilePage() {
                         {entry.gridSize.width}x{entry.gridSize.height} · {entry.totalBeads} 颗 ·{' '}
                         {new Date(entry.createdAt).toLocaleString()}
                       </Text>
+                    </View>
+                    <View
+                      className='history-card__continue'
+                      onClick={() => {
+                        void handleContinueEditing(entry)
+                      }}
+                    >
+                      <Text>继续编辑</Text>
                     </View>
                   </View>
                 ))}

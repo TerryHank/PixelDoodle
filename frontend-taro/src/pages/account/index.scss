@@ -1,0 +1,214 @@
+.account-page {
+  min-height: 100vh;
+  background: #f8fafc;
+}
+
+.account-page__scroll {
+  height: 100vh;
+}
+
+.account-page__content {
+  display: flex;
+  flex-direction: column;
+  gap: 16PX;
+  margin: 0 auto;
+  max-width: 920PX;
+  padding: 24PX 14PX 72PX;
+}
+
+.account-page__header,
+.account-card,
+.account-notice {
+  background: #fff;
+  border: 1PX solid #e2e8f0;
+  border-radius: 18PX;
+  box-shadow: 0 18PX 48PX rgba(15, 23, 42, 0.07);
+  padding: 18PX;
+}
+
+.account-page__header {
+  display: flex;
+  flex-direction: column;
+  gap: 6PX;
+}
+
+.account-page__back {
+  color: #2563eb;
+  font-size: 13PX;
+  font-weight: 700;
+  margin-bottom: 8PX;
+}
+
+.account-page__title {
+  color: #0f172a;
+  font-size: 24PX;
+  font-weight: 800;
+}
+
+.account-page__subtitle,
+.account-card__hint {
+  color: #64748b;
+  display: block;
+  font-size: 12PX;
+  line-height: 1.6;
+}
+
+.account-notice {
+  background: #eff6ff;
+  border-color: #bfdbfe;
+  color: #1d4ed8;
+  font-size: 13PX;
+}
+
+.account-card {
+  display: flex;
+  flex-direction: column;
+  gap: 14PX;
+}
+
+.account-card__heading,
+.account-list__item,
+.account-actions,
+.earnings-summary {
+  align-items: center;
+  display: flex;
+  gap: 10PX;
+  justify-content: space-between;
+}
+
+.account-card__title,
+.account-list__title {
+  color: #0f172a;
+  display: block;
+  font-size: 17PX;
+  font-weight: 750;
+}
+
+.account-list__title {
+  font-size: 14PX;
+}
+
+.account-badge,
+.account-chip {
+  background: #f1f5f9;
+  border-radius: 999PX;
+  color: #475569;
+  flex: 0 0 auto;
+  font-size: 11PX;
+  padding: 7PX 10PX;
+}
+
+.account-chip--active {
+  background: #dbeafe;
+  color: #1d4ed8;
+}
+
+.account-input {
+  background: #f8fafc;
+  border: 1PX solid #cbd5e1;
+  border-radius: 12PX;
+  box-sizing: border-box;
+  font-size: 14PX;
+  padding: 12PX 14PX;
+  width: 100%;
+}
+
+.account-actions {
+  flex-wrap: wrap;
+  justify-content: flex-start;
+}
+
+.account-button {
+  align-items: center;
+  background: #f8fafc;
+  border: 1PX solid #cbd5e1;
+  border-radius: 11PX;
+  color: #334155;
+  display: flex;
+  font-size: 12PX;
+  font-weight: 700;
+  justify-content: center;
+  min-height: 38PX;
+  padding: 0 14PX;
+}
+
+.account-button--primary {
+  background: #2563eb;
+  border-color: #2563eb;
+  color: #fff;
+}
+
+.account-button--success {
+  background: #0f766e;
+  border-color: #0f766e;
+  color: #fff;
+}
+
+.account-button--danger {
+  color: #b91c1c;
+}
+
+.account-button--compact {
+  min-height: 32PX;
+  padding: 0 10PX;
+}
+
+.account-empty {
+  color: #64748b;
+  font-size: 13PX;
+  padding: 22PX 0;
+  text-align: center;
+}
+
+.account-list {
+  display: flex;
+  flex-direction: column;
+  gap: 9PX;
+}
+
+.account-list__item {
+  background: #f8fafc;
+  border: 1PX solid #e2e8f0;
+  border-radius: 12PX;
+  justify-content: flex-start;
+  padding: 12PX;
+}
+
+.account-list__meta {
+  flex: 1;
+  min-width: 0;
+}
+
+.earnings-summary__item {
+  background: #f8fafc;
+  border-radius: 12PX;
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 5PX;
+  padding: 13PX;
+}
+
+.earnings-summary__item > text:first-child {
+  color: #64748b;
+  font-size: 11PX;
+}
+
+.earnings-summary__item > text:last-child {
+  color: #0f172a;
+  font-size: 17PX;
+  font-weight: 800;
+}
+
+@media (max-width: 620PX) {
+  .account-card__heading,
+  .earnings-summary {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .account-badge,
+  .account-chip {
+    align-self: flex-start;
+  }
+}

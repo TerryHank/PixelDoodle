@@ -19,6 +19,7 @@ describe('pattern store defaults', () => {
     usePatternStore.setState({
       difficulty: 0.25,
       ledSize: 64,
+      boardSize: { width: 29, height: 29 },
       originalImage: null,
       isGenerating: false
     })
@@ -36,17 +37,25 @@ describe('pattern store defaults', () => {
     expect(usePatternStore.getState().difficulty).toBe(0.25)
   })
 
+  it('keeps the creative board independent from the device matrix size', () => {
+    usePatternStore.getState().setBoardSize({ width: 104, height: 74 })
+    usePatternStore.getState().setLedSize(32)
+
+    expect(usePatternStore.getState().boardSize).toEqual({ width: 104, height: 74 })
+    expect(usePatternStore.getState().ledSize).toBe(32)
+  })
+
   it('keeps uploaded and generated images in separate state fields', () => {
     expect(usePatternStore.getState().originalImage).toBeNull()
     expect(usePatternStore.getState().generatedImage).toBeNull()
   })
 
-  it('uses the selected size as a square pixel grid', async () => {
+  it('passes rectangular board dimensions independently from the device size', async () => {
     generatePatternMock.mockResolvedValue({
       mode: 'local-wasm',
       response: {
         session_id: 'local-test',
-        grid_size: { width: 32, height: 32 },
+        grid_size: { width: 104, height: 74 },
         pixel_matrix: [],
         color_summary: [],
         total_beads: 0,
@@ -54,15 +63,15 @@ describe('pattern store defaults', () => {
         preview_image: ''
       }
     })
-    usePatternStore.setState({ ledSize: 32 })
+    usePatternStore.getState().setBoardSize({ width: 104, height: 74 })
 
     await usePatternStore.getState().generateFromFile('blob:test-image')
 
     expect(buildGenerateFieldsMock).toHaveBeenCalledWith(
       expect.objectContaining({
-        gridWidth: 32,
-        gridHeight: 32,
-        ledSize: 32
+        gridWidth: 104,
+        gridHeight: 74,
+        ledSize: 64
       })
     )
   })

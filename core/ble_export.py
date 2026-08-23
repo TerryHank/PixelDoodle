@@ -13,6 +13,7 @@ from typing import List, Optional, Tuple
 from bleak import BleakClient, BleakScanner
 
 from .color_match import ArtkalPalette
+from .commerce.device_grant import token_to_wire_bytes
 
 
 SERVICE_UUID = "4fafc201-1fb5-459e-8fcc-c5c9c331914b"
@@ -21,6 +22,90 @@ IMAGE_SIZE = 8192  # 64x64 * 2 bytes
 MTU_SIZE = 20  # BLE default MTU - 3 (header)
 RGB565_BLACK = 0x0000
 TRANSPARENT_RGB565 = 0x0001
+PKT_ACTIVATION_START = 0x0B
+PKT_ACTIVATION_DATA = 0x0C
+PKT_ACTIVATION_COMMIT = 0x0D
+NTF_ACTIVATION_STATUS = 0x27
+ACTIVATION_UNLOCKED = 0x01
+
+
+def build_device_activation_packets(access_token: str) -> List[bytes]:
+    """Build BLE packets for the firmware's signed activation handshake."""
+
+    grant = token_to_wire_bytes(access_token)
+    packets = [
+        bytes(
+            [
+                PKT_ACTIVATION_START,
+                len(grant) & 0xFF,
+                (len(grant) >> 8) & 0xFF,
+            ]
+        )
+    ]
+    packets.extend(
+        bytes([PKT_ACTIVATION_DATA]) + grant[offset : offset + 19]
+        for offset in range(0, len(grant), 19)
+    )
+    packets.append(bytes([PKT_ACTIVATION_COMMIT]))
+    return packets
+
+
+async def _activate_connected_device(
+    client: BleakClient,
+    access_token: str,
+    *,
+    timeout: float = 5.0,
+) -> None:
+    """Activate a connected device and require its cryptographic acknowledgement."""
+
+    try:
+        packets = build_device_activation_packets(access_token)
+    except ValueError as error:
+        raise PermissionError(f"invalid device activation grant: {error}") from error
+    loop = asyncio.get_running_loop()
+    activation_result: asyncio.Future[int] = loop.create_future()
+
+    def on_notification(_sender, data: bytearray) -> None:
+        if (
+            len(data) >= 2
+            and data[0] == NTF_ACTIVATION_STATUS
+            and not activation_result.done()
+        ):
+            activation_result.set_result(int(data[1]))
+
+    await client.start_notify(CHARACTERISTIC_UUID, on_notification)
+    try:
+        for packet in packets:
+            await client.write_gatt_char(CHARACTERISTIC_UUID, packet)
+            await asyncio.sleep(0.02)
+        try:
+            status = await asyncio.wait_for(activation_result, timeout=timeout)
+        except asyncio.TimeoutError as error:
+            raise PermissionError("device did not acknowledge the activation grant") from error
+        if status != ACTIVATION_UNLOCKED:
+            raise PermissionError(f"device rejected activation grant (status={status})")
+    finally:
+        await client.stop_notify(CHARACTERISTIC_UUID)
+
+
+async def activate_device_ble(
+    device_address: str,
+    access_token: str,
+    *,
+    timeout: float = 10.0,
+) -> dict:
+    """Activate a BLE device without transferring an image."""
+
+    import time
+
+    started_at = time.time()
+    async with BleakClient(device_address, timeout=timeout) as client:
+        await _activate_connected_device(client, access_token, timeout=min(timeout, 5.0))
+    return {
+        "success": True,
+        "device": device_address,
+        "duration_ms": int((time.time() - started_at) * 1000),
+    }
 
 
 def rgb_to_rgb565(r: int, g: int, b: int) -> int:
@@ -91,6 +176,7 @@ async def send_to_esp32_ble(
     palette: ArtkalPalette,
     device_address: str = None,
     device_uuid: str = None,
+    access_token: str = None,
     background_color: Tuple[int, int, int] = (0, 0, 0),
     timeout: float = 30.0,
 ) -> dict:
@@ -140,6 +226,9 @@ async def send_to_esp32_ble(
         # Connect and send
         async with BleakClient(device_address, timeout=timeout) as client:
             print(f"[BLE] Connected to {device_address}")
+
+            if access_token:
+                await _activate_connected_device(client, access_token)
             
             # Send start packet
             await client.write_gatt_char(CHARACTERISTIC_UUID, bytes([0x01]))
@@ -172,6 +261,8 @@ async def send_to_esp32_ble(
             'device': device_address,
         }
         
+    except PermissionError:
+        raise
     except Exception as e:
         return {
             'success': False,
@@ -186,12 +277,19 @@ def send_to_esp32_ble_sync(
     palette: ArtkalPalette,
     device_address: str = None,
     device_uuid: str = None,
+    access_token: str = None,
     background_color: Tuple[int, int, int] = (0, 0, 0),
     timeout: float = 30.0,
 ) -> dict:
     """Synchronous wrapper for BLE send."""
     return asyncio.run(send_to_esp32_ble(
-        pixel_matrix, palette, device_address, device_uuid, background_color, timeout
+        pixel_matrix,
+        palette,
+        device_address,
+        device_uuid,
+        access_token,
+        background_color,
+        timeout,
     ))
 
 

@@ -10,6 +10,7 @@ import type { BleKnownDevice } from '@/adapters/ble/types'
 import { fileAdapter } from '@/adapters/file'
 import { CanvasPanel } from '@/components/canvas-panel'
 import { ColorPanel } from '@/components/color-panel'
+import { DeviceMonitorPanel } from '@/components/device-monitor-panel'
 import { AppTabBar } from '@/components/app-tab-bar'
 import {
   type ExampleGalleryItem,
@@ -21,7 +22,16 @@ import { ProfileAvatar } from '@/components/profile-avatar'
 import { SettingsSheet } from '@/components/settings-sheet'
 import { ToastHost } from '@/components/toast-host'
 import { Toolbar } from '@/components/toolbar'
+import { BOARD_SIZE_OPTIONS } from '@/features/pixel-editor/model'
 import { publishCommunityPost } from '@/services/community-service'
+import {
+  acknowledgeDeviceAlert,
+  reportBleAck,
+  reportBleNack,
+  reportBleTimeout,
+  reportDeviceConnection,
+  startDeviceOfflineMonitor
+} from '@/services/device-monitoring-service'
 import {
   exportPattern,
   type ExportKind
@@ -30,6 +40,7 @@ import { autoSendGeneratedPattern } from '@/services/ble-image-sync'
 import { GENERATION_STYLES } from '@/constants/generation-styles'
 import { registerWeappRasterLoader } from '@/services/weapp-raster-loader'
 import { useDeviceStore } from '@/store/device-store'
+import { useDeviceMonitorStore } from '@/store/device-monitor-store'
 import { useHistoryStore } from '@/store/history-store'
 import { usePatternStore } from '@/store/pattern-store'
 import { useUIStore } from '@/store/ui-store'
@@ -192,7 +203,7 @@ export default function HomePage() {
   const fullPaletteList = usePatternStore((state) => state.fullPaletteList)
   const totalBeads = usePatternStore((state) => state.totalBeads)
   const removeBackground = usePatternStore((state) => state.removeBackground)
-  const ledSize = usePatternStore((state) => state.ledSize)
+  const boardSize = usePatternStore((state) => state.boardSize)
   const styleIndex = usePatternStore((state) => state.styleIndex)
   const difficulty = usePatternStore((state) => state.difficulty)
   const previewImage = usePatternStore((state) => state.previewImage)
@@ -201,6 +212,8 @@ export default function HomePage() {
   const bleConnectionStatus = useDeviceStore((state) => state.bleConnectionStatus)
   const bleCharacteristicStatus = useDeviceStore((state) => state.bleCharacteristicStatus)
   const historyEntries = useHistoryStore((state) => state.entries)
+  const monitoredDevices = useDeviceMonitorStore((state) => state.devices)
+  const deviceAlerts = useDeviceMonitorStore((state) => state.alerts)
   const userId = useUserStore((state) => state.id)
   const userNickname = useUserStore((state) => state.nickname)
   const userAvatarSeed = useUserStore((state) => state.avatarSeed)
@@ -223,6 +236,8 @@ export default function HomePage() {
         showToast('调色板加载失败，请稍后重试')
       })
   }, [fullPaletteList.length])
+
+  useEffect(() => startDeviceOfflineMonitor(), [])
 
   useEffect(() => {
     return () => {
@@ -477,8 +492,30 @@ export default function HomePage() {
       } catch (error) {
         sendErrorMessage =
           error instanceof Error ? error.message : '蓝牙发送失败'
+        if (targetDeviceUuid) {
+          if (sendErrorMessage.toLowerCase().includes('rejected')) {
+            reportBleNack({
+              deviceId: targetDeviceUuid,
+              operation: '图像发送',
+              message: sendErrorMessage
+            })
+          } else {
+            reportBleTimeout({
+              deviceId: targetDeviceUuid,
+              operation: '图像发送',
+              message: sendErrorMessage
+            })
+          }
+        }
       } finally {
         useDeviceStore.getState().setIsSending(false)
+      }
+
+      if (sentToBle && targetDeviceUuid) {
+        reportBleAck({
+          deviceId: targetDeviceUuid,
+          operation: '图像发送'
+        })
       }
 
       if (autoShareToCommunity) {
@@ -526,9 +563,15 @@ export default function HomePage() {
 
       let filePath = rawFilePath
       if (currentEnv === 'weapp' && typeof Taro.cropImage === 'function') {
+        const cropScale =
+          boardSize.width === boardSize.height
+            ? '1:1'
+            : boardSize.width > boardSize.height
+              ? '4:3'
+              : '3:4'
         const cropped = await Taro.cropImage({
           src: rawFilePath,
-          cropScale: '1:1'
+          cropScale
         })
         if (cropped?.tempFilePath) {
           filePath = cropped.tempFilePath
@@ -661,14 +704,21 @@ export default function HomePage() {
     })
   }
 
-  function handleChangeLedSize(nextLedSize: number) {
-    if (!Number.isFinite(nextLedSize) || nextLedSize <= 0) {
+  function handleChangeBoardSize(nextBoardSize: { width: number; height: number }) {
+    if (
+      !BOARD_SIZE_OPTIONS.some(
+        (option) =>
+          option.width === nextBoardSize.width && option.height === nextBoardSize.height
+      )
+    ) {
       return
     }
 
     void applyPatternChangeAndMaybeRegenerate({
       applyChange: () => {
-        usePatternStore.getState().setLedSize(nextLedSize)
+        const store = usePatternStore.getState()
+        store.setLedSize(Math.max(nextBoardSize.width, nextBoardSize.height))
+        store.setBoardSize(nextBoardSize)
       },
       originalImage: usePatternStore.getState().originalImage,
       regenerate: runGenerate
@@ -768,6 +818,11 @@ export default function HomePage() {
       useDeviceStore.getState().setTargetDeviceUuid(connectedUuid)
       useDeviceStore.getState().setBleConnectionStatus('connected')
       useDeviceStore.getState().setBleCharacteristicStatus('ready')
+      reportDeviceConnection({
+        deviceId: connectedUuid,
+        transport: 'ble',
+        state: 'online'
+      })
       useUIStore.setState({
         isPairSheetOpen: false
       })
@@ -775,6 +830,14 @@ export default function HomePage() {
     } catch (error) {
       useDeviceStore.getState().setBleConnectionStatus('error')
       useDeviceStore.getState().setBleCharacteristicStatus('error')
+      if (targetDeviceUuid) {
+        reportDeviceConnection({
+          deviceId: targetDeviceUuid,
+          transport: 'ble',
+          state: 'error',
+          message: error instanceof Error ? error.message : '蓝牙连接失败'
+        })
+      }
       showToast(error instanceof Error ? error.message : '蓝牙连接失败')
     }
   }
@@ -840,6 +903,13 @@ export default function HomePage() {
     currentEnv === 'weapp'
       ? typeof Taro.openBluetoothAdapter === 'function'
       : typeof bleAdapter.connectTargetDevice === 'function'
+  const monitoredDeviceId = targetDeviceUuid.trim().toUpperCase()
+  const monitoredDevice = monitoredDeviceId
+    ? monitoredDevices[monitoredDeviceId] ?? null
+    : null
+  const monitoredAlerts = monitoredDeviceId
+    ? deviceAlerts.filter((alert) => alert.deviceId === monitoredDeviceId)
+    : []
   const pairSheetDevices = useMemo<PairSheetBleOption[]>(
     () =>
       nearbyBleDevices.map((device) => {
@@ -929,6 +999,10 @@ export default function HomePage() {
       : undefined
   const styleLabel =
     GENERATION_STYLES.find((style) => style.index === styleIndex)?.name ?? '日漫世界'
+  const boardSizeLabel =
+    BOARD_SIZE_OPTIONS.find(
+      (option) => option.width === boardSize.width && option.height === boardSize.height
+    )?.label ?? `${boardSize.width} × ${boardSize.height}`
 
   return (
     <View className={`home-page home-page--${currentEnv}`}>
@@ -938,8 +1012,8 @@ export default function HomePage() {
       <View className='main-container' style={mainContainerStyle}>
         <View className='result-area'>
           <Toolbar
-            ledSizeLabel={String(ledSize)}
-            ledSizeValue={ledSize}
+            boardSizeLabel={boardSizeLabel}
+            boardSizeValue={boardSize}
             styleLabel={styleLabel}
             styleIndexValue={styleIndex}
             modeQuickConnected={modeQuick.connected}
@@ -947,7 +1021,7 @@ export default function HomePage() {
             removeBackground={removeBackground}
             targetDeviceUuid={vm.toolbarChipText}
             onClear={handleClear}
-            onChangeLedSize={handleChangeLedSize}
+            onChangeBoardSize={handleChangeBoardSize}
             onChangeStyle={handleChangeStyle}
             onOpenPairSheet={handleOpenPairSheet}
             onOpenSettings={handleOpenSettings}
@@ -1059,6 +1133,11 @@ export default function HomePage() {
               </View>
             </View>
           ) : null}
+          <DeviceMonitorPanel
+            device={monitoredDevice}
+            alerts={monitoredAlerts}
+            onAcknowledgeAlert={acknowledgeDeviceAlert}
+          />
         </View>
       </View>
       {currentEnv === 'weapp' ? (
