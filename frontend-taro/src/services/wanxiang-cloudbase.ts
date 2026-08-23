@@ -211,8 +211,11 @@ export function createWanxiangCloudBaseAdapter(
           cloudPath: uploadCloudPath(input, now, random),
           filePath: input.filePath
         })
-      } catch {
-        throw new Error('图片上传到云端失败，请检查云开发配置后重试')
+      } catch (error) {
+        const detail = errorDetail(error)
+        throw new Error(
+          `图片上传到云端失败${detail ? `：${detail}` : '，请检查云开发配置后重试'}`
+        )
       }
 
       let submitResponse: CloudFunctionResult
@@ -283,8 +286,11 @@ export function createWanxiangCloudBaseAdapter(
               fileName: input.fileName,
               generatedImage: outputFileID
             }
-          } catch {
-            throw new Error('万相生成图片下载失败，请稍后重试')
+          } catch (error) {
+            const detail = errorDetail(error)
+            throw new Error(
+              `万相生成图片下载失败${detail ? `：${detail}` : '，请稍后重试'}`
+            )
           }
         }
 

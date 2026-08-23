@@ -75,4 +75,27 @@ describe('pattern store defaults', () => {
       })
     )
   })
+
+  it('passes the explicit H5 style-transfer choice into generation fields', async () => {
+    generatePatternMock.mockResolvedValue({
+      mode: 'local-wasm',
+      response: {
+        session_id: 'local-test',
+        grid_size: { width: 29, height: 29 },
+        pixel_matrix: [],
+        color_summary: [],
+        total_beads: 0,
+        palette_preset: '221',
+        preview_image: ''
+      }
+    })
+
+    await usePatternStore.getState().generateFromFile('blob:test-image', {
+      styleTransfer: 'none'
+    })
+
+    expect(buildGenerateFieldsMock).toHaveBeenCalledWith(
+      expect.objectContaining({ styleTransfer: 'none' })
+    )
+  })
 })

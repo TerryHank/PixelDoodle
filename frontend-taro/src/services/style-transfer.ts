@@ -23,7 +23,18 @@ export function registerStyleTransferAdapter(adapter: StyleTransferAdapter | nul
 export async function transformImageStyle(
   input: StyleTransferInput
 ): Promise<StyleTransferResult> {
+  if (input.fields.style_transfer === 'none') {
+    return {
+      filePath: input.filePath,
+      fileName: input.fileName
+    }
+  }
+
   if (!activeAdapter) {
+    if (input.fields.style_transfer === 'wanxiang') {
+      throw new Error('万相云服务未配置，请检查 CloudBase 环境')
+    }
+
     return {
       filePath: input.filePath,
       fileName: input.fileName

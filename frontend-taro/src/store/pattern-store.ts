@@ -61,6 +61,7 @@ export interface PatternState {
       prompt?: string
       referenceImageUrl?: string
       styleIndex?: number
+      styleTransfer?: 'none' | 'wanxiang'
       palettePreset?: string
       removeBackground?: boolean
       ledSize?: number
@@ -196,6 +197,7 @@ export const usePatternStore = create<PatternState>((set, get) => ({
         gridWidth,
         gridHeight,
         styleIndex: options.styleIndex ?? state.styleIndex,
+        styleTransfer: options.styleTransfer,
         prompt: options.prompt,
         referenceImageUrl: options.referenceImageUrl,
         ledSize,

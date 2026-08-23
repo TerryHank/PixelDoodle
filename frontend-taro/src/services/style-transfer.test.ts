@@ -41,4 +41,31 @@ describe('style transfer adapter', () => {
     })
     expect(transform).toHaveBeenCalledWith(input)
   })
+
+  it('keeps local generation local when the caller explicitly opts out', async () => {
+    const transform = vi.fn()
+    registerStyleTransferAdapter({ transform })
+
+    const input = {
+      filePath: '/tmp/input.jpg',
+      fileName: 'input.jpg',
+      fields: { style_index: '34', style_transfer: 'none' }
+    }
+
+    await expect(transformImageStyle(input)).resolves.toEqual({
+      filePath: '/tmp/input.jpg',
+      fileName: 'input.jpg'
+    })
+    expect(transform).not.toHaveBeenCalled()
+  })
+
+  it('does not silently pretend Wanxiang succeeded when no provider is configured', async () => {
+    await expect(
+      transformImageStyle({
+        filePath: '/tmp/input.jpg',
+        fileName: 'input.jpg',
+        fields: { style_index: '34', style_transfer: 'wanxiang' }
+      })
+    ).rejects.toThrow('万相云服务未配置')
+  })
 })

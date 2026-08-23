@@ -21,6 +21,7 @@ export interface GeneratePatternInput {
   gridHeight: number
   palettePreset: string
   styleIndex: number
+  styleTransfer?: 'none' | 'wanxiang'
   prompt?: string
   referenceImageUrl?: string
   mode?: 'fixed_grid' | 'pixel_size'
@@ -62,6 +63,10 @@ export function buildGenerateFields(input: GeneratePatternInput) {
     contrast: String(input.contrast ?? 0),
     saturation: String(input.saturation ?? 0),
     sharpness: String(input.sharpness ?? 0)
+  }
+
+  if (input.styleTransfer) {
+    fields.style_transfer = input.styleTransfer
   }
 
   if (input.prompt?.trim()) {

@@ -13,7 +13,8 @@ Tauri 2 Android 调试 APK 的一键构建与验收信息见
 [frontend-taro/ANDROID_TAURI_BUILD.md](./frontend-taro/ANDROID_TAURI_BUILD.md)。
 
 版本边界：v11 保留为此前的 Android 稳定基线；v12.0.1 已生成新的 Tauri 2 Android
-调试 APK，但 v12 新增的万相 CloudBase 接入仍仅用于微信小程序，Android/Tauri 未接通万相。
+调试 APK。v12 的万相 CloudBase 适配器覆盖微信小程序、H5 和 Tauri Android；使用前仍需
+注入客户端 CloudBase 配置、部署云函数并完成安全来源与鉴权配置。
 
 ---
 
@@ -119,7 +120,9 @@ npm run test:cloudfunctions
 - Android Studio 请直接打开 `frontend-taro/android`。
 - APK 构建命令为 `npm run apk:debug` 和 `npm run apk:release`。
 - 当前 `npm run apk:release` 仍复用 `debug.keystore`，只用于本地开发链路验证，不能作为正式发布包直接分发。
-- v12 微信小程序通过 CloudBase 云函数异步调用万相；部署步骤见 [frontend-taro/WANXIANG_CLOUDBASE.md](./frontend-taro/WANXIANG_CLOUDBASE.md)。
+- v12 的微信小程序、H5 和 Tauri Android 共用 CloudBase 云函数异步调用万相；默认使用
+  本地像素化，只有显式选择万相风格才触发云端。部署步骤见
+  [frontend-taro/WANXIANG_CLOUDBASE.md](./frontend-taro/WANXIANG_CLOUDBASE.md)。
 - 项目根目录下 `static/` 与 `templates/` 中的旧网页前端可作为迁移对照，但不再是新的主开发入口。
 - Taro 前端依赖项目根目录的 FastAPI 服务提供 `/api/palette`、`/api/generate`、`/api/export/*`、`/api/wifi/*` 等接口。
 
@@ -162,10 +165,11 @@ $env:DASHSCOPE_API_KEY = 'your-key'
 python main.py
 ```
 
-v12 微信小程序使用独立的 CloudBase 异步链路：前端上传参考图，调用
+v12 多端前端使用独立的 CloudBase 异步链路：前端上传参考图，调用
 `submitStyleTransfer` 提交任务，再调用 `queryStyleTransfer` 轮询并取得云存储结果。
-此链路不经过前端保存密钥。现有 FastAPI `POST /api/ai/generate` 保留为后端兼容链路，
-两条链路不要混淆。
+微信小程序使用 `Taro.cloud`，H5/Tauri Android 使用 CloudBase Web SDK；该链路不经过
+FastAPI，也不会在前端保存 DashScope 密钥。现有 FastAPI `POST /api/ai/generate` 保留为
+后端兼容链路，两条链路不要混淆。
 
 ---
 

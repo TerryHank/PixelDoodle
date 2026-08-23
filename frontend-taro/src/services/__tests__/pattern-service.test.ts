@@ -59,6 +59,7 @@ describe('pattern service', () => {
       gridHeight: 48,
       palettePreset: '221',
       styleIndex: 32,
+      styleTransfer: 'wanxiang',
       prompt: '  watercolor animation  ',
       referenceImageUrl: '  https://cdn.example.com/reference.png  '
     })
@@ -67,6 +68,7 @@ describe('pattern service', () => {
     expect(fields.grid_height).toBe('48')
     expect(fields.palette_preset).toBe('221')
     expect(fields.style_index).toBe('32')
+    expect(fields.style_transfer).toBe('wanxiang')
     expect(fields.prompt).toBe('watercolor animation')
     expect(fields.reference_image_url).toBe(
       'https://cdn.example.com/reference.png'

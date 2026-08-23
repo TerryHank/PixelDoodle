@@ -12,6 +12,7 @@ export interface CropDialogH5Props {
   gridWidth: number
   gridHeight: number
   zoom: number
+  confirmLabel?: string
   onCancel: () => void
   onConfirm: () => void
   onReset: () => void
@@ -30,6 +31,7 @@ export function CropDialogH5({
   gridWidth,
   gridHeight,
   zoom,
+  confirmLabel = '智能像素化并生成',
   onCancel,
   onConfirm,
   onReset,
@@ -126,7 +128,7 @@ export function CropDialogH5({
             style={{ flex: 1, borderRadius: 0 }}
             type='button'
           >
-            智能像素化并生成
+            {confirmLabel}
           </button>
         </div>
       </div>

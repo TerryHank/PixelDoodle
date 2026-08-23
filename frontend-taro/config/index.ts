@@ -51,6 +51,13 @@ export default defineConfig<'webpack5'>(async (merge) => {
     cache: {
       enable: true
     },
+    defineConstants: {
+      __PIXELDOODLE_CLOUDBASE_BUILD_CONFIG__: JSON.stringify({
+        envId: process.env.TARO_APP_CLOUDBASE_ENV_ID || '',
+        region: process.env.TARO_APP_CLOUDBASE_REGION || 'ap-shanghai',
+        accessKey: process.env.TARO_APP_CLOUDBASE_ACCESS_KEY || ''
+      })
+    },
     alias: {
       '@': path.resolve(__dirname, '..', 'src')
     },

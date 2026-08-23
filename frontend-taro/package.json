@@ -44,6 +44,7 @@
   "author": "",
   "dependencies": {
     "@babel/runtime": "^7.24.4",
+    "@cloudbase/js-sdk": "3.8.1",
     "@react-navigation/bottom-tabs": "6.5.20",
     "@react-navigation/native": "6.1.17",
     "@react-navigation/native-stack": "^6.3.29",

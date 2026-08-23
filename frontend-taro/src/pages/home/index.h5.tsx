@@ -21,6 +21,7 @@ import { ProfileAvatar } from '@/components/profile-avatar'
 import { SettingsSheetH5 } from '@/components/settings-sheet/index.h5'
 import { ToastHost } from '@/components/toast-host'
 import { PixelEditorH5 } from '@/features/pixel-editor/index.h5'
+import { GENERATION_STYLES } from '@/constants/generation-styles'
 import {
   BOARD_SIZE_OPTIONS,
   buildPixelColorSummary,
@@ -80,6 +81,10 @@ import { readPersistedState, writePersistedState } from '@/utils/persistence'
 
 const VALID_IMAGE_TYPES = ['image/jpeg', 'image/png', 'image/gif', 'image/webp']
 const LOCAL_DRAFT_STORAGE_KEY = 'pixeldoodle:pixel-editor-draft'
+const LOCAL_GENERATION_MODE = 'local'
+let ownedOriginalImageUrl: string | null = null
+
+type StyleTransferMode = 'none' | 'wanxiang'
 
 interface PixelEditorDraft {
   version: 1
@@ -210,6 +215,7 @@ export default function HomePageH5() {
   const lastAlertToastRef = useRef<string | null>(null)
   const fileInputRef = useRef<HTMLInputElement | null>(null)
   const cropImageRef = useRef<HTMLImageElement | null>(null)
+  const imageOperationOwnerRef = useRef<symbol | null>(null)
   const cropStateRef = useRef<CropState>({
     file: null,
     img: null,
@@ -224,6 +230,7 @@ export default function HomePageH5() {
   const [authorizedBleDevices, setAuthorizedBleDevices] = useState<BleKnownDevice[]>([])
   const [bleConnectedUuid, setBleConnectedUuid] = useState<string | null>(null)
   const [difficultyMode, setDifficultyMode] = useState('0.25')
+  const [styleTransferMode, setStyleTransferMode] = useState<StyleTransferMode>('none')
   const [customPixelSize, setCustomPixelSize] = useState(8)
   const [cropZoom, setCropZoom] = useState(1)
   const [cropImageUrl, setCropImageUrl] = useState('')
@@ -357,6 +364,8 @@ export default function HomePageH5() {
   const palettePreset = usePatternStore((state) => state.palettePreset)
   const boardSize = usePatternStore((state) => state.boardSize)
   const totalBeads = usePatternStore((state) => state.totalBeads)
+  const originalImage = usePatternStore((state) => state.originalImage)
+  const styleIndex = usePatternStore((state) => state.styleIndex)
   const removeBackground = usePatternStore((state) => state.removeBackground)
   const difficulty = usePatternStore((state) => state.difficulty)
   const isGenerating = usePatternStore((state) => state.isGenerating)
@@ -438,6 +447,14 @@ export default function HomePageH5() {
         toastMessage: ''
       })
     }, 2400)
+  }
+
+  function replaceOwnedOriginalImageUrl(nextUrl: string | null) {
+    const previousUrl = ownedOriginalImageUrl
+    if (previousUrl && previousUrl !== nextUrl) {
+      URL.revokeObjectURL(previousUrl)
+    }
+    ownedOriginalImageUrl = nextUrl
   }
 
   function persistEditorDraft(
@@ -698,6 +715,11 @@ export default function HomePageH5() {
   }
 
   function handleUploadFileSelection(file: File | null) {
+    if (imageOperationOwnerRef.current) {
+      showToast('图片正在生成，请稍候')
+      return
+    }
+
     if (!file) {
       return
     }
@@ -713,6 +735,11 @@ export default function HomePageH5() {
   }
 
   async function confirmCrop() {
+    if (imageOperationOwnerRef.current) {
+      showToast('图片正在生成，请稍候')
+      return
+    }
+
     const cropState = cropStateRef.current
     const image = cropState.img
     const file = cropState.file
@@ -752,11 +779,61 @@ export default function HomePageH5() {
       return
     }
 
-    const croppedFile = new File([blob], file.name, { type: 'image/jpeg' })
+    if (imageOperationOwnerRef.current) {
+      showToast('图片正在生成，请稍候')
+      return
+    }
+
+    const croppedFileName = `${file.name.replace(/\.[^.]+$/, '') || 'image'}.jpg`
+    const croppedFile = new File([blob], croppedFileName, { type: 'image/jpeg' })
     const croppedUrl = URL.createObjectURL(croppedFile)
+    replaceOwnedOriginalImageUrl(croppedUrl)
     cancelCrop()
     usePatternStore.setState({ exampleImage: null, isGenerating: true })
-    await runGenerate(croppedUrl, croppedFile.name)
+    try {
+      await runGenerate(croppedUrl, croppedFile.name)
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : '图片生成失败')
+    }
+  }
+
+  function handleGenerationModeChange(value: string) {
+    if (imageOperationOwnerRef.current) {
+      showToast('图片正在生成，请稍候')
+      return
+    }
+
+    if (value === LOCAL_GENERATION_MODE) {
+      setStyleTransferMode('none')
+      showToast('已切换为本地像素化，不会调用万相')
+      return
+    }
+
+    const nextStyleIndex = Number.parseInt(value.replace(/^wanxiang:/, ''), 10)
+    if (!GENERATION_STYLES.some((style) => style.index === nextStyleIndex)) {
+      showToast('万相风格无效，请重新选择')
+      return
+    }
+
+    usePatternStore.getState().setStyleIndex(nextStyleIndex)
+    setStyleTransferMode('wanxiang')
+    const styleName = GENERATION_STYLES.find(
+      (style) => style.index === nextStyleIndex
+    )?.name
+    showToast(`已选择万相${styleName ? `「${styleName}」` : ''}，生成时将使用云端 AI`)
+  }
+
+  async function handleRegenerateWithSelectedMode() {
+    if (!originalImage) {
+      showToast('请先导入图片')
+      return
+    }
+
+    try {
+      await runGenerate(originalImage)
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : '重新生成失败')
+    }
   }
 
   function getGenerateOverrides() {
@@ -772,14 +849,25 @@ export default function HomePageH5() {
     }
   }
 
-  async function runGenerate(filePath: string, fileName?: string) {
-    Taro.showLoading({
-      title: '生成中...'
-    })
+  async function runGenerate(
+    filePath: string,
+    fileName?: string,
+    operationToken = Symbol('generate-image')
+  ) {
+    const currentOwner = imageOperationOwnerRef.current
+    if (currentOwner && currentOwner !== operationToken) {
+      throw new Error('图片正在生成，请稍候')
+    }
+
+    imageOperationOwnerRef.current = operationToken
 
     try {
+      Taro.showLoading({
+        title: styleTransferMode === 'wanxiang' ? '万相生成中...' : '生成中...'
+      })
       const response = await usePatternStore.getState().generateFromFile(filePath, {
         fileName,
+        styleTransfer: styleTransferMode,
         ...getGenerateOverrides()
       })
       useDeviceStore.getState().clearHighlightCodes()
@@ -865,7 +953,10 @@ export default function HomePageH5() {
         }
       }
 
-      const generationMessage = '图案已生成'
+      const generationMessage =
+        styleTransferMode === 'wanxiang'
+          ? '万相风格图已生成并转换为拼豆图'
+          : '图案已生成'
 
       showToast(
         sendErrorMessage
@@ -876,6 +967,9 @@ export default function HomePageH5() {
       )
       return response
     } finally {
+      if (imageOperationOwnerRef.current === operationToken) {
+        imageOperationOwnerRef.current = null
+      }
       await hideLoadingSafely(() => Taro.hideLoading())
     }
   }
@@ -931,11 +1025,17 @@ export default function HomePageH5() {
   }
 
   async function handleSelectExample(item: (typeof EXAMPLE_ITEMS)[number]) {
-    Taro.showLoading({
-      title: '载入示例...'
-    })
+    if (imageOperationOwnerRef.current) {
+      showToast('图片正在生成，请稍候')
+      return
+    }
 
+    const operationToken = Symbol('load-example')
+    imageOperationOwnerRef.current = operationToken
     try {
+      Taro.showLoading({
+        title: '载入示例...'
+      })
       usePatternStore.setState({
         exampleImage: item.id,
         isGenerating: true
@@ -949,13 +1049,21 @@ export default function HomePageH5() {
         throw new Error('示例图片加载失败')
       }
 
-      await runGenerate(response.tempFilePath, `${item.id}_original.jpg`)
+      if (imageOperationOwnerRef.current !== operationToken) {
+        throw new Error('图片正在生成，请稍候')
+      }
+
+      replaceOwnedOriginalImageUrl(null)
+      await runGenerate(response.tempFilePath, `${item.id}_original.jpg`, operationToken)
     } catch (error) {
       usePatternStore.setState({
         isGenerating: false
       })
       showToast(error instanceof Error ? error.message : '示例图片加载失败')
     } finally {
+      if (imageOperationOwnerRef.current === operationToken) {
+        imageOperationOwnerRef.current = null
+      }
       Taro.hideLoading()
     }
   }
@@ -1032,6 +1140,11 @@ export default function HomePageH5() {
   }
 
   async function handleChangeBoardSize(boardId: string) {
+    if (imageOperationOwnerRef.current) {
+      showToast('图片正在生成，请稍候')
+      return
+    }
+
     const nextBoard = getBoardSize(boardId)
     const store = usePatternStore.getState()
     const previousMatrix = store.pixelMatrix
@@ -1082,6 +1195,11 @@ export default function HomePageH5() {
   }
 
   async function handleChangeDifficulty(nextDifficultyValue: string) {
+    if (imageOperationOwnerRef.current) {
+      showToast('图片正在生成，请稍候')
+      return
+    }
+
     setDifficultyMode(nextDifficultyValue)
 
     if (nextDifficultyValue === 'custom') {
@@ -1119,6 +1237,11 @@ export default function HomePageH5() {
   }
 
   async function handleCustomSliderRelease() {
+    if (imageOperationOwnerRef.current) {
+      showToast('图片正在生成，请稍候')
+      return
+    }
+
     const store = usePatternStore.getState()
     if (!store.originalImage) {
       return
@@ -1132,6 +1255,11 @@ export default function HomePageH5() {
   }
 
   async function handleToggleBackground() {
+    if (imageOperationOwnerRef.current) {
+      showToast('图片正在生成，请稍候')
+      return
+    }
+
     const store = usePatternStore.getState()
     const nextRemoveBackground = !store.removeBackground
     store.toggleRemoveBackground()
@@ -1149,6 +1277,12 @@ export default function HomePageH5() {
   }
 
   function handleClear() {
+    if (imageOperationOwnerRef.current) {
+      showToast('图片正在生成，请稍候')
+      return
+    }
+
+    replaceOwnedOriginalImageUrl(null)
     usePatternStore.getState().clear()
     useDeviceStore.getState().clearHighlightCodes()
     useUIStore.setState({
@@ -1471,6 +1605,7 @@ export default function HomePageH5() {
               id='clear-btn'
               className='toolbar-btn'
               onClick={handleClear}
+              disabled={isGenerating}
               title='回到主页'
               type='button'
             >
@@ -1492,6 +1627,7 @@ export default function HomePageH5() {
               className='toolbar-btn'
               style={bgToggleStyle}
               onClick={() => void handleToggleBackground()}
+              disabled={isGenerating}
               title='自动去除背景'
               type='button'
             >
@@ -1502,6 +1638,7 @@ export default function HomePageH5() {
               className='toolbar-btn'
               htmlFor='file-input'
               title='上传'
+              aria-disabled={isGenerating}
             >
               <span className='toolbar-btn-icon'>+</span>
             </label>
@@ -1511,14 +1648,50 @@ export default function HomePageH5() {
               type='file'
               accept='image/jpeg,image/png,image/gif,image/webp'
               ref={fileInputRef}
+              disabled={isGenerating}
               onChange={(event) => handleUploadFileSelection(event.target.files?.[0] ?? null)}
             />
+            <select
+              id='generation-style'
+              className='led-size-btn generation-style-select'
+              title='图片生成方式'
+              aria-label='图片生成方式'
+              value={
+                styleTransferMode === 'wanxiang'
+                  ? `wanxiang:${styleIndex}`
+                  : LOCAL_GENERATION_MODE
+              }
+              disabled={isGenerating}
+              onChange={(event) => handleGenerationModeChange(event.target.value)}
+            >
+              <option value={LOCAL_GENERATION_MODE}>本地像素化</option>
+              {GENERATION_STYLES.map((style) => (
+                <option key={style.index} value={`wanxiang:${style.index}`}>
+                  万相 · {style.name}
+                </option>
+              ))}
+            </select>
+            <button
+              id='regenerate-btn'
+              className='toolbar-btn'
+              type='button'
+              disabled={!originalImage || isGenerating}
+              onClick={() => void handleRegenerateWithSelectedMode()}
+              title={
+                styleTransferMode === 'wanxiang'
+                  ? '使用所选万相风格重新生成'
+                  : '使用本地像素化重新生成'
+              }
+            >
+              {styleTransferMode === 'wanxiang' ? 'AI' : '重'}
+            </button>
             <select
               id='board-size'
               className='led-size-btn board-size-select'
               title='钉板尺寸'
               aria-label='钉板尺寸'
               value={selectedBoard.id}
+              disabled={isGenerating}
               onChange={(event) => void handleChangeBoardSize(event.target.value)}
             >
               {BOARD_SIZE_OPTIONS.map((option) => (
@@ -1611,6 +1784,7 @@ export default function HomePageH5() {
                     id='upload-area'
                     className='creation-launcher__card'
                     type='button'
+                    disabled={isGenerating}
                     onClick={() => fileInputRef.current?.click()}
                   >
                     <strong>导入图片生成</strong>
@@ -1657,6 +1831,7 @@ export default function HomePageH5() {
                     key={item.id}
                     className='example-item'
                     type='button'
+                    disabled={isGenerating}
                     onClick={() => void handleSelectExample(item)}
                   >
                     <img
@@ -1696,6 +1871,7 @@ export default function HomePageH5() {
                 min='4'
                 max='32'
                 value={String(customPixelSize)}
+                disabled={isGenerating}
                 style={{ width: '100%', height: '4px' }}
                 onChange={(event) => handleCustomPixelSizeInput(event.target.value)}
                 onMouseUp={() => void handleCustomSliderRelease()}
@@ -1858,6 +2034,11 @@ export default function HomePageH5() {
         gridWidth={selectedBoard.width}
         gridHeight={selectedBoard.height}
         zoom={cropZoom}
+        confirmLabel={
+          styleTransferMode === 'wanxiang'
+            ? '万相生成并转换为拼豆图'
+            : '本地像素化并生成'
+        }
         onCancel={cancelCrop}
         onConfirm={() => void confirmCrop()}
         onReset={handleResetCrop}
