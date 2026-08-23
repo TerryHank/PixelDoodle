@@ -1463,7 +1463,7 @@ export default function HomePageH5() {
 
   return (
     <div className='template-home-page'>
-      <div className='site-version-badge'>v11</div>
+      <div className='site-version-badge'>v12</div>
       <div className='main-container'>
         <div id='result-area' className='result-area'>
           <div className='canvas-toolbar'>
