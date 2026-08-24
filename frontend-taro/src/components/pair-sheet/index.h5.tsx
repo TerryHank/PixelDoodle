@@ -31,7 +31,7 @@ export function PairSheetH5({
 }: PairSheetH5Props) {
   return (
     <div
-      id='serial-settings-dialog'
+      id='ble-pair-dialog'
       className='modal'
       style={{ display: open ? 'flex' : 'none' }}
     >

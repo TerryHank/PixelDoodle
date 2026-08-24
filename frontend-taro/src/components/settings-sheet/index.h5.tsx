@@ -14,7 +14,7 @@ export function SettingsSheetH5({
 }: SettingsSheetH5Props) {
   return (
     <div
-      id='serial-settings-dialog'
+      id='export-settings-dialog'
       className='modal'
       style={{ display: open ? 'flex' : 'none' }}
     >

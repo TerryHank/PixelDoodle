@@ -788,7 +788,7 @@ input[type="range"]::-webkit-slider-thumb {
 /* === Color Picker Popover === */
 .color-popover {
   position: fixed;
-  z-index: 1000;
+  z-index: var(--v13-overlay-z, 1600);
   background: var(--bg);
   border: 1px solid var(--border);
   border-radius: var(--card-radius);
@@ -1357,7 +1357,7 @@ input[type="range"]::-webkit-slider-thumb {
   left: 50%;
   bottom: 24px;
   transform: translateX(-50%);
-  z-index: 1100;
+  z-index: var(--v13-overlay-z, 1600);
   width: min(420px, calc(100vw - 24px));
 }
 
@@ -1873,7 +1873,7 @@ body,
 }
 
 .modal {
-  z-index: 1600;
+  z-index: var(--v13-overlay-z, 1600);
   background:
     radial-gradient(circle at top, rgba(255, 193, 113, 0.28), transparent 36%),
     rgba(82, 48, 18, 0.58);
@@ -1929,7 +1929,7 @@ body,
 }
 
 .modal-crop {
-  z-index: 1800;
+  z-index: var(--v13-critical-overlay-z, 1800);
 }
 
 .crop-surface {

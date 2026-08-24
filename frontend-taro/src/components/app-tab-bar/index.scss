@@ -10,7 +10,7 @@
   padding: 10PX 16PX calc(env(safe-area-inset-bottom, 0px) + 8PX);
   position: fixed;
   right: 0;
-  z-index: 1200;
+  z-index: var(--v13-tab-z, 1200);
 }
 
 .app-tab-bar__item {
