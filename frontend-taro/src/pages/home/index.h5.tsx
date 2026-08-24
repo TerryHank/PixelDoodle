@@ -37,7 +37,8 @@ import {
 } from '@/features/pixel-editor/model'
 import {
   clampCropRect,
-  createAspectCropRect,
+  createFullImageCropRect,
+  fitImageWithinBoardGrid,
   zoomCropRect,
   type CropRect
 } from '@/features/image-calibration/model'
@@ -243,6 +244,7 @@ export default function HomePageH5() {
   const [styleTransferMode, setStyleTransferMode] = useState<StyleTransferMode>('none')
   const [customPixelSize, setCustomPixelSize] = useState(8)
   const [cropZoom, setCropZoom] = useState(1)
+  const [cropGridSize, setCropGridSize] = useState({ width: 29, height: 29 })
   const [cropImageUrl, setCropImageUrl] = useState('')
   const [cropImageStyle, setCropImageStyle] = useState<Record<string, string>>({})
   const [cropBoxStyle, setCropBoxStyle] = useState<Record<string, string>>({})
@@ -545,11 +547,14 @@ export default function HomePageH5() {
       return
     }
 
-    const supportedBoard = BOARD_SIZE_OPTIONS.find(
-      (option) =>
-        option.width === draft.boardSize.width && option.height === draft.boardSize.height
-    )
-    if (!supportedBoard) {
+    const supportsDraftGrid =
+      Number.isInteger(draft.boardSize.width) &&
+      Number.isInteger(draft.boardSize.height) &&
+      draft.boardSize.width >= 1 &&
+      draft.boardSize.height >= 1 &&
+      draft.boardSize.width <= 104 &&
+      draft.boardSize.height <= 104
+    if (!supportsDraftGrid) {
       showToast('草稿尺寸已不受支持')
       return
     }
@@ -790,15 +795,17 @@ export default function HomePageH5() {
         1,
         Math.round(image.height * cropStateRef.current.scale)
       )
-      const cropRect = createAspectCropRect(
+      const fittedGrid = fitImageWithinBoardGrid(
         image.width,
         image.height,
         boardSize.width,
         boardSize.height
       )
+      const cropRect = createFullImageCropRect(image.width, image.height)
       cropStateRef.current.baseBox = cropRect
       cropStateRef.current.box = cropRect
       cropStateRef.current.zoom = 1
+      setCropGridSize(fittedGrid)
 
       setCropImageStyle({
         width: `${renderedWidth}px`,
@@ -894,9 +901,12 @@ export default function HomePageH5() {
     replaceOwnedOriginalImageUrl(croppedUrl)
     cancelCrop()
     usePatternStore.setState({ exampleImage: null, isGenerating: true })
+    const previousBoardSize = { ...usePatternStore.getState().boardSize }
+    usePatternStore.getState().setBoardSize(cropGridSize)
     try {
       await runGenerate(croppedUrl, croppedFile.name)
     } catch (error) {
+      usePatternStore.getState().setBoardSize(previousBoardSize)
       showToast(error instanceof Error ? error.message : '图片生成失败')
     }
   }
@@ -984,7 +994,7 @@ export default function HomePageH5() {
         sourceLabel: fileName ? '上传图片' : '示例图'
       })
 
-      if (!shareTitle.trim()) {
+      if (fileName || !shareTitle.trim()) {
         setShareTitle(nextTitle)
       }
 
@@ -1570,10 +1580,15 @@ export default function HomePageH5() {
   }
 
   const hasPattern = hasGeneratedPattern(pixelMatrix)
-  const selectedBoard =
-    BOARD_SIZE_OPTIONS.find(
-      (option) => option.width === boardSize.width && option.height === boardSize.height
-    ) ?? BOARD_SIZE_OPTIONS[0]
+  const fixedSelectedBoard = BOARD_SIZE_OPTIONS.find(
+    (option) => option.width === boardSize.width && option.height === boardSize.height
+  )
+  const selectedBoard = fixedSelectedBoard ?? {
+    id: `original-${boardSize.width}x${boardSize.height}`,
+    label: `${boardSize.width} × ${boardSize.height}（原图比例）`,
+    width: boardSize.width,
+    height: boardSize.height
+  }
   const isRestoringGeneratedState = isGenerating && !hasPattern
   const bgToggleStyle = useMemo(
     () => getBgToggleStyle(removeBackground),
@@ -1834,6 +1849,9 @@ export default function HomePageH5() {
               disabled={isGenerating}
               onChange={(event) => void handleChangeBoardSize(event.target.value)}
             >
+              {!fixedSelectedBoard ? (
+                <option value={selectedBoard.id}>{selectedBoard.label}</option>
+              ) : null}
               {BOARD_SIZE_OPTIONS.map((option) => (
                 <option key={option.id} value={option.id}>
                   {option.label}
@@ -2160,9 +2178,9 @@ export default function HomePageH5() {
         cropImageRef={cropImageRef}
         cropImageStyle={cropImageStyle}
         cropBoxStyle={cropBoxStyle}
-        boardLabel={selectedBoard.label}
-        gridWidth={selectedBoard.width}
-        gridHeight={selectedBoard.height}
+        boardLabel={`${cropGridSize.width} × ${cropGridSize.height}（完整保留原图）`}
+        gridWidth={cropGridSize.width}
+        gridHeight={cropGridSize.height}
         zoom={cropZoom}
         confirmLabel={
           styleTransferMode === 'wanxiang'

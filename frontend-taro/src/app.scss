@@ -1,17 +1,38 @@
+:root,
 page {
-  --bg: #ffffff;
-  --bg-secondary: #f7f7f7;
-  --border: #e8e8e8;
-  --border-strong: #bfdbfe;
-  --text-primary: #1a1a1a;
-  --text-secondary: #6b6b6b;
-  --accent: #2563eb;
-  --accent-soft: #eff6ff;
-  --card-radius: 12px;
-  --btn-radius: 8px;
-  --shadow-soft: 0 1px 3px rgba(0, 0, 0, 0.08);
+  --v13-bg: #fff3d4;
+  --v13-bg-deep: #f8c46f;
+  --v13-surface: #fff8e8;
+  --v13-surface-strong: #ffe4aa;
+  --v13-surface-pink: #ffebf0;
+  --v13-surface-blue: #e9f7fb;
+  --v13-surface-purple: #f3ebfb;
+  --v13-border: #bd711d;
+  --v13-border-soft: rgba(189, 113, 29, 0.42);
+  --v13-text: #4a2e18;
+  --v13-text-muted: #7b644d;
+  --v13-accent: #b86313;
+  --v13-accent-strong: #8f4308;
+  --v13-shadow: 0 16PX 42PX rgba(120, 69, 15, 0.14);
+  --bg: var(--v13-bg);
+  --bg-secondary: var(--v13-surface-strong);
+  --border: var(--v13-border-soft);
+  --border-strong: var(--v13-border);
+  --text-primary: var(--v13-text);
+  --text-secondary: var(--v13-text-muted);
+  --accent: var(--v13-accent);
+  --accent-soft: var(--v13-surface-strong);
+  --card-radius: 18px;
+  --btn-radius: 12px;
+  --shadow-soft: var(--v13-shadow);
+}
+
+page {
   min-height: 100%;
-  background: var(--bg);
+  background:
+    radial-gradient(circle at 8% 2%, rgba(255, 174, 190, 0.32), transparent 34%),
+    radial-gradient(circle at 94% 14%, rgba(124, 208, 236, 0.25), transparent 32%),
+    var(--v13-bg);
   color: var(--text-primary);
   line-height: 1.5;
 }

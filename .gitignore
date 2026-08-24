@@ -76,4 +76,3 @@ wasm-engine/target/
 # Node / scratch files
 node_modules/
 .tmp-serial-monitor.py
-frontend-taro/({tag

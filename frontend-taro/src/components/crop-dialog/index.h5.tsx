@@ -55,7 +55,7 @@ export function CropDialogH5({
           <div>
             <h3>网格校准</h3>
             <p className='crop-dialog__subtitle'>
-              目标钉板 {boardLabel}（{gridWidth} 列 × {gridHeight} 行），拖动网格调整位置。
+              目标图纸 {boardLabel}（{gridWidth} 列 × {gridHeight} 行），按原图最长边适配。
             </p>
           </div>
           <button className='modal-close' onClick={onCancel} type='button'>
@@ -113,7 +113,7 @@ export function CropDialogH5({
             />
           </div>
         </div>
-        <div className='modal-footer modal-footer-split crop-actions'>
+        <div className='modal-footer modal-footer-split crop-actions' aria-label='校准操作'>
           <button
             className='btn btn-secondary'
             onClick={onCancel}
@@ -128,7 +128,7 @@ export function CropDialogH5({
             style={{ flex: 1, borderRadius: 0 }}
             type='button'
           >
-            {confirmLabel}
+            确认 · {confirmLabel}
           </button>
         </div>
       </div>

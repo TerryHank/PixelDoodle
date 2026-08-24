@@ -62,6 +62,9 @@ export default function AccountPage() {
       includeDeleted: nextIncludeDeleted,
       limit: 100
     })
+    if (!page || !Array.isArray(page.items)) {
+      throw new Error('云端服务暂未连接')
+    }
     setWorks(page.items)
   }
 
@@ -70,28 +73,56 @@ export default function AccountPage() {
       listPaymentOrders(userId),
       listEarnings(userId)
     ])
+    if (!nextOrders || !Array.isArray(nextOrders.items) || !nextEarnings) {
+      throw new Error('支付与收益服务暂未连接')
+    }
     setOrders(nextOrders.items)
     setEarnings(nextEarnings)
   }
 
   useEffect(() => {
     let cancelled = false
-    Promise.all([
+    Promise.allSettled([
       getCommerceConfig(),
       listPrivateCloudWorks(userId, { includeDeleted: false, limit: 100 }),
       listPaymentOrders(userId),
       listEarnings(userId)
     ])
-      .then(([nextConfig, cloudPage, orderPage, nextEarnings]) => {
+      .then(([configResult, cloudResult, ordersResult, earningsResult]) => {
         if (cancelled) return
-        setConfig(nextConfig)
-        setWorks(cloudPage.items)
-        setOrders(orderPage.items)
-        setEarnings(nextEarnings)
-      })
-      .catch((error) => {
-        if (!cancelled) {
-          setNotice(error instanceof Error ? error.message : '账户数据加载失败')
+
+        let serviceUnavailable = false
+        if (configResult.status === 'fulfilled' && configResult.value) {
+          setConfig(configResult.value)
+        } else {
+          serviceUnavailable = true
+        }
+        if (
+          cloudResult.status === 'fulfilled' &&
+          cloudResult.value &&
+          Array.isArray(cloudResult.value.items)
+        ) {
+          setWorks(cloudResult.value.items)
+        } else {
+          serviceUnavailable = true
+        }
+        if (
+          ordersResult.status === 'fulfilled' &&
+          ordersResult.value &&
+          Array.isArray(ordersResult.value.items)
+        ) {
+          setOrders(ordersResult.value.items)
+        } else {
+          serviceUnavailable = true
+        }
+        if (earningsResult.status === 'fulfilled' && earningsResult.value) {
+          setEarnings(earningsResult.value)
+        } else {
+          serviceUnavailable = true
+        }
+
+        if (serviceUnavailable) {
+          setNotice('云端与支付服务暂未连接，当前仍可使用本地创作和素材库。')
         }
       })
     return () => {

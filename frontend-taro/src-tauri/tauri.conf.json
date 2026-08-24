@@ -1,7 +1,7 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
   "productName": "PixelDoodle",
-  "version": "13.0.0",
+  "version": "13.0.1",
   "identifier": "com.terry.pixeldoodle",
   "build": {
     "frontendDist": "../dist-h5",
@@ -36,7 +36,7 @@
     "android": {
       "debugApplicationIdSuffix": ".debug",
       "minSdkVersion": 24,
-      "versionCode": 130000
+      "versionCode": 130001
     }
   }
 }

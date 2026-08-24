@@ -27,11 +27,12 @@ describe('CropDialogH5', () => {
     )
 
     expect(markup).toContain('104 列 × 74 行')
+    expect(markup).toContain('按原图最长边适配')
     expect(markup).toContain('aria-label="104 列 74 行校准网格"')
     expect(markup).toContain(
       'background-size:calc(100% / 104) calc(100% / 74)'
     )
-    expect(markup).toContain('智能像素化并生成')
+    expect(markup).toContain('确认 · 智能像素化并生成')
     expect(markup).not.toContain('智能识别')
   })
 })

@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest'
 import {
   clampCropRect,
   createAspectCropRect,
+  createFullImageCropRect,
+  fitImageWithinBoardGrid,
   getCalibrationGridBackgroundSize,
   zoomCropRect
 } from './model'
@@ -16,6 +18,30 @@ describe('image calibration model', () => {
   it('uses the exact 104x74 aspect ratio', () => {
     const crop = createAspectCropRect(1200, 800, 104, 74)
     expect(crop.width / crop.height).toBeCloseTo(52 / 37)
+  })
+
+  it('preserves the complete portrait image and fits its longest edge to the board', () => {
+    expect(createFullImageCropRect(1080, 2400)).toEqual({
+      x: 0,
+      y: 0,
+      width: 1080,
+      height: 2400
+    })
+    expect(fitImageWithinBoardGrid(1080, 2400, 29, 29)).toEqual({
+      width: 13,
+      height: 29
+    })
+  })
+
+  it('fits landscape and rectangular sources inside the selected board', () => {
+    expect(fitImageWithinBoardGrid(2400, 1080, 29, 29)).toEqual({
+      width: 29,
+      height: 13
+    })
+    expect(fitImageWithinBoardGrid(1200, 800, 104, 74)).toEqual({
+      width: 104,
+      height: 69
+    })
   })
 
   it('renders one calibration cell per selected board column and row', () => {

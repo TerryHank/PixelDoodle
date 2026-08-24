@@ -41,7 +41,7 @@ async function saveWithBrowserDownload(
   setTimeout(() => {
     anchor.remove()
     URL.revokeObjectURL(url)
-  }, 0)
+  }, 60_000)
 }
 
 export const h5FileAdapter: FileAdapter = {

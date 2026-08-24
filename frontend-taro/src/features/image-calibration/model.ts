@@ -5,6 +5,11 @@ export interface CropRect {
   height: number
 }
 
+export interface FittedGridSize {
+  width: number
+  height: number
+}
+
 function normalizeGridDimension(value: number) {
   return Number.isFinite(value) ? Math.max(1, Math.round(value)) : 1
 }
@@ -40,6 +45,39 @@ export function createAspectCropRect(
     y: (safeImageHeight - height) / 2,
     width,
     height
+  }
+}
+
+export function createFullImageCropRect(
+  imageWidth: number,
+  imageHeight: number
+): CropRect {
+  return {
+    x: 0,
+    y: 0,
+    width: Math.max(1, imageWidth),
+    height: Math.max(1, imageHeight)
+  }
+}
+
+export function fitImageWithinBoardGrid(
+  imageWidth: number,
+  imageHeight: number,
+  boardWidth: number,
+  boardHeight: number
+): FittedGridSize {
+  const safeImageWidth = Math.max(1, imageWidth)
+  const safeImageHeight = Math.max(1, imageHeight)
+  const safeBoardWidth = normalizeGridDimension(boardWidth)
+  const safeBoardHeight = normalizeGridDimension(boardHeight)
+  const scale = Math.min(
+    safeBoardWidth / safeImageWidth,
+    safeBoardHeight / safeImageHeight
+  )
+
+  return {
+    width: Math.max(1, Math.round(safeImageWidth * scale)),
+    height: Math.max(1, Math.round(safeImageHeight * scale))
   }
 }
 

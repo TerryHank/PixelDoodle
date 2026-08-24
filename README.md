@@ -2,7 +2,7 @@
 
 PixelDoodle（像素豆绘）是一个“图片转拼豆图 + ESP32 点阵显示”的完整项目，包含：
 
-**Version: 13.0.0**
+**Version: 13.0.1**
 
 - Web 前端（上传、裁剪、生成、导出、扫码）
 - Taro 多端前端（`frontend-taro/`，支持 H5 / 微信小程序 / RN Android）
@@ -13,9 +13,16 @@ Tauri 2 Android 调试 APK 的一键构建与验收信息见
 [frontend-taro/ANDROID_TAURI_BUILD.md](./frontend-taro/ANDROID_TAURI_BUILD.md)。
 
 版本边界：v11 保留为此前的 Android 稳定基线；v12.0.1 保留上一版 Tauri 2 Android 调试
-基线；v13.0.0 在 v12 功能闭环上完成“创物集 DIY 拼豆”视觉升级，并已交付 H5 与 Tauri
-Android 调试 APK。V13 内置 1,200 条离线素材和 Android 原生“另存为”导出；万相 CloudBase
+基线；v13.0.0 在 v12 功能闭环上完成“创物集 DIY 拼豆”视觉升级，v13.0.1 修复移动端校准
+操作区遮挡、按原图比例生成图纸，并统一全 APP 配色和应用图标。V13 内置 1,200 条离线素材和 Android 原生“另存为”导出；万相 CloudBase
 适配器继续保留，但本期按要求暂不部署或验收 CloudBase。
+
+拼豆屏 BLE V1.4 的 PDF 转写、原文歧义和上位机协议层实现见
+[docs/protocols/拼豆屏BLE通信协议V1.4.md](./docs/protocols/拼豆屏BLE通信协议V1.4.md)。当前已完成
+纯协议编解码与测试，待下位机联调后再切换现有生产 BLE 适配器。
+
+两个开发任务合并后的唯一最新版状态、冲突处理和后续开发规则见
+[docs/LATEST_BASELINE.md](./docs/LATEST_BASELINE.md)。
 
 ---
 

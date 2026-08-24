@@ -1,6 +1,9 @@
 .account-page {
   min-height: 100vh;
-  background: #f8fafc;
+  background:
+    radial-gradient(circle at 8% 0%, rgba(255, 167, 190, 0.28), transparent 32%),
+    radial-gradient(circle at 92% 8%, rgba(111, 205, 235, 0.23), transparent 34%),
+    var(--v13-bg);
 }
 
 .account-page__scroll {
@@ -19,10 +22,10 @@
 .account-page__header,
 .account-card,
 .account-notice {
-  background: #fff;
-  border: 1PX solid #e2e8f0;
+  background: var(--v13-surface-pink);
+  border: 2PX solid var(--v13-border-soft);
   border-radius: 18PX;
-  box-shadow: 0 18PX 48PX rgba(15, 23, 42, 0.07);
+  box-shadow: var(--v13-shadow);
   padding: 18PX;
 }
 
@@ -32,31 +35,35 @@
   gap: 6PX;
 }
 
+.account-page__header { background: var(--v13-surface-strong); }
+.account-card:nth-of-type(odd) { background: var(--v13-surface-blue); }
+.account-card:nth-of-type(even) { background: var(--v13-surface-purple); }
+
 .account-page__back {
-  color: #2563eb;
+  color: var(--v13-accent);
   font-size: 13PX;
   font-weight: 700;
   margin-bottom: 8PX;
 }
 
 .account-page__title {
-  color: #0f172a;
+  color: var(--v13-text);
   font-size: 24PX;
   font-weight: 800;
 }
 
 .account-page__subtitle,
 .account-card__hint {
-  color: #64748b;
+  color: var(--v13-text-muted);
   display: block;
   font-size: 12PX;
   line-height: 1.6;
 }
 
 .account-notice {
-  background: #eff6ff;
-  border-color: #bfdbfe;
-  color: #1d4ed8;
+  background: var(--v13-surface-pink);
+  border-color: var(--v13-border-soft);
+  color: #8f3f63;
   font-size: 13PX;
 }
 
@@ -78,7 +85,7 @@
 
 .account-card__title,
 .account-list__title {
-  color: #0f172a;
+  color: var(--v13-text);
   display: block;
   font-size: 17PX;
   font-weight: 750;
@@ -90,7 +97,7 @@
 
 .account-badge,
 .account-chip {
-  background: #f1f5f9;
+  background: rgba(255, 248, 232, 0.82);
   border-radius: 999PX;
   color: #475569;
   flex: 0 0 auto;
@@ -99,13 +106,13 @@
 }
 
 .account-chip--active {
-  background: #dbeafe;
-  color: #1d4ed8;
+  background: var(--v13-surface-strong);
+  color: var(--v13-accent-strong);
 }
 
 .account-input {
-  background: #f8fafc;
-  border: 1PX solid #cbd5e1;
+  background: var(--v13-surface);
+  border: 1PX solid var(--v13-border-soft);
   border-radius: 12PX;
   box-sizing: border-box;
   font-size: 14PX;
@@ -120,8 +127,8 @@
 
 .account-button {
   align-items: center;
-  background: #f8fafc;
-  border: 1PX solid #cbd5e1;
+  background: var(--v13-surface);
+  border: 1PX solid var(--v13-border-soft);
   border-radius: 11PX;
   color: #334155;
   display: flex;
@@ -133,8 +140,8 @@
 }
 
 .account-button--primary {
-  background: #2563eb;
-  border-color: #2563eb;
+  background: #b86313;
+  border-color: #b86313;
   color: #fff;
 }
 
@@ -167,8 +174,8 @@
 }
 
 .account-list__item {
-  background: #f8fafc;
-  border: 1PX solid #e2e8f0;
+  background: rgba(255, 248, 232, 0.78);
+  border: 1PX solid var(--v13-border-soft);
   border-radius: 12PX;
   justify-content: flex-start;
   padding: 12PX;
@@ -180,7 +187,7 @@
 }
 
 .earnings-summary__item {
-  background: #f8fafc;
+  background: rgba(255, 248, 232, 0.78);
   border-radius: 12PX;
   display: flex;
   flex: 1;
@@ -190,12 +197,12 @@
 }
 
 .earnings-summary__item > text:first-child {
-  color: #64748b;
+  color: var(--v13-text-muted);
   font-size: 11PX;
 }
 
 .earnings-summary__item > text:last-child {
-  color: #0f172a;
+  color: var(--v13-text);
   font-size: 17PX;
   font-weight: 800;
 }

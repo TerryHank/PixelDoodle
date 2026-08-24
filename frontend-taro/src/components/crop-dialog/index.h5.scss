@@ -2,7 +2,7 @@
 
 .crop-dialog__subtitle {
   margin: 3px 0 0;
-  color: #64748b;
+  color: var(--v13-text-muted, #7b644d);
   font-size: 12px;
   font-weight: 400;
 }
@@ -13,10 +13,10 @@
   align-items: center;
   gap: 10px;
   padding: 10px 16px;
-  border-top: 1px solid #e2e8f0;
-  border-bottom: 1px solid #e2e8f0;
-  background: #f8fafc;
-  color: #475569;
+  border-top: 1px solid var(--v13-border-soft, rgba(189, 113, 29, 0.42));
+  border-bottom: 1px solid var(--v13-border-soft, rgba(189, 113, 29, 0.42));
+  background: #ffe6b2;
+  color: var(--v13-text, #4a2e18);
   font-size: 12px;
 }
 
@@ -27,10 +27,10 @@
 .crop-dialog__controls button {
   height: 30px;
   padding: 0 10px;
-  border: 1px solid #cbd5e1;
+  border: 1px solid var(--v13-border, #bd711d);
   border-radius: 8px;
-  background: #ffffff;
-  color: #334155;
+  background: var(--v13-surface, #fff8e8);
+  color: var(--v13-accent-strong, #8f4308);
   font-size: 12px;
   cursor: pointer;
 }
@@ -44,6 +44,10 @@
   background-image:
     linear-gradient(to right, rgba(255, 255, 255, 0.48) 1px, transparent 1px),
     linear-gradient(to bottom, rgba(255, 255, 255, 0.48) 1px, transparent 1px);
+}
+
+.crop-dialog__controls input[type='range'] {
+  accent-color: var(--v13-accent, #b86313);
 }
 
 @media (max-width: 560px) {

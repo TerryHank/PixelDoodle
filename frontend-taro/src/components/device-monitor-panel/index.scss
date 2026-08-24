@@ -4,10 +4,10 @@
   gap: 14PX;
   margin: 16PX 0;
   padding: 16PX;
-  border: 1PX solid rgba(203, 213, 225, 0.92);
+  border: 2PX solid var(--v13-border-soft, rgba(189, 113, 29, 0.42));
   border-radius: 18PX;
-  background: rgba(255, 255, 255, 0.98);
-  box-shadow: 0 16PX 40PX rgba(15, 23, 42, 0.08);
+  background: var(--v13-surface-blue, #e9f7fb);
+  box-shadow: var(--v13-shadow);
 }
 
 .device-monitor--warning {
@@ -38,7 +38,7 @@
 }
 
 .device-monitor__eyebrow {
-  color: #2563eb;
+  color: var(--v13-accent, #b86313);
   font-size: 11PX;
   font-weight: 800;
   letter-spacing: 0.08em;
@@ -46,7 +46,7 @@
 
 .device-monitor__title {
   margin-top: 3PX;
-  color: #172033;
+  color: var(--v13-text, #4a2e18);
   font-size: 18PX;
   font-weight: 800;
 }
@@ -54,8 +54,8 @@
 .device-monitor__device-id {
   padding: 5PX 9PX;
   border-radius: 999PX;
-  color: #475569;
-  background: #f1f5f9;
+  color: var(--v13-text-muted, #7b644d);
+  background: var(--v13-surface-strong, #ffe4aa);
   font-family: monospace;
   font-size: 11PX;
 }
@@ -66,11 +66,11 @@
   padding: 10PX;
   border-radius: 12PX;
   text-align: center;
-  background: #f8fafc;
+  background: var(--v13-surface, #fff8e8);
 }
 
 .device-monitor__metric-value {
-  color: #172033;
+  color: var(--v13-text, #4a2e18);
   font-size: 15PX;
   font-weight: 800;
 }
@@ -79,7 +79,7 @@
 .device-monitor__hint,
 .device-monitor__alert-meta {
   margin-top: 3PX;
-  color: #64748b;
+  color: var(--v13-text-muted, #7b644d);
   font-size: 11PX;
 }
 
@@ -116,7 +116,7 @@
 .device-monitor__acknowledge,
 .device-monitor__acknowledged {
   flex: 0 0 auto;
-  color: #2563eb;
+  color: var(--v13-accent-strong, #8f4308);
   font-size: 11PX;
   font-weight: 700;
 }
@@ -125,7 +125,7 @@
   padding: 6PX 9PX;
   border: 0;
   border-radius: 9PX;
-  background: #dbeafe;
+  background: var(--v13-surface-strong, #ffe4aa);
   line-height: normal;
 }
 

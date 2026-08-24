@@ -2,13 +2,13 @@
 
 ## 当前交付
 
-- APK：`dist-apk/PixelDoodle-13.0.0-debug-universal.apk`
+- APK：`dist-apk/PixelDoodle-13.0.1-debug-universal.apk`
 - 包名：`com.terry.pixeldoodle.debug`
-- 版本：`13.0.0`（versionCode `130000`）
+- 版本：`13.0.1`（versionCode `130001`）
 - Android：minSdk 24，targetSdk 36
 - ABI：`arm64-v8a`、`armeabi-v7a`、`x86`、`x86_64`
-- 大小：`117,317,446` 字节
-- SHA-256：`e651fce0c3ae976ccc7f12494f0239f4d7e099d634aec4f24fbe662b10804584`
+- 大小：`117,565,018` 字节
+- SHA-256：`64E1495AB0494CB85A8A516F018208187A3DA68A0CA545D7B96573CDCB34658F`
 - 签名：Android Debug，APK Signature Scheme v2
 
 这是安装测试包，不是应用商店发布包。
@@ -51,6 +51,9 @@ npm run apk:tauri:release
   同源素材 API 可用时优先使用完整在线库，不可用时自动切到离线库。
 - PNG、PDF、JSON 导出已接入 Tauri 官方 dialog/fs 插件；Android 会打开系统“另存为”并在
   用户选择位置后写入，不再依赖 WebView 的 `<a download>`。
+- 校准弹窗固定显示确认操作区；导入图片按原图比例适配到所选钉板范围，例如竖图在 29
+  最大边下生成 13×29 图纸，不再强制裁为 29×29 方形。
+- Android 普通与自适应启动图标已替换为 UI 切图中的蓝/粉双兔角色图标。
 - 万相 CloudBase Web SDK 适配器仍保留；默认为本地像素化，只有显式选择万相风格才调用云端。
   本期按要求暂不部署或验收 CloudBase。将来启用前必须配置 `TARO_APP_CLOUDBASE_*`，并完成
   云函数、安全来源和登录规则部署。详见
