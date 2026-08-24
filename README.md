@@ -2,7 +2,7 @@
 
 PixelDoodle（像素豆绘）是一个“图片转拼豆图 + ESP32 点阵显示”的完整项目，包含：
 
-**Version: 12.0.1**
+**Version: 13.0.0**
 
 - Web 前端（上传、裁剪、生成、导出、扫码）
 - Taro 多端前端（`frontend-taro/`，支持 H5 / 微信小程序 / RN Android）
@@ -12,9 +12,10 @@ PixelDoodle（像素豆绘）是一个“图片转拼豆图 + ESP32 点阵显示
 Tauri 2 Android 调试 APK 的一键构建与验收信息见
 [frontend-taro/ANDROID_TAURI_BUILD.md](./frontend-taro/ANDROID_TAURI_BUILD.md)。
 
-版本边界：v11 保留为此前的 Android 稳定基线；v12.0.1 已生成新的 Tauri 2 Android
-调试 APK。v12 的万相 CloudBase 适配器覆盖微信小程序、H5 和 Tauri Android；使用前仍需
-注入客户端 CloudBase 配置、部署云函数并完成安全来源与鉴权配置。
+版本边界：v11 保留为此前的 Android 稳定基线；v12.0.1 保留上一版 Tauri 2 Android 调试
+基线；v13.0.0 在 v12 功能闭环上完成“创物集 DIY 拼豆”视觉升级，并已交付 H5 与 Tauri
+Android 调试 APK。V13 内置 1,200 条离线素材和 Android 原生“另存为”导出；万相 CloudBase
+适配器继续保留，但本期按要求暂不部署或验收 CloudBase。
 
 ---
 

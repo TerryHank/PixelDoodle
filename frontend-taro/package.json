@@ -1,6 +1,6 @@
 {
   "name": "frontend-taro",
-  "version": "12.0.1",
+  "version": "13.0.0",
   "private": true,
   "description": "PixelDoodle Taro app",
   "templateInfo": {
@@ -10,6 +10,7 @@
     "framework": "React"
   },
   "scripts": {
+    "build:offline-gallery": "node scripts/build-offline-material-gallery.mjs",
     "sync:local-wasm": "node scripts/sync-local-wasm-assets.js",
     "predev:weapp": "npm run sync:local-wasm && node -e \"const fs=require('fs');fs.rmSync('dist-weapp',{recursive:true,force:true});\"",
     "dev:weapp": "taro build --type weapp --watch",
@@ -63,6 +64,8 @@
     "@tarojs/taro": "4.1.11",
     "@tarojs/taro-rn": "4.1.11",
     "@tauri-apps/api": "2.11.1",
+    "@tauri-apps/plugin-dialog": "2.7.2",
+    "@tauri-apps/plugin-fs": "2.5.1",
     "expo": "~50.0.2",
     "jsqr": "^1.4.0",
     "react": "18.2.0",

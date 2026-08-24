@@ -1,5 +1,8 @@
 [CmdletBinding()]
-param()
+param(
+    [ValidatePattern('^[A-Za-z0-9._-]+$')]
+    [string]$FrontendOutputRoot = 'dist-h5-apk'
+)
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
@@ -50,6 +53,7 @@ $androidDir = Join-Path $tauriDir 'gen\android'
 $tauriConfigPath = Join-Path $tauriDir 'tauri.conf.json'
 $packageJsonPath = Join-Path $frontendDir 'package.json'
 $tauriPropertiesPath = Join-Path $androidDir 'app\tauri.properties'
+$frontendOutputDir = Join-Path $frontendDir $FrontendOutputRoot
 
 $env:RUSTUP_HOME = Resolve-RequiredDirectory $env:RUSTUP_HOME 'D:\ProgramData\Rustup' 'RUSTUP_HOME'
 $env:CARGO_HOME = Resolve-RequiredDirectory $env:CARGO_HOME 'D:\ProgramData\Cargo' 'CARGO_HOME'
@@ -113,9 +117,35 @@ $targets = @(
 )
 
 Push-Location $frontendDir
+$previousTaroOutputRoot = $env:TARO_OUTPUT_ROOT
+$previousTauriConfig = $env:TAURI_CONFIG
+$previousTauriAndroidProjectPath = $env:TAURI_ANDROID_PROJECT_PATH
 try {
     Write-Host 'Building the Taro H5 frontend...'
-    Invoke-Checked $npm @('run', 'build:h5')
+    $resolvedFrontendDir = (Resolve-Path -LiteralPath $frontendDir).Path
+    $resolvedOutputParent = [System.IO.Path]::GetFullPath(
+        [System.IO.Path]::GetDirectoryName($frontendOutputDir)
+    )
+    if (-not $resolvedOutputParent.Equals($resolvedFrontendDir, [StringComparison]::OrdinalIgnoreCase)) {
+        throw "Frontend output must stay directly inside the frontend workspace: $frontendOutputDir"
+    }
+    if (Test-Path -LiteralPath $frontendOutputDir) {
+        Remove-Item -LiteralPath $frontendOutputDir -Recurse -Force
+    }
+    $env:TARO_OUTPUT_ROOT = $FrontendOutputRoot
+    $env:TAURI_CONFIG = (@{
+        build = @{
+            frontendDist = "../$FrontendOutputRoot"
+        }
+    } | ConvertTo-Json -Compress)
+    $env:TAURI_ANDROID_PROJECT_PATH = $androidDir
+    Invoke-Checked $npm @('run', 'sync:local-wasm')
+    Invoke-Checked $npm @('exec', '--', 'taro', 'build', '--type', 'h5')
+    Invoke-Checked $cargo @(
+        'clean',
+        '--package', 'pixeldoodle',
+        '--manifest-path', $manifest
+    )
 
     foreach ($target in $targets) {
         $triple = $target.Triple
@@ -194,5 +224,8 @@ try {
     Write-Host "SHA256: $hash"
 }
 finally {
+    $env:TARO_OUTPUT_ROOT = $previousTaroOutputRoot
+    $env:TAURI_CONFIG = $previousTauriConfig
+    $env:TAURI_ANDROID_PROJECT_PATH = $previousTauriAndroidProjectPath
     Pop-Location
 }

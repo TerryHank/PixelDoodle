@@ -22,6 +22,7 @@ import {
   savePendingMaterialImport
 } from '@/services/material-pattern-import'
 import { usePatternStore } from '@/store/pattern-store'
+import { useHistoryStore } from '@/store/history-store'
 import type { MaterialGalleryWork } from '@/types/material-library'
 import './index.h5.scss'
 
@@ -89,6 +90,10 @@ function initialBoardId() {
 export default function MaterialsPageH5() {
   const [works, setWorks] = useState<MaterialGalleryWork[]>([])
   const [total, setTotal] = useState(0)
+  const [delivery, setDelivery] = useState<'remote' | 'offline'>('offline')
+  const [archiveTotal, setArchiveTotal] = useState(0)
+  const [bundledTotal, setBundledTotal] = useState(0)
+  const [fallbackReason, setFallbackReason] = useState('')
   const [hasMore, setHasMore] = useState(false)
   const [page, setPage] = useState(1)
   const [queryInput, setQueryInput] = useState('')
@@ -120,6 +125,10 @@ export default function MaterialsPageH5() {
         setWorks(response.works)
         setTotal(response.total)
         setHasMore(response.hasMore)
+        setDelivery(response.delivery ?? 'remote')
+        setArchiveTotal(response.archiveTotal ?? 0)
+        setBundledTotal(response.bundledTotal ?? 0)
+        setFallbackReason(response.fallbackReason ?? '')
         setIsLoading(false)
       },
       (error) => {
@@ -168,6 +177,22 @@ export default function MaterialsPageH5() {
         colors: targetColors,
         palettePreset: patternState.palettePreset
       })
+      if (patternState.totalBeads > 0) {
+        const backupSaved = useHistoryStore.getState().addEntry({
+          id: `before-material-${Date.now()}`,
+          title: `套用「${response.work.title}」前的作品`,
+          createdAt: new Date().toISOString(),
+          sourceLabel: '素材套用前自动备份',
+          gridSize: { ...patternState.gridSize },
+          totalBeads: patternState.totalBeads,
+          palettePreset: patternState.palettePreset,
+          pixelMatrix: patternState.pixelMatrix.map((row) => [...row]),
+          colorSummary: patternState.colorSummary.map((item) => ({ ...item }))
+        })
+        if (!backupSaved) {
+          throw new Error('当前作品无法自动备份，请先释放应用存储空间后重试')
+        }
+      }
       savePendingMaterialImport(payload)
       applyMaterialPatternImport(payload)
       await Taro.redirectTo({
@@ -262,7 +287,12 @@ export default function MaterialsPageH5() {
 
         <div className='materials-summary' aria-live='polite'>
           <span>{isLoading ? '正在读取素材库…' : `找到 ${total.toLocaleString()} 张可适配图纸`}</span>
-          <span>目标 {selectedBoard.label} · 第 {page} 页</span>
+          <span title={fallbackReason || undefined}>
+            {delivery === 'offline'
+              ? `${fallbackReason ? '在线库不可用，已切换 · ' : ''}内置 ${bundledTotal.toLocaleString()} 张 · 母库 ${archiveTotal.toLocaleString()} 张`
+              : '在线素材库'}
+            {' · '}目标 {selectedBoard.label} · 第 {page} 页
+          </span>
         </div>
 
         {isLoading ? (

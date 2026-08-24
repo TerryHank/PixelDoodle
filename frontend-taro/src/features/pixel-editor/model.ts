@@ -75,6 +75,36 @@ export function setPixelCell(
   return next
 }
 
+export function rasterizeGridLine(
+  start: { x: number; y: number },
+  end: { x: number; y: number }
+) {
+  const cells: Array<{ x: number; y: number }> = []
+  let x = start.x
+  let y = start.y
+  const deltaX = Math.abs(end.x - start.x)
+  const deltaY = Math.abs(end.y - start.y)
+  const stepX = start.x < end.x ? 1 : -1
+  const stepY = start.y < end.y ? 1 : -1
+  let error = deltaX - deltaY
+
+  while (true) {
+    cells.push({ x, y })
+    if (x === end.x && y === end.y) break
+    const doubledError = error * 2
+    if (doubledError > -deltaY) {
+      error -= deltaY
+      x += stepX
+    }
+    if (doubledError < deltaX) {
+      error += deltaX
+      y += stepY
+    }
+  }
+
+  return cells
+}
+
 export function floodFillPixelMatrix(
   matrix: PixelMatrix,
   startX: number,

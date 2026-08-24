@@ -27,6 +27,10 @@ export interface MaterialGalleryListResponse {
   total: number
   page: number
   perPage: number
+  delivery?: 'remote' | 'offline'
+  archiveTotal?: number
+  bundledTotal?: number
+  fallbackReason?: string
 }
 
 export interface MaterialGalleryDetailResponse {

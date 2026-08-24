@@ -1,11 +1,13 @@
 .app-tab-bar {
-  backdrop-filter: blur(16PX);
-  background: rgba(255, 255, 255, 0.96);
-  border-top: 1PX solid rgba(226, 232, 240, 0.92);
+  backdrop-filter: blur(12PX);
+  background: rgba(248, 196, 111, 0.97);
+  border: 4PX solid #bd711d;
+  border-bottom: 0;
+  border-radius: 26PX 26PX 0 0;
   bottom: 0;
   display: flex;
   left: 0;
-  padding: 8PX 14PX calc(env(safe-area-inset-bottom, 0px) + 8PX);
+  padding: 10PX 16PX calc(env(safe-area-inset-bottom, 0px) + 8PX);
   position: fixed;
   right: 0;
   z-index: 1200;
@@ -13,33 +15,44 @@
 
 .app-tab-bar__item {
   align-items: center;
-  border-radius: 16PX;
-  color: var(--text-secondary);
+  border-radius: 18PX;
+  color: #342619;
   display: flex;
   flex: 1;
   flex-direction: column;
   gap: 2PX;
   justify-content: center;
-  min-height: 48PX;
+  min-height: 58PX;
+  transition: transform 0.16s ease, background-color 0.16s ease;
 }
 
 .app-tab-bar__item--hover {
-  background: rgba(239, 246, 255, 0.9);
+  background: rgba(255, 244, 210, 0.68);
 }
 
 .app-tab-bar__item--active {
-  background: rgba(239, 246, 255, 0.96);
-  color: var(--accent);
+  background: rgba(255, 237, 174, 0.74);
+  color: #7a430e;
+  transform: translateY(-2PX);
 }
 
 .app-tab-bar__icon {
-  font-size: 14PX;
-  font-weight: 700;
-  line-height: 1;
+  display: block;
+  width: 34PX;
+  height: 34PX;
 }
 
 .app-tab-bar__label {
-  font-size: 11PX;
-  font-weight: 600;
+  font-size: 12PX;
+  font-weight: 700;
   line-height: 1.2;
+}
+
+@media (min-width: 840PX) {
+  .app-tab-bar {
+    width: min(820PX, calc(100vw - 32PX));
+    left: 50%;
+    right: auto;
+    transform: translateX(-50%);
+  }
 }

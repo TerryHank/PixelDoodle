@@ -18,6 +18,7 @@ vi.mock('@tarojs/taro', () => ({
 
 import {
   buildLocalGenerateOptions,
+  generatePatternLocally,
   getLocalGenerationUnavailableReason,
   isLocalGenerationAvailable,
   normalizeGeneratePatternResponse,
@@ -161,5 +162,89 @@ describe('local-generation helpers', () => {
 
     expect(isLocalGenerationAvailable()).toBe(true)
     expect(getLocalGenerationUnavailableReason()).toBeNull()
+  })
+
+  it('falls back to the main-thread JS engine when the module worker crashes', async () => {
+    getEnvMock.mockReturnValue('WEB')
+    class FailingWorker {
+      listeners = new Map<string, (event?: unknown) => void>()
+
+      addEventListener(type: string, listener: (event?: unknown) => void) {
+        this.listeners.set(type, listener)
+      }
+
+      postMessage() {
+        queueMicrotask(() => this.listeners.get('error')?.({ type: 'error' }))
+      }
+
+      terminate() {}
+    }
+    class MockImage {
+      width = 32
+      height = 32
+      onload: (() => void) | null = null
+      onerror: (() => void) | null = null
+
+      set src(_value: string) {
+        queueMicrotask(() => this.onload?.())
+      }
+    }
+
+    vi.stubGlobal('window', {})
+    vi.stubGlobal('Worker', FailingWorker)
+    vi.stubGlobal('Image', MockImage)
+    vi.stubGlobal('URL', {
+      createObjectURL: vi.fn(() => 'blob:compatibility-image'),
+      revokeObjectURL: vi.fn()
+    })
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => new Response(new Blob(['image']), { status: 200 }))
+    )
+    vi.stubGlobal('document', {
+      createElement: () => {
+        const canvas = {
+          width: 0,
+          height: 0,
+          getContext: () => ({
+            imageSmoothingEnabled: false,
+            imageSmoothingQuality: 'low',
+            drawImage: vi.fn(),
+            getImageData: () => ({
+              data: new Uint8ClampedArray(canvas.width * canvas.height * 4).fill(255)
+            })
+          })
+        }
+        return canvas
+      }
+    })
+
+    const response = await generatePatternLocally(
+      'blob:source',
+      {
+        mode: 'fixed_grid',
+        grid_width: '2',
+        grid_height: '2',
+        palette_preset: 'all'
+      },
+      {
+        colors: [
+          {
+            code: 'W1',
+            name: 'White',
+            name_zh: '白色',
+            hex: '#ffffff',
+            rgb: [255, 255, 255]
+          }
+        ],
+        presets: { all: { label: '全部', codes: null } }
+      }
+    )
+
+    expect(response.grid_size).toEqual({ width: 2, height: 2 })
+    expect(response.pixel_matrix).toEqual([
+      ['W1', 'W1'],
+      ['W1', 'W1']
+    ])
   })
 })

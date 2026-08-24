@@ -52,6 +52,7 @@ perler-beads/
 # Frontend build outputs
 frontend-taro/dist/
 frontend-taro/dist-h5/
+frontend-taro/dist-h5-*/
 frontend-taro/dist-rn/
 frontend-taro/dist-weapp/
 frontend-taro/.temp/
@@ -75,3 +76,4 @@ wasm-engine/target/
 # Node / scratch files
 node_modules/
 .tmp-serial-monitor.py
+frontend-taro/({tag

@@ -6,6 +6,22 @@ import {
   type PointerEvent as ReactPointerEvent
 } from 'react'
 import type { PaletteColor, PalettePresetMap, PixelMatrix } from '@/types/api'
+import backIcon from '@/assets/v13/common/back.png'
+import clearActiveIcon from '@/assets/v13/editor/clear-active.png'
+import clearIcon from '@/assets/v13/editor/clear.png'
+import eraserActiveIcon from '@/assets/v13/editor/eraser-active.png'
+import eraserIcon from '@/assets/v13/editor/eraser.png'
+import fillActiveIcon from '@/assets/v13/editor/fill-active.png'
+import fillIcon from '@/assets/v13/editor/fill.png'
+import numbersActiveIcon from '@/assets/v13/editor/numbers-active.png'
+import numbersIcon from '@/assets/v13/editor/numbers.png'
+import penActiveIcon from '@/assets/v13/editor/pen-active.png'
+import penIcon from '@/assets/v13/editor/pen.png'
+import redoActiveIcon from '@/assets/v13/editor/redo-active.png'
+import redoIcon from '@/assets/v13/editor/redo.png'
+import saveIcon from '@/assets/v13/editor/save.png'
+import undoActiveIcon from '@/assets/v13/editor/undo-active.png'
+import undoIcon from '@/assets/v13/editor/undo.png'
 import {
   applyPaletteToPixelMatrix,
   clonePixelMatrix,
@@ -13,13 +29,25 @@ import {
   floodFillPixelMatrix,
   getPresetColors,
   matricesEqual,
+  rasterizeGridLine,
   setPixelCell
 } from './model'
 import './index.h5.scss'
 
-type EditorTool = 'pen' | 'eraser' | 'fill'
+type EditorTool = 'pen' | 'eraser' | 'fill' | 'pan'
 
 const HISTORY_LIMIT = 40
+const EDITOR_TOOLS: Array<{
+  value: EditorTool
+  label: string
+  icon?: string
+  activeIcon?: string
+}> = [
+  { value: 'pen', label: '取色', icon: penIcon, activeIcon: penActiveIcon },
+  { value: 'eraser', label: '橡皮擦', icon: eraserIcon, activeIcon: eraserActiveIcon },
+  { value: 'fill', label: '填充', icon: fillIcon, activeIcon: fillActiveIcon },
+  { value: 'pan', label: '移动' }
+]
 
 export interface PixelEditorH5Props {
   matrix: PixelMatrix
@@ -27,18 +55,23 @@ export interface PixelEditorH5Props {
   presets: PalettePresetMap
   palettePreset: string
   boardLabel: string
+  onBack?: () => void
   onChange: (matrix: PixelMatrix) => void
   onPalettePresetChange: (preset: string) => void
   onSave: () => void
   onCloudSave?: () => void
   isCloudSaving?: boolean
   cloudSaved?: boolean
+  localSaveFailed?: boolean
+}
+
+function getBaseCellSize(matrix: PixelMatrix) {
+  const maxDimension = Math.max(matrix.length, matrix[0]?.length ?? 1)
+  return Math.max(4, Math.min(12, Math.floor(520 / maxDimension)))
 }
 
 function getCellSize(matrix: PixelMatrix, zoom: number) {
-  const maxDimension = Math.max(matrix.length, matrix[0]?.length ?? 1)
-  const baseSize = Math.max(4, Math.min(12, Math.floor(520 / maxDimension)))
-  return Math.max(3, Math.round(baseSize * zoom))
+  return Math.max(2, Math.round(getBaseCellSize(matrix) * zoom))
 }
 
 export function PixelEditorH5({
@@ -47,18 +80,22 @@ export function PixelEditorH5({
   presets,
   palettePreset,
   boardLabel,
+  onBack,
   onChange,
   onPalettePresetChange,
   onSave,
   onCloudSave,
   isCloudSaving = false,
-  cloudSaved = false
+  cloudSaved = false,
+  localSaveFailed = false
 }: PixelEditorH5Props) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null)
+  const viewportRef = useRef<HTMLDivElement | null>(null)
   const workingMatrixRef = useRef<PixelMatrix>(clonePixelMatrix(matrix))
   const strokeStartRef = useRef<PixelMatrix | null>(null)
   const drawingRef = useRef(false)
-  const lastCellRef = useRef('')
+  const activePointerIdRef = useRef<number | null>(null)
+  const lastCellRef = useRef<{ x: number; y: number } | null>(null)
   const [workingMatrix, setWorkingMatrix] = useState(() => clonePixelMatrix(matrix))
   const [undoStack, setUndoStack] = useState<PixelMatrix[]>([])
   const [redoStack, setRedoStack] = useState<PixelMatrix[]>([])
@@ -66,6 +103,7 @@ export function PixelEditorH5({
   const [selectedCode, setSelectedCode] = useState('')
   const [selectedPreset, setSelectedPreset] = useState(palettePreset)
   const [zoom, setZoom] = useState(1)
+  const [showCodes, setShowCodes] = useState(false)
 
   const presetColors = useMemo(
     () => getPresetColors(colors, presets, selectedPreset),
@@ -149,7 +187,25 @@ export function PixelEditorH5({
       }
       context.stroke()
     }
-  }, [canvasHeight, canvasWidth, cellSize, colorLookup, workingMatrix])
+
+    if (showCodes && cellSize >= 11) {
+      context.fillStyle = 'rgba(48, 32, 18, 0.74)'
+      context.font = `700 ${Math.max(6, Math.floor(cellSize * 0.28))}px sans-serif`
+      context.textAlign = 'center'
+      context.textBaseline = 'middle'
+      workingMatrix.forEach((row, y) => {
+        row.forEach((code, x) => {
+          if (!code) return
+          context.fillText(
+            code,
+            x * cellSize + cellSize / 2,
+            y * cellSize + cellSize / 2,
+            cellSize - 2
+          )
+        })
+      })
+    }
+  }, [canvasHeight, canvasWidth, cellSize, colorLookup, showCodes, workingMatrix])
 
   function recordChange(previous: PixelMatrix, next: PixelMatrix) {
     if (matricesEqual(previous, next)) {
@@ -191,32 +247,64 @@ export function PixelEditorH5({
       return
     }
 
-    const cellKey = `${cell.x}:${cell.y}`
-    if (lastCellRef.current === cellKey) {
+    const previousCell = lastCellRef.current
+    if (previousCell?.x === cell.x && previousCell.y === cell.y) {
       return
     }
-    lastCellRef.current = cellKey
+    lastCellRef.current = cell
 
     const code = tool === 'eraser' ? null : selectedCode || null
-    const current = workingMatrixRef.current
-    const next = setPixelCell(current, cell.x, cell.y, code)
-    if (next === current) {
-      return
+    const cells = previousCell
+      ? rasterizeGridLine(previousCell, cell).slice(1)
+      : [cell]
+    let next = workingMatrixRef.current
+    const canvas = canvasRef.current
+    const context = canvas?.getContext('2d')
+
+    for (const target of cells) {
+      const previous = next
+      next = setPixelCell(next, target.x, target.y, code)
+      if (next === previous || !context) continue
+
+      context.fillStyle = code
+        ? colorLookup.get(code)?.hex ?? '#e2e8f0'
+        : '#ffffff'
+      context.fillRect(
+        target.x * cellSize,
+        target.y * cellSize,
+        cellSize,
+        cellSize
+      )
+      if (cellSize >= 5) {
+        context.strokeStyle =
+          cellSize >= 9
+            ? 'rgba(15, 23, 42, 0.16)'
+            : 'rgba(15, 23, 42, 0.1)'
+        context.lineWidth = 1
+        context.strokeRect(
+          target.x * cellSize + 0.5,
+          target.y * cellSize + 0.5,
+          cellSize,
+          cellSize
+        )
+      }
     }
 
     workingMatrixRef.current = next
-    setWorkingMatrix(next)
   }
 
   function handlePointerDown(event: ReactPointerEvent<HTMLCanvasElement>) {
+    if (tool === 'pan' || activePointerIdRef.current !== null) {
+      return
+    }
+
     const cell = resolvePointerCell(event)
     if (!cell) {
       return
     }
 
     event.preventDefault()
-    event.currentTarget.setPointerCapture(event.pointerId)
-    lastCellRef.current = ''
+    lastCellRef.current = null
 
     if (tool === 'fill') {
       const previous = workingMatrixRef.current
@@ -225,18 +313,24 @@ export function PixelEditorH5({
       return
     }
 
+    activePointerIdRef.current = event.pointerId
+    event.currentTarget.setPointerCapture(event.pointerId)
     drawingRef.current = true
     strokeStartRef.current = clonePixelMatrix(workingMatrixRef.current)
     paintAtPointer(event)
   }
 
-  function finishStroke() {
-    if (!drawingRef.current) {
+  function finishStroke(event?: ReactPointerEvent<HTMLCanvasElement>) {
+    if (
+      !drawingRef.current ||
+      (event && activePointerIdRef.current !== event.pointerId)
+    ) {
       return
     }
 
     drawingRef.current = false
-    lastCellRef.current = ''
+    activePointerIdRef.current = null
+    lastCellRef.current = null
     const previous = strokeStartRef.current
     strokeStartRef.current = null
     if (!previous) {
@@ -244,6 +338,23 @@ export function PixelEditorH5({
     }
 
     recordChange(previous, workingMatrixRef.current)
+  }
+
+  function fitCanvasToViewport() {
+    const viewport = viewportRef.current
+    const columns = workingMatrixRef.current[0]?.length ?? 1
+    const rows = Math.max(1, workingMatrixRef.current.length)
+    if (!viewport) return
+
+    const availableWidth = Math.max(1, viewport.clientWidth - 26)
+    const availableHeight = Math.max(1, viewport.clientHeight - 26)
+    const baseCellSize = getBaseCellSize(workingMatrixRef.current)
+    const nextZoom = Math.min(
+      1,
+      availableWidth / (columns * baseCellSize),
+      availableHeight / (rows * baseCellSize)
+    )
+    setZoom(Math.max(0.4, nextZoom))
   }
 
   function undo() {
@@ -320,17 +431,29 @@ export function PixelEditorH5({
   return (
     <section className='pixel-editor' aria-label='拼豆像素编辑器'>
       <div className='pixel-editor__header'>
-        <div>
-          <div className='pixel-editor__eyebrow'>创作画布</div>
-          <h2 className='pixel-editor__title'>{boardLabel} 钉板</h2>
+        {onBack ? (
+          <button className='pixel-editor__back' type='button' onClick={onBack} aria-label='返回首页'>
+            <img src={backIcon} alt='' />
+          </button>
+        ) : (
+          <span className='pixel-editor__header-spacer' aria-hidden='true' />
+        )}
+        <div className='pixel-editor__heading-copy'>
+          <div className='pixel-editor__eyebrow'>{boardLabel} 钉板</div>
+          <h2 className='pixel-editor__title'>创作</h2>
           <p className='pixel-editor__subtitle'>点击或拖动涂色，支持撤销、填充和缩放查看。</p>
         </div>
         <div className='pixel-editor__save-group'>
           <span className='pixel-editor__local-status'>
-            {cloudSaved ? '本机 + 私有云已保存' : '当前仅保存在本机'}
+            {localSaveFailed
+              ? '应用内草稿保存失败'
+              : cloudSaved
+                ? '应用内草稿 + 私有云已保存'
+                : '应用内草稿已保存'}
           </span>
           <button className='pixel-editor__save-button' type='button' onClick={onSave}>
-            保存到本机
+            <img src={saveIcon} alt='' />
+            <span>保存</span>
           </button>
           {onCloudSave ? (
             <button
@@ -347,21 +470,25 @@ export function PixelEditorH5({
 
       <div className='pixel-editor__toolbar' aria-label='绘图工具'>
         <div className='pixel-editor__tool-group'>
-          {([
-            ['pen', '画笔'],
-            ['eraser', '橡皮'],
-            ['fill', '填充']
-          ] as Array<[EditorTool, string]>).map(([value, label]) => (
-            <button
-              key={value}
-              className={`pixel-editor__tool ${tool === value ? 'pixel-editor__tool--active' : ''}`}
-              type='button'
-              aria-pressed={tool === value}
-              onClick={() => setTool(value)}
-            >
-              {label}
-            </button>
-          ))}
+          {EDITOR_TOOLS.map((item) => {
+            const active = tool === item.value
+            return (
+              <button
+                key={item.value}
+                className={`pixel-editor__tool ${active ? 'pixel-editor__tool--active' : ''}`}
+                type='button'
+                aria-pressed={active}
+                onClick={() => setTool(item.value)}
+              >
+                {item.icon ? (
+                  <img src={active ? item.activeIcon : item.icon} alt='' />
+                ) : (
+                  <span className='pixel-editor__tool-glyph' aria-hidden='true'>↔</span>
+                )}
+                <span className={item.icon ? 'pixel-editor__tool-label--hidden' : ''}>{item.label}</span>
+              </button>
+            )
+          })}
         </div>
         <div className='pixel-editor__tool-group'>
           <button
@@ -370,7 +497,8 @@ export function PixelEditorH5({
             disabled={undoStack.length === 0}
             onClick={undo}
           >
-            撤销
+            <img src={undoStack.length ? undoActiveIcon : undoIcon} alt='' />
+            <span className='pixel-editor__tool-label--hidden'>撤销</span>
           </button>
           <button
             className='pixel-editor__tool'
@@ -378,24 +506,43 @@ export function PixelEditorH5({
             disabled={redoStack.length === 0}
             onClick={redo}
           >
-            重做
+            <img src={redoStack.length ? redoActiveIcon : redoIcon} alt='' />
+            <span className='pixel-editor__tool-label--hidden'>重做</span>
           </button>
           <button className='pixel-editor__tool pixel-editor__tool--danger' type='button' onClick={clearCanvas}>
-            清空
+            <span className='pixel-editor__tool-layered-icon' aria-hidden='true'>
+              <img src={clearIcon} alt='' />
+              <img className='is-active' src={clearActiveIcon} alt='' />
+            </span>
+            <span className='pixel-editor__tool-label--hidden'>清空</span>
+          </button>
+          <button
+            className={`pixel-editor__tool ${showCodes ? 'pixel-editor__tool--active' : ''}`}
+            type='button'
+            aria-pressed={showCodes}
+            onClick={() => setShowCodes((value) => !value)}
+          >
+            <img src={showCodes ? numbersActiveIcon : numbersIcon} alt='' />
+            <span className='pixel-editor__tool-label--hidden'>色号</span>
           </button>
         </div>
         <div className='pixel-editor__zoom' aria-label='画布缩放'>
           <button
+            className='pixel-editor__zoom-button'
             type='button'
             aria-label='缩小画布'
-            onClick={() => setZoom((value) => Math.max(0.75, value - 0.25))}
+            onClick={() => setZoom((value) => Math.max(0.4, value - 0.25))}
           >
             −
           </button>
-          <button type='button' title='恢复 100%' onClick={() => setZoom(1)}>
+          <button className='pixel-editor__zoom-button' type='button' title='恢复 100%' onClick={() => setZoom(1)}>
             {Math.round(zoom * 100)}%
           </button>
+          <button className='pixel-editor__zoom-button' type='button' onClick={fitCanvasToViewport}>
+            适配
+          </button>
           <button
+            className='pixel-editor__zoom-button'
             type='button'
             aria-label='放大画布'
             onClick={() => setZoom((value) => Math.min(3, value + 0.25))}
@@ -405,20 +552,26 @@ export function PixelEditorH5({
         </div>
       </div>
 
-      <div className='pixel-editor__viewport'>
+      <div ref={viewportRef} className='pixel-editor__viewport'>
         <canvas
           ref={canvasRef}
-          className='pixel-editor__canvas'
+          className={`pixel-editor__canvas ${
+            tool === 'pan' ? 'pixel-editor__canvas--pan' : ''
+          }`}
           aria-label={`${boardLabel} 像素画布`}
           onPointerDown={handlePointerDown}
           onPointerMove={(event) => {
-            if (drawingRef.current) {
+            if (
+              drawingRef.current &&
+              activePointerIdRef.current === event.pointerId
+            ) {
               event.preventDefault()
               paintAtPointer(event)
             }
           }}
           onPointerUp={finishStroke}
           onPointerCancel={finishStroke}
+          onLostPointerCapture={finishStroke}
           style={{ width: `${canvasWidth}px`, height: `${canvasHeight}px` }}
         />
       </div>
@@ -426,8 +579,8 @@ export function PixelEditorH5({
       <div className='pixel-editor__palette-panel'>
         <div className='pixel-editor__palette-heading'>
           <div>
-            <div className='pixel-editor__palette-title'>专业拼豆配色</div>
-            <div className='pixel-editor__palette-hint'>切换方案后点击“一键套用”，已有颜色会自动匹配。</div>
+            <div className='pixel-editor__palette-title'>画笔颜色</div>
+            <div className='pixel-editor__palette-hint'>选择拼豆色号；切换方案后可一键重新匹配。</div>
           </div>
           <div className='pixel-editor__palette-actions'>
             <select

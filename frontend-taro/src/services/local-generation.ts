@@ -68,6 +68,18 @@ interface PendingRequest {
 let localGenerationWorker: Worker | null = null
 const pendingRequests = new Map<string, PendingRequest>()
 
+function disposeLocalGenerationWorker(error: Error) {
+  const worker = localGenerationWorker
+  localGenerationWorker = null
+  worker?.terminate()
+
+  for (const pending of pendingRequests.values()) {
+    clearTimeout(pending.timeoutId)
+    pending.reject(error)
+  }
+  pendingRequests.clear()
+}
+
 function createSessionId() {
   if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
     return crypto.randomUUID()
@@ -238,6 +250,11 @@ function ensureLocalGenerationWorker() {
 
   worker.addEventListener('error', (event) => {
     console.error('Local generation worker crashed:', event)
+    disposeLocalGenerationWorker(new Error('本地生成 Worker 加载失败'))
+  })
+
+  worker.addEventListener('messageerror', () => {
+    disposeLocalGenerationWorker(new Error('本地生成 Worker 返回了无效数据'))
   })
 
   localGenerationWorker = worker
@@ -304,7 +321,6 @@ async function generatePatternLocallyForH5(
   filePath: string,
   fields: Record<string, string>
 ) {
-  const worker = ensureLocalGenerationWorker()
   const response = await fetch(filePath)
   if (!response.ok) {
     throw new Error('图片读取失败')
@@ -313,11 +329,11 @@ async function generatePatternLocallyForH5(
   const bytes = await response.arrayBuffer()
   const requestId = createSessionId()
   const options = buildLocalGenerateOptions(fields)
+  const worker = ensureLocalGenerationWorker()
 
   return await new Promise<GeneratePatternResponse>((resolve, reject) => {
     const timeoutId = setTimeout(() => {
-      pendingRequests.delete(requestId)
-      reject(new Error('Local generation timed out'))
+      disposeLocalGenerationWorker(new Error('本地生成超时，已切换兼容模式'))
     }, LOCAL_GENERATION_TIMEOUT_MS)
 
     pendingRequests.set(requestId, {
@@ -333,8 +349,80 @@ async function generatePatternLocallyForH5(
       options
     }
 
-    worker.postMessage(payload, [payload.bytes])
+    try {
+      worker.postMessage(payload, [payload.bytes])
+    } catch {
+      disposeLocalGenerationWorker(new Error('本地生成 Worker 启动失败'))
+    }
   })
+}
+
+function loadBrowserImage(url: string) {
+  return new Promise<HTMLImageElement>((resolve, reject) => {
+    const image = new Image()
+    image.onload = () => resolve(image)
+    image.onerror = () => reject(new Error('兼容模式无法解码图片'))
+    image.src = url
+  })
+}
+
+function drawImageRaster(
+  image: HTMLImageElement,
+  width: number,
+  height: number
+) {
+  const canvas = document.createElement('canvas')
+  canvas.width = Math.max(1, Math.round(width))
+  canvas.height = Math.max(1, Math.round(height))
+  const context = canvas.getContext('2d', { willReadFrequently: true })
+  if (!context) {
+    throw new Error('当前浏览器无法读取图片像素')
+  }
+  context.imageSmoothingEnabled = true
+  context.imageSmoothingQuality = 'high'
+  context.drawImage(image, 0, 0, canvas.width, canvas.height)
+  const imageData = context.getImageData(0, 0, canvas.width, canvas.height)
+  return {
+    width: canvas.width,
+    height: canvas.height,
+    data: imageData.data
+  }
+}
+
+async function generatePatternLocallyForH5Js(
+  filePath: string,
+  fields: Record<string, string>,
+  paletteData?: LocalPaletteData
+) {
+  if (!paletteData || paletteData.colors.length === 0) {
+    throw new Error('调色板尚未加载完成，无法启用兼容模式')
+  }
+
+  const response = await fetch(filePath)
+  if (!response.ok) {
+    throw new Error('兼容模式读取图片失败')
+  }
+  const objectUrl = URL.createObjectURL(await response.blob())
+  try {
+    const image = await loadBrowserImage(objectUrl)
+    const options = buildLocalGenerateOptions(fields)
+    const grid = resolveLocalGridSize(image.width, image.height, options)
+    const result = generatePatternLocalJs({
+      sourceWidth: image.width,
+      sourceHeight: image.height,
+      selectionRaster: drawImageRaster(image, 120, 120),
+      midRaster: drawImageRaster(image, grid.width * 4, grid.height * 4),
+      options,
+      colors: paletteData.colors,
+      presets: paletteData.presets
+    })
+    return validateLocalGenerationGrid(
+      normalizeGeneratePatternResponse(result, options.palette_preset),
+      options
+    )
+  } finally {
+    URL.revokeObjectURL(objectUrl)
+  }
 }
 
 export async function generatePatternLocally(
@@ -346,5 +434,10 @@ export async function generatePatternLocally(
     return generatePatternLocallyForWeapp(filePath, fields, paletteData)
   }
 
-  return generatePatternLocallyForH5(filePath, fields)
+  try {
+    return await generatePatternLocallyForH5(filePath, fields)
+  } catch (error) {
+    console.warn('Local WASM worker unavailable; using JS compatibility mode.', error)
+    return generatePatternLocallyForH5Js(filePath, fields, paletteData)
+  }
 }

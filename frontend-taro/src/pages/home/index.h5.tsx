@@ -20,6 +20,11 @@ import { PatternThumb } from '@/components/pattern-thumb'
 import { ProfileAvatar } from '@/components/profile-avatar'
 import { SettingsSheetH5 } from '@/components/settings-sheet/index.h5'
 import { ToastHost } from '@/components/toast-host'
+import {
+  V13CreationSetup,
+  V13HomeLanding,
+  V13LaunchScreen
+} from '@/components/v13-home/index.h5'
 import { PixelEditorH5 } from '@/features/pixel-editor/index.h5'
 import { GENERATION_STYLES } from '@/constants/generation-styles'
 import {
@@ -80,6 +85,9 @@ import { hideLoadingSafely } from '@/utils/loading'
 import { readPersistedState, writePersistedState } from '@/utils/persistence'
 
 const VALID_IMAGE_TYPES = ['image/jpeg', 'image/png', 'image/gif', 'image/webp']
+const VALID_IMAGE_EXTENSIONS = ['jpg', 'jpeg', 'png', 'gif', 'webp']
+const MAX_CROP_IMAGE_EDGE = 4096
+const MAX_CROP_IMAGE_PIXELS = 16 * 1024 * 1024
 const LOCAL_DRAFT_STORAGE_KEY = 'pixeldoodle:pixel-editor-draft'
 const LOCAL_GENERATION_MODE = 'local'
 let ownedOriginalImageUrl: string | null = null
@@ -216,6 +224,8 @@ export default function HomePageH5() {
   const fileInputRef = useRef<HTMLInputElement | null>(null)
   const cropImageRef = useRef<HTMLImageElement | null>(null)
   const imageOperationOwnerRef = useRef<symbol | null>(null)
+  const cropLoadOwnerRef = useRef<symbol | null>(null)
+  const cropSourceUrlRef = useRef<string | null>(null)
   const cropStateRef = useRef<CropState>({
     file: null,
     img: null,
@@ -251,9 +261,18 @@ export default function HomePageH5() {
   const [hasLocalDraft, setHasLocalDraft] = useState(
     () => readPixelEditorDraft() !== null
   )
+  const [localSaveFailed, setLocalSaveFailed] = useState(false)
+  const [isCreationSetupOpen, setIsCreationSetupOpen] = useState(false)
+  const [showV13Launch, setShowV13Launch] = useState(false)
 
   useEffect(() => {
-    document.title = 'PixelDoodle - 拼豆像素创作工作台'
+    document.title = '创物集 DIY 拼豆 · v13'
+    const launchKey = 'pixeldoodle:v13-launch-shown'
+    if (window.sessionStorage.getItem(launchKey)) return
+    window.sessionStorage.setItem(launchKey, '1')
+    setShowV13Launch(true)
+    const timer = window.setTimeout(() => setShowV13Launch(false), 1450)
+    return () => window.clearTimeout(timer)
   }, [])
 
   useEffect(() => {
@@ -476,6 +495,7 @@ export default function HomePageH5() {
     }
     const saved = writePersistedState(LOCAL_DRAFT_STORAGE_KEY, draft)
     setHasLocalDraft(saved)
+    setLocalSaveFailed(!saved)
     return saved
   }
 
@@ -514,6 +534,7 @@ export default function HomePageH5() {
     setCloudWork(null)
     setIsCloudSynced(false)
     persistEditorDraft(nextMatrix, '未命名作品', null, false)
+    setIsCreationSetupOpen(false)
   }
 
   function handleRestoreLocalDraft() {
@@ -549,6 +570,7 @@ export default function HomePageH5() {
     setShareTitle(draft.title)
     setCloudWork(draft.cloudWork ?? null)
     setIsCloudSynced(Boolean(draft.cloudWork && draft.cloudSynced !== false))
+    setLocalSaveFailed(false)
     showToast('已恢复本地草稿')
   }
 
@@ -567,7 +589,7 @@ export default function HomePageH5() {
       title: shareTitle || '未命名作品',
       sourceLabel: currentState.originalImage ? '图片创作' : '自由创作'
     })
-    showToast('作品已保存到本机')
+    showToast('作品已保存为应用内草稿')
   }
 
   async function handleSaveCloudEditor() {
@@ -620,6 +642,10 @@ export default function HomePageH5() {
   }
 
   function resetCropState() {
+    if (cropSourceUrlRef.current) {
+      URL.revokeObjectURL(cropSourceUrlRef.current)
+      cropSourceUrlRef.current = null
+    }
     cropStateRef.current = {
       file: null,
       img: null,
@@ -654,7 +680,15 @@ export default function HomePageH5() {
   }
 
   function validateSelectedFile(file: File) {
-    if (!VALID_IMAGE_TYPES.includes(file.type)) {
+    const normalizedType = file.type.trim().toLowerCase()
+    const extension = file.name.split('.').pop()?.toLowerCase() || ''
+    const hasSupportedType = VALID_IMAGE_TYPES.includes(normalizedType)
+    const hasGenericType =
+      !normalizedType || normalizedType === 'application/octet-stream'
+    if (
+      !hasSupportedType &&
+      !(hasGenericType && VALID_IMAGE_EXTENSIONS.includes(extension))
+    ) {
       showToast('仅支持 JPG、PNG、GIF、WebP')
       return false
     }
@@ -667,51 +701,121 @@ export default function HomePageH5() {
     return true
   }
 
-  function showCropDialog(file: File) {
-    cropStateRef.current.file = file
-
-    const reader = new FileReader()
-    reader.onload = (event) => {
-      const imageUrl = String(event.target?.result || '')
+  function loadCropImage(url: string) {
+    return new Promise<HTMLImageElement>((resolve, reject) => {
       const image = new Image()
-      image.onload = () => {
-        cropStateRef.current.img = image
-        const { maxWidth, maxHeight } = getCropViewportBounds()
-        cropStateRef.current.scale = Math.min(
-          maxWidth / image.width,
-          maxHeight / image.height,
-          1
-        )
-        const renderedWidth = Math.max(
-          1,
-          Math.round(image.width * cropStateRef.current.scale)
-        )
-        const renderedHeight = Math.max(
-          1,
-          Math.round(image.height * cropStateRef.current.scale)
-        )
+      image.onload = () => resolve(image)
+      image.onerror = () => reject(new Error('图片已损坏或格式无法解码'))
+      image.src = url
+    })
+  }
 
-        const cropRect = createAspectCropRect(
-          image.width,
-          image.height,
-          boardSize.width,
-          boardSize.height
-        )
-        cropStateRef.current.baseBox = cropRect
-        cropStateRef.current.box = cropRect
-        cropStateRef.current.zoom = 1
-
-        setCropImageStyle({
-          width: `${renderedWidth}px`,
-          height: `${renderedHeight}px`
-        })
-        setCropImageUrl(imageUrl)
-        updateCropBox()
-        setIsCropDialogOpen(true)
-      }
-      image.src = imageUrl
+  function replaceCropSourceUrl(nextUrl: string) {
+    if (cropSourceUrlRef.current && cropSourceUrlRef.current !== nextUrl) {
+      URL.revokeObjectURL(cropSourceUrlRef.current)
     }
-    reader.readAsDataURL(file)
+    cropSourceUrlRef.current = nextUrl
+  }
+
+  async function downsampleCropImageIfNeeded(
+    image: HTMLImageElement,
+    sourceUrl: string
+  ) {
+    const pixelScale = Math.sqrt(
+      MAX_CROP_IMAGE_PIXELS / Math.max(1, image.width * image.height)
+    )
+    const scale = Math.min(
+      1,
+      MAX_CROP_IMAGE_EDGE / image.width,
+      MAX_CROP_IMAGE_EDGE / image.height,
+      pixelScale
+    )
+    if (scale >= 1) {
+      return { image, imageUrl: sourceUrl }
+    }
+
+    const canvas = document.createElement('canvas')
+    canvas.width = Math.max(1, Math.round(image.width * scale))
+    canvas.height = Math.max(1, Math.round(image.height * scale))
+    const context = canvas.getContext('2d')
+    if (!context) throw new Error('当前设备无法处理这张大图')
+    context.imageSmoothingEnabled = true
+    context.imageSmoothingQuality = 'high'
+    context.drawImage(image, 0, 0, canvas.width, canvas.height)
+    const blob = await new Promise<Blob | null>((resolve) => {
+      canvas.toBlob(resolve, 'image/jpeg', 0.92)
+    })
+    if (!blob) throw new Error('大图优化失败，请选择尺寸较小的图片')
+
+    const resizedUrl = URL.createObjectURL(blob)
+    replaceCropSourceUrl(resizedUrl)
+    return {
+      image: await loadCropImage(resizedUrl),
+      imageUrl: resizedUrl
+    }
+  }
+
+  async function showCropDialog(file: File) {
+    if (cropLoadOwnerRef.current) {
+      showToast('正在读取上一张图片，请稍候')
+      return
+    }
+
+    const operationToken = Symbol('load-crop-image')
+    cropLoadOwnerRef.current = operationToken
+    Taro.showLoading({ title: '正在读取图片...' })
+    resetCropState()
+
+    try {
+      const sourceUrl = URL.createObjectURL(file)
+      replaceCropSourceUrl(sourceUrl)
+      const sourceImage = await loadCropImage(sourceUrl)
+      const prepared = await downsampleCropImageIfNeeded(sourceImage, sourceUrl)
+      if (cropLoadOwnerRef.current !== operationToken) return
+
+      const image = prepared.image
+      cropStateRef.current.file = file
+      cropStateRef.current.img = image
+      const { maxWidth, maxHeight } = getCropViewportBounds()
+      cropStateRef.current.scale = Math.min(
+        maxWidth / image.width,
+        maxHeight / image.height,
+        1
+      )
+      const renderedWidth = Math.max(
+        1,
+        Math.round(image.width * cropStateRef.current.scale)
+      )
+      const renderedHeight = Math.max(
+        1,
+        Math.round(image.height * cropStateRef.current.scale)
+      )
+      const cropRect = createAspectCropRect(
+        image.width,
+        image.height,
+        boardSize.width,
+        boardSize.height
+      )
+      cropStateRef.current.baseBox = cropRect
+      cropStateRef.current.box = cropRect
+      cropStateRef.current.zoom = 1
+
+      setCropImageStyle({
+        width: `${renderedWidth}px`,
+        height: `${renderedHeight}px`
+      })
+      setCropImageUrl(prepared.imageUrl)
+      updateCropBox()
+      setIsCropDialogOpen(true)
+    } catch (error) {
+      resetCropState()
+      showToast(error instanceof Error ? error.message : '图片读取失败')
+    } finally {
+      if (cropLoadOwnerRef.current === operationToken) {
+        cropLoadOwnerRef.current = null
+      }
+      await hideLoadingSafely(() => Taro.hideLoading())
+    }
   }
 
   function handleUploadFileSelection(file: File | null) {
@@ -728,7 +832,7 @@ export default function HomePageH5() {
       return
     }
 
-    showCropDialog(file)
+    void showCropDialog(file)
     if (fileInputRef.current) {
       fileInputRef.current.value = ''
     }
@@ -1148,23 +1252,56 @@ export default function HomePageH5() {
     const nextBoard = getBoardSize(boardId)
     const store = usePatternStore.getState()
     const previousMatrix = store.pixelMatrix
-    store.setBoardSize({ width: nextBoard.width, height: nextBoard.height })
+    const previousBoard = { ...store.boardSize }
+    if (
+      previousBoard.width === nextBoard.width &&
+      previousBoard.height === nextBoard.height
+    ) {
+      return
+    }
 
     if (store.originalImage) {
+      store.setBoardSize({ width: nextBoard.width, height: nextBoard.height })
       try {
         await runGenerate(store.originalImage)
       } catch (error) {
+        usePatternStore.getState().setBoardSize(previousBoard)
         showToast(error instanceof Error ? error.message : '重新生成失败')
       }
       return
     }
 
-    if (hasGeneratedPattern(previousMatrix)) {
-      syncEditedPattern(
-        resizePixelMatrix(previousMatrix, nextBoard.width, nextBoard.height)
+    if (previousMatrix.length > 0) {
+      const resized = resizePixelMatrix(
+        previousMatrix,
+        nextBoard.width,
+        nextBoard.height
       )
+      const croppedBeads = Math.max(
+        0,
+        countPlacedBeads(previousMatrix) - countPlacedBeads(resized)
+      )
+      if (
+        croppedBeads > 0 &&
+        !window.confirm(
+          `调整为 ${nextBoard.label} 将裁掉 ${croppedBeads} 颗珠子。继续前会自动保存恢复快照，是否继续？`
+        )
+      ) {
+        return
+      }
+      if (croppedBeads > 0) {
+        rememberGeneratedPattern({
+          title: shareTitle || '尺寸调整前作品',
+          sourceLabel: '钉板缩小前自动备份'
+        })
+      }
+      store.setBoardSize({ width: nextBoard.width, height: nextBoard.height })
+      syncEditedPattern(resized)
       showToast(`画布已调整为 ${nextBoard.label}`)
+      return
     }
+
+    store.setBoardSize({ width: nextBoard.width, height: nextBoard.height })
   }
 
   function handleCropZoomChange(nextZoom: number) {
@@ -1597,10 +1734,22 @@ export default function HomePageH5() {
 
   return (
     <div className='template-home-page'>
-      <div className='site-version-badge'>v12</div>
+      <V13LaunchScreen visible={showV13Launch} />
       <div className='main-container'>
         <div id='result-area' className='result-area'>
-          <div className='canvas-toolbar'>
+          <input
+            id='file-input'
+            className='hidden-input'
+            type='file'
+            accept='image/jpeg,image/png,image/gif,image/webp'
+            ref={fileInputRef}
+            disabled={isGenerating}
+            onChange={(event) => handleUploadFileSelection(event.target.files?.[0] ?? null)}
+          />
+          {hasPattern ? (
+            <details className='v13-advanced-tools'>
+              <summary>高级设置</summary>
+              <div className='canvas-toolbar'>
             <button
               id='clear-btn'
               className='toolbar-btn'
@@ -1642,15 +1791,6 @@ export default function HomePageH5() {
             >
               <span className='toolbar-btn-icon'>+</span>
             </label>
-            <input
-              id='file-input'
-              className='hidden-input'
-              type='file'
-              accept='image/jpeg,image/png,image/gif,image/webp'
-              ref={fileInputRef}
-              disabled={isGenerating}
-              onChange={(event) => handleUploadFileSelection(event.target.files?.[0] ?? null)}
-            />
             <select
               id='generation-style'
               className='led-size-btn generation-style-select'
@@ -1729,7 +1869,9 @@ export default function HomePageH5() {
                 <path d='M5 21h14' />
               </svg>
             </button>
-          </div>
+              </div>
+            </details>
+          ) : null}
 
           <div
             className={`canvas-container ${hasPattern ? 'canvas-container--editor' : ''}`}
@@ -1744,6 +1886,7 @@ export default function HomePageH5() {
                 presets={presets}
                 palettePreset={palettePreset}
                 boardLabel={selectedBoard.label}
+                onBack={handleClear}
                 onChange={syncEditedPattern}
                 onPalettePresetChange={(preset) => {
                   usePatternStore.getState().setPalettePreset(preset)
@@ -1761,62 +1904,47 @@ export default function HomePageH5() {
                 }}
                 isCloudSaving={isCloudSaving}
                 cloudSaved={isCloudSynced}
+                localSaveFailed={localSaveFailed}
+              />
+            ) : isCreationSetupOpen ? (
+              <V13CreationSetup
+                boardOptions={BOARD_SIZE_OPTIONS.map((option) => ({
+                  id: option.id,
+                  label: option.label
+                }))}
+                paletteOptions={Object.entries(presets).map(([id, preset]) => ({
+                  id,
+                  label: preset.label
+                }))}
+                selectedBoard={selectedBoard.id}
+                selectedPalette={palettePreset}
+                onBack={() => setIsCreationSetupOpen(false)}
+                onBoardChange={(value) => void handleChangeBoardSize(value)}
+                onPaletteChange={(value) => usePatternStore.getState().setPalettePreset(value)}
+                onStart={handleCreateBlankCanvas}
               />
             ) : (
-              <section className='creation-launcher' aria-labelledby='creation-launcher-title'>
-                <div className='creation-launcher__copy'>
-                  <span className='creation-launcher__eyebrow'>PixelDoodle Web Studio</span>
-                  <h1 id='creation-launcher-title'>从想法到拼豆图纸，一处完成</h1>
-                  <p>
-                    当前尺寸 {selectedBoard.label}。可直接自由创作，也可导入照片智能像素化，设备连接不是创作前提。
-                  </p>
-                </div>
-                <div className='creation-launcher__actions'>
-                  <button
-                    className='creation-launcher__card creation-launcher__card--primary'
-                    type='button'
-                    onClick={handleCreateBlankCanvas}
-                  >
-                    <strong>新建空白画布</strong>
-                    <span>画笔、橡皮、填充、撤销与缩放</span>
-                  </button>
-                  <button
-                    id='upload-area'
-                    className='creation-launcher__card'
-                    type='button'
-                    disabled={isGenerating}
-                    onClick={() => fileInputRef.current?.click()}
-                  >
-                    <strong>导入图片生成</strong>
-                    <span>按钉板比例校准后，一键智能像素化</span>
-                  </button>
-                  <button
-                    className='creation-launcher__card'
-                    type='button'
-                    onClick={() => {
-                      void Taro.redirectTo({
-                        url: '/pages/materials/index'
-                      })
-                    }}
-                  >
-                    <strong>从海量素材库开始</strong>
-                    <span>分类筛选图纸，一键适配并继续二次编辑</span>
-                  </button>
-                </div>
-                {hasLocalDraft ? (
-                  <button
-                    className='creation-launcher__restore'
-                    type='button'
-                    onClick={handleRestoreLocalDraft}
-                  >
-                    恢复上次本地草稿
-                  </button>
-                ) : null}
-              </section>
+              <V13HomeLanding
+                hasLocalDraft={hasLocalDraft}
+                onCreate={() => setIsCreationSetupOpen(true)}
+                onPixelImport={() => {
+                  setStyleTransferMode('none')
+                  fileInputRef.current?.click()
+                }}
+                onPhotoImport={() => {
+                  setStyleTransferMode('none')
+                  fileInputRef.current?.click()
+                }}
+                onOpenLibrary={() => {
+                  void Taro.redirectTo({ url: '/pages/materials/index' })
+                }}
+                onOpenConnection={() => void handleOpenPairSheet()}
+                onRestoreDraft={handleRestoreLocalDraft}
+              />
             )}
           </div>
 
-          {homeViewState.showExamples && !isRestoringGeneratedState ? (
+          {hasPattern && homeViewState.showExamples && !isRestoringGeneratedState ? (
             <div
               id='examples-container'
               className='section examples-section'
@@ -2000,11 +2128,13 @@ export default function HomePageH5() {
               </button>
             </div>
           ) : null}
-          <DeviceMonitorPanel
-            device={monitoredDevice}
-            alerts={monitoredAlerts}
-            onAcknowledgeAlert={acknowledgeDeviceAlert}
-          />
+          {hasPattern ? (
+            <DeviceMonitorPanel
+              device={monitoredDevice}
+              alerts={monitoredAlerts}
+              onAcknowledgeAlert={acknowledgeDeviceAlert}
+            />
+          ) : null}
         </div>
       </div>
 
@@ -2063,7 +2193,7 @@ export default function HomePageH5() {
         }}
       />
       <ToastHost message={toastMessage} />
-      <AppTabBar current='tool' />
+      {!hasPattern && !isCreationSetupOpen ? <AppTabBar current='tool' /> : null}
     </div>
   )
 }

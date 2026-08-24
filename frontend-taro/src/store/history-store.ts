@@ -11,28 +11,31 @@ const initialHistory = readPersistedState<PatternHistoryEntry[]>(
 )
 
 function persist(entries: PatternHistoryEntry[]) {
-  writePersistedState(HISTORY_STORAGE_KEY, entries)
+  return writePersistedState(HISTORY_STORAGE_KEY, entries)
 }
 
 export interface HistoryStoreState {
   entries: PatternHistoryEntry[]
-  addEntry: (entry: PatternHistoryEntry) => void
+  addEntry: (entry: PatternHistoryEntry) => boolean
   clearHistory: () => void
 }
 
 export const useHistoryStore = create<HistoryStoreState>((set, get) => ({
   entries: initialHistory,
-  addEntry: (entry) =>
+  addEntry: (entry) => {
+    let saved = false
     set(() => {
       const nextEntries = [entry, ...get().entries.filter((item) => item.id !== entry.id)].slice(
         0,
         HISTORY_LIMIT
       )
-      persist(nextEntries)
+      saved = persist(nextEntries)
       return {
         entries: nextEntries
       }
-    }),
+    })
+    return saved
+  },
   clearHistory: () =>
     set(() => {
       persist([])

@@ -1,32 +1,43 @@
 import Taro from '@tarojs/taro'
-import { Text, View } from '@tarojs/components'
+import { Image, Text, View } from '@tarojs/components'
+import beanActiveIcon from '@/assets/v13/tabs/bean-active.png'
+import beanIcon from '@/assets/v13/tabs/bean.png'
+import homeActiveIcon from '@/assets/v13/tabs/home-active.png'
+import homeIcon from '@/assets/v13/tabs/home.png'
+import localGalleryIcon from '@/assets/v13/tabs/local-gallery.png'
+import profileActiveIcon from '@/assets/v13/tabs/profile-active.png'
+import profileIcon from '@/assets/v13/tabs/profile.png'
 import './index.scss'
 
 export type AppTabKey = 'community' | 'materials' | 'tool' | 'profile'
 
 const TAB_CONFIG: Record<
   AppTabKey,
-  { label: string; url: string; icon: string }
+  { label: string; url: string; icon: string; activeIcon: string }
 > = {
   community: {
-    label: '社区',
+    label: '豆仓',
     url: '/pages/community/index',
-    icon: '社'
+    icon: beanIcon,
+    activeIcon: beanActiveIcon
   },
   materials: {
-    label: '素材',
+    label: '本地图库',
     url: '/pages/materials/index',
-    icon: '材'
+    icon: localGalleryIcon,
+    activeIcon: localGalleryIcon
   },
   tool: {
-    label: '工具',
+    label: '首页',
     url: '/pages/home/index',
-    icon: '工'
+    icon: homeIcon,
+    activeIcon: homeActiveIcon
   },
   profile: {
     label: '我的',
     url: '/pages/profile/index',
-    icon: '我'
+    icon: profileIcon,
+    activeIcon: profileActiveIcon
   }
 }
 
@@ -47,7 +58,7 @@ export function AppTabBar({ current }: AppTabBarProps) {
 
   return (
     <View className='app-tab-bar'>
-      {(['community', 'materials', 'tool', 'profile'] as AppTabKey[]).map((tab) => {
+      {(['tool', 'materials', 'community', 'profile'] as AppTabKey[]).map((tab) => {
         const item = TAB_CONFIG[tab]
         const active = tab === current
 
@@ -61,7 +72,11 @@ export function AppTabBar({ current }: AppTabBarProps) {
               void handleNavigate(tab)
             }}
           >
-            <Text className='app-tab-bar__icon'>{item.icon}</Text>
+            <Image
+              className='app-tab-bar__icon'
+              src={active ? item.activeIcon : item.icon}
+              mode='aspectFit'
+            />
             <Text className='app-tab-bar__label'>{item.label}</Text>
           </View>
         )
