@@ -88,7 +88,12 @@ import {
 import {
   formatColorTotalText
 } from './h5-canvas'
-import { deriveH5HomeViewState, getBleConnectedToastMessage } from './h5-runtime'
+import {
+  deriveH5HomeViewState,
+  getBleConnectedToastMessage,
+  restoreBleConnectedUuid,
+  selectAuthorizedDeviceForReconnect
+} from './h5-runtime'
 import { hideLoadingSafely } from '@/utils/loading'
 import { readPersistedState, writePersistedState } from '@/utils/persistence'
 
@@ -97,6 +102,7 @@ const VALID_IMAGE_EXTENSIONS = ['jpg', 'jpeg', 'png', 'gif', 'webp']
 const MAX_CROP_IMAGE_EDGE = 4096
 const MAX_CROP_IMAGE_PIXELS = 16 * 1024 * 1024
 const LOCAL_DRAFT_STORAGE_KEY = 'pixeldoodle:pixel-editor-draft'
+const LAST_BLE_DEVICE_STORAGE_KEY = 'pixeldoodle:h5-last-ble-device:v1'
 let ownedOriginalImageUrl: string | null = null
 
 interface PixelEditorDraft {
@@ -232,6 +238,7 @@ export default function HomePageH5() {
   const cropLoadOwnerRef = useRef<symbol | null>(null)
   const cropSourceUrlRef = useRef<string | null>(null)
   const importProgressTimerRef = useRef<ReturnType<typeof setInterval> | null>(null)
+  const autoReconnectStartedRef = useRef(false)
   const cropStateRef = useRef<CropState>({
     file: null,
     img: null,
@@ -244,7 +251,14 @@ export default function HomePageH5() {
     startY: 0
   })
   const [authorizedBleDevices, setAuthorizedBleDevices] = useState<BleKnownDevice[]>([])
-  const [bleConnectedUuid, setBleConnectedUuid] = useState<string | null>(null)
+  const [bleConnectedUuid, setBleConnectedUuid] = useState<string | null>(() => {
+    const deviceState = useDeviceStore.getState()
+    return restoreBleConnectedUuid({
+      targetDeviceUuid: deviceState.targetDeviceUuid,
+      connectionStatus: deviceState.bleConnectionStatus,
+      characteristicStatus: deviceState.bleCharacteristicStatus
+    })
+  })
   const [difficultyMode, setDifficultyMode] = useState('0.25')
   const [customPixelSize, setCustomPixelSize] = useState(8)
   const [cropZoom, setCropZoom] = useState(1)
@@ -461,6 +475,64 @@ export default function HomePageH5() {
 
     void refreshBleDevices()
   }, [isPairSheetOpen, bleConnectedUuid, targetDeviceUuid])
+
+  useEffect(() => {
+    if (autoReconnectStartedRef.current || isTauri()) {
+      return
+    }
+    autoReconnectStartedRef.current = true
+
+    const currentDeviceState = useDeviceStore.getState()
+    if (
+      currentDeviceState.bleConnectionStatus === 'connected' &&
+      currentDeviceState.bleCharacteristicStatus === 'ready' &&
+      currentDeviceState.targetDeviceUuid
+    ) {
+      return
+    }
+
+    let cancelled = false
+    const reconnect = async () => {
+      if (typeof bleAdapter.getAuthorizedDevices !== 'function') {
+        return
+      }
+
+      try {
+        const devices = await bleAdapter.getAuthorizedDevices()
+        if (cancelled) {
+          return
+        }
+        setAuthorizedBleDevices(devices)
+        const rememberedUuid = readPersistedState<string | null>(
+          LAST_BLE_DEVICE_STORAGE_KEY,
+          null
+        )
+        const device = selectAuthorizedDeviceForReconnect(devices, rememberedUuid)
+        if (!device || typeof bleAdapter.connectKnownDevice !== 'function') {
+          return
+        }
+
+        useDeviceStore.getState().setBleConnectionStatus('connecting')
+        useDeviceStore.getState().setBleCharacteristicStatus('discovering')
+        const connectedUuid = await bleAdapter.connectKnownDevice(device.key)
+        if (!cancelled) {
+          await completeBleConnectionFlow(connectedUuid)
+        }
+      } catch (error) {
+        if (!cancelled) {
+          console.warn('Failed to restore authorized Bluetooth device:', error)
+          useDeviceStore.getState().setBleConnectionStatus('idle')
+          useDeviceStore.getState().setBleCharacteristicStatus('idle')
+          setBleConnectedUuid(null)
+        }
+      }
+    }
+
+    void reconnect()
+    return () => {
+      cancelled = true
+    }
+  }, [])
 
   useEffect(() => {
     if (difficultyMode === 'custom') {
@@ -1705,6 +1777,7 @@ export default function HomePageH5() {
     }
 
     useDeviceStore.getState().setTargetDeviceUuid(normalizedUuid)
+    writePersistedState(LAST_BLE_DEVICE_STORAGE_KEY, normalizedUuid)
     useDeviceStore.getState().setBleConnectionStatus('connected')
     useDeviceStore.getState().setBleCharacteristicStatus('ready')
     setBleConnectedUuid(normalizedUuid)
@@ -1936,7 +2009,7 @@ export default function HomePageH5() {
           ? `已连接设备 ${connectedUuid}`
           : isRemembered
             ? `已记住设备 ${deviceUuid}`
-            : '已授权 BeadCraft 设备'
+            : '已授权拼豆板设备'
       }
     })
 
@@ -1946,7 +2019,7 @@ export default function HomePageH5() {
     ) {
       items.push({
         key: `remembered-${rememberedUuid}`,
-        name: `BeadCraft-${rememberedUuid}`,
+        name: `拼豆板-${rememberedUuid}`,
         uuid: rememberedUuid,
         connected: false,
         remembered: true,
@@ -1973,7 +2046,7 @@ export default function HomePageH5() {
     if (authorizedBleDevices.length > 0) {
       return `已授权设备 ${authorizedBleDevices.length} 台，可直接点击连接`
     }
-    return '还没有已授权的 BeadCraft 设备，点“添加设备”进行首次连接。'
+    return '还没有已授权的拼豆板设备，点“添加设备”进行首次连接。'
   }, [authorizedBleDevices.length, bleAvailable, bleConnectedUuid, bleConnectionStatus, bleUnavailableMessage, isBleReady])
   const pairSheetStatusTone: 'default' | 'ready' | 'connected' = isBleReady && bleConnectedUuid
     ? 'connected'
@@ -2170,7 +2243,7 @@ export default function HomePageH5() {
                 onPixelImport={startPixelImportWorkflow}
                 onPhotoImport={() => openImageFilePicker('photo')}
                 onOpenLibrary={() => {
-                  void Taro.redirectTo({ url: '/pages/materials/index' })
+                  void Taro.navigateTo({ url: '/pages/materials/index' })
                 }}
                 onOpenConnection={() => void handleOpenPairSheet()}
                 onRestoreDraft={handleRestoreLocalDraft}

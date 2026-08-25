@@ -249,7 +249,7 @@ export function buildBleV14SyncTimeFrame(input: {
   assertIntegerInRange(input.second, 0, 59, '秒')
   return encodeBleV14Frame(
     BLE_V1_4_COMMAND.DEVICE_INFO_AND_TIME,
-    Uint8Array.from([input.hour, input.minute, input.second])
+    Uint8Array.from([input.hour, input.minute, input.second, 0])
   )
 }
 

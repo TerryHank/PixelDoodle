@@ -43,6 +43,23 @@ import {
   decodeUtf8,
   parseWifiScanResult
 } from '@/utils/ble-packet'
+import {
+  BEAD_SCREEN_BLE_V1_4,
+  BLE_V1_4_COMMAND,
+  buildBleV14DiyImageFrames,
+  buildBleV14HighlightFrames,
+  buildBleV14SyncTimeFrame,
+  decodeBleV14DeviceInfo,
+  decodeBleV14Frame,
+  isBleV14DeviceName,
+  sendBleV14Frames,
+  type BleV14DeviceInfo
+} from '@/protocols/bead-screen-ble-v1_4'
+import {
+  getV14HighlightPoints,
+  normalizeRgb565Color,
+  rgb565PayloadToRgb888
+} from './v14-image'
 import type { BleAdapter, BleDeviceStatus, BleKnownDevice } from './types'
 
 interface Waiter<T> {
@@ -57,16 +74,24 @@ interface WifiResponse {
   payload: string
 }
 
+interface V14Waiter extends Waiter<Uint8Array> {
+  type: number
+}
+
 const NATIVE_SCAN_TIMEOUT_MS = 5000
 
 let currentDevice: NativeBleDevice | null = null
 let connectionReady = false
 let currentChunkSize = BLE_CHUNK_SIZE
+let currentV14ChunkSize = 244
+let v14DeviceInfo: BleV14DeviceInfo | null = null
+let v14LastImage: Uint8Array | null = null
 const knownDevices = new Map<string, NativeBleDevice>()
 const ackWaiters: Array<Waiter<number>> = []
 const statusWaiters: Array<Waiter<BleDeviceStatus>> = []
 const activationWaiters: Array<Waiter<number>> = []
 const wifiWaiters: Array<Waiter<WifiResponse>> = []
+const v14Waiters: V14Waiter[] = []
 const wifiResponses: WifiResponse[] = []
 
 function wait(ms: number) {
@@ -74,12 +99,18 @@ function wait(ms: number) {
 }
 
 function normalizeDeviceUuid(name?: string | null) {
-  const match = name?.match(/BeadCraft-([0-9A-F]{12})/i)
+  const match = name?.match(/(?:BeadCraft-|PDD_)([0-9A-F]{6,12})/i)
   return match?.[1]?.toUpperCase() || ''
 }
 
-function isBeadCraftDevice(device?: NativeBleDevice | null) {
-  return !!device?.name?.startsWith('BeadCraft-')
+function isTargetDevice(device?: NativeBleDevice | null) {
+  return !!device?.name && (
+    device.name.startsWith('BeadCraft-') || isBleV14DeviceName(device.name)
+  )
+}
+
+function isCurrentV14Device() {
+  return isBleV14DeviceName(currentDevice?.name)
 }
 
 function serializeDevice(device: NativeBleDevice): BleKnownDevice {
@@ -144,6 +175,9 @@ function rejectAll<T>(waiters: Array<Waiter<T>>, error: Error) {
 function resetConnectionState() {
   connectionReady = false
   currentChunkSize = BLE_CHUNK_SIZE
+  currentV14ChunkSize = 244
+  v14DeviceInfo = null
+  v14LastImage = null
   currentDevice = null
   wifiResponses.length = 0
   const error = new Error('Bluetooth disconnected')
@@ -151,6 +185,7 @@ function resetConnectionState() {
   rejectAll(statusWaiters, error)
   rejectAll(activationWaiters, error)
   rejectAll(wifiWaiters, error)
+  rejectAll(v14Waiters, error)
 }
 
 function activationError(status: number) {
@@ -187,6 +222,46 @@ function handleImageNotification(data: number[]) {
   }
 }
 
+function handleV14Notification(data: number[]) {
+  const bytes = Uint8Array.from(data)
+  let type: number
+  try {
+    type = decodeBleV14Frame(bytes).type
+  } catch (error) {
+    console.warn('忽略无法解析的 PDD V1.4 通知:', error)
+    return
+  }
+  const index = v14Waiters.findIndex((waiter) => waiter.type === type)
+  if (index < 0) {
+    return
+  }
+  const [waiter] = v14Waiters.splice(index, 1)
+  clearTimeout(waiter.timer)
+  waiter.resolve(bytes)
+}
+
+function waitForV14Frame(type: number, timeoutMs = BLE_ACK_TIMEOUT_MS) {
+  return new Promise<Uint8Array>((resolve, reject) => {
+    const waiter: V14Waiter = {
+      type,
+      timer: setTimeout(() => {
+        const index = v14Waiters.indexOf(waiter)
+        if (index >= 0) {
+          v14Waiters.splice(index, 1)
+        }
+        reject(
+          new Error(
+            `等待 PDD V1.4 响应 0x${type.toString(16).padStart(4, '0')} 超时`
+          )
+        )
+      }, timeoutMs),
+      resolve,
+      reject
+    }
+    v14Waiters.push(waiter)
+  })
+}
+
 function toWifiResponse(data: number[]): WifiResponse | null {
   const bytes = Uint8Array.from(data)
   if (!bytes.length) {
@@ -219,7 +294,7 @@ function waitForWifiResponse(timeoutMs: number) {
 
 function knownDeviceList() {
   return Array.from(knownDevices.values())
-    .filter(isBeadCraftDevice)
+    .filter(isTargetDevice)
     .sort((left, right) => (right.rssi ?? -999) - (left.rssi ?? -999))
 }
 
@@ -232,7 +307,7 @@ async function scanDevices() {
   }
 
   await startScan((devices) => {
-    devices.filter(isBeadCraftDevice).forEach((device) => {
+    devices.filter(isTargetDevice).forEach((device) => {
       knownDevices.set(device.address, device)
     })
   }, NATIVE_SCAN_TIMEOUT_MS)
@@ -259,17 +334,27 @@ async function connectDevice(device: NativeBleDevice) {
   currentDevice = device
 
   try {
-    currentChunkSize = resolveBleChunkSizeForMtu(await getMtu())
-    await subscribe(
-      BLE_CHARACTERISTIC_UUID,
-      BLE_SERVICE_UUID,
-      handleImageNotification
-    )
-    await subscribe(
-      BLE_WIFI_SCAN_CHARACTERISTIC_UUID,
-      BLE_SERVICE_UUID,
-      handleWifiNotification
-    )
+    const mtu = await getMtu()
+    currentChunkSize = resolveBleChunkSizeForMtu(mtu)
+    currentV14ChunkSize = Math.max(20, Math.min(mtu - 3, 509))
+    if (isCurrentV14Device()) {
+      await subscribe(
+        BEAD_SCREEN_BLE_V1_4.notifyUuid,
+        BEAD_SCREEN_BLE_V1_4.serviceUuid,
+        handleV14Notification
+      )
+    } else {
+      await subscribe(
+        BLE_CHARACTERISTIC_UUID,
+        BLE_SERVICE_UUID,
+        handleImageNotification
+      )
+      await subscribe(
+        BLE_WIFI_SCAN_CHARACTERISTIC_UUID,
+        BLE_SERVICE_UUID,
+        handleWifiNotification
+      )
+    }
     connectionReady = true
     knownDevices.set(device.address, device)
     return device
@@ -297,8 +382,8 @@ async function findDevice(uuid?: string, forceScan = false) {
   if (!matched) {
     throw new Error(
       normalizedUuid
-        ? `未发现 BeadCraft-${normalizedUuid} 设备`
-        : '未发现 BeadCraft 蓝牙设备'
+        ? `未发现编号为 ${normalizedUuid} 的拼豆板设备`
+        : '未发现拼豆板蓝牙设备'
     )
   }
   return matched
@@ -316,16 +401,59 @@ async function ensureConnection(uuid?: string) {
   return await connectDevice(await findDevice(normalizedUuid))
 }
 
-async function writePacket(characteristic: string, bytes: Uint8Array) {
+async function writePacket(
+  characteristic: string,
+  bytes: Uint8Array,
+  service = BLE_SERVICE_UUID
+) {
   await send(
     characteristic,
     Array.from(bytes),
     'withoutResponse',
-    BLE_SERVICE_UUID
+    service
   )
   if (BLE_PACKET_GAP_MS > 0) {
     await wait(BLE_PACKET_GAP_MS)
   }
+}
+
+async function writeV14Frame(frame: Uint8Array) {
+  await sendBleV14Frames(
+    [frame],
+    (chunk) => writePacket(
+      BEAD_SCREEN_BLE_V1_4.writeUuid,
+      chunk,
+      BEAD_SCREEN_BLE_V1_4.serviceUuid
+    ),
+    { maxWriteBytes: currentV14ChunkSize }
+  )
+}
+
+async function requestV14Frame(frame: Uint8Array, expectedType: number) {
+  const response = waitForV14Frame(expectedType)
+  try {
+    await writeV14Frame(frame)
+  } catch (error) {
+    rejectLatest(
+      v14Waiters,
+      error instanceof Error ? error : new Error('PDD V1.4 指令发送失败')
+    )
+  }
+  return await response
+}
+
+async function readV14DeviceInfo() {
+  const now = new Date()
+  const response = await requestV14Frame(
+    buildBleV14SyncTimeFrame({
+      hour: now.getHours(),
+      minute: now.getMinutes(),
+      second: now.getSeconds()
+    }),
+    BLE_V1_4_COMMAND.DEVICE_INFO_AND_TIME
+  )
+  v14DeviceInfo = decodeBleV14DeviceInfo(response)
+  return v14DeviceInfo
 }
 
 export const tauriBleAdapter: BleAdapter = {
@@ -340,11 +468,17 @@ export const tauriBleAdapter: BleAdapter = {
 
   async connectTargetDevice(uuid) {
     const device = await ensureConnection(uuid)
+    if (isCurrentV14Device()) {
+      await readV14DeviceInfo()
+    }
     return normalizeDeviceUuid(device.name) || null
   },
 
   async addTargetDevice() {
     const device = await connectDevice(await findDevice(undefined, true))
+    if (isCurrentV14Device()) {
+      await readV14DeviceInfo()
+    }
     return normalizeDeviceUuid(device.name) || null
   },
 
@@ -358,14 +492,21 @@ export const tauriBleAdapter: BleAdapter = {
       device = knownDevices.get(deviceKey)
     }
     if (!device) {
-      throw new Error('未找到已扫描的 BeadCraft 设备')
+      throw new Error('未找到已扫描的拼豆板设备')
     }
     const connected = await connectDevice(device)
+    if (isCurrentV14Device()) {
+      await readV14DeviceInfo()
+    }
     return normalizeDeviceUuid(connected.name) || null
   },
 
   async readStatus() {
     await ensureConnection()
+    if (isCurrentV14Device()) {
+      const info = await readV14DeviceInfo()
+      return { brightness: info.brightness }
+    }
     const statusPromise = createWaiter(
       statusWaiters,
       BLE_STATUS_TIMEOUT_MS,
@@ -387,6 +528,13 @@ export const tauriBleAdapter: BleAdapter = {
 
   async activateDevice(accessToken) {
     await ensureConnection()
+    if (isCurrentV14Device()) {
+      const info = v14DeviceInfo ?? await readV14DeviceInfo()
+      if (info.passwordFlag === 0) {
+        return
+      }
+      throw new Error('PDD V1.4 协议未定义支付授权解锁指令，已阻止发送旧版解锁包')
+    }
     const activationPromise = createWaiter(
       activationWaiters,
       BLE_ACTIVATION_TIMEOUT_MS,
@@ -410,6 +558,23 @@ export const tauriBleAdapter: BleAdapter = {
 
   async sendImage(payload) {
     await ensureConnection()
+    if (isCurrentV14Device()) {
+      const info = v14DeviceInfo ?? await readV14DeviceInfo()
+      const image = rgb565PayloadToRgb888(payload, info.width, info.height)
+      const frames = buildBleV14DiyImageFrames(image)
+      for (let index = 0; index < frames.length; index += 1) {
+        const response = await requestV14Frame(frames[index], BLE_V1_4_COMMAND.DIY_IMAGE)
+        const status = decodeBleV14Frame(response).payload[0]
+        const expectedStatus = index === frames.length - 1 ? 1 : 3
+        if (status !== expectedStatus) {
+          throw new Error(
+            `PDD 图案第 ${index + 1}/${frames.length} 帧被拒绝（状态 ${status ?? '空'}）`
+          )
+        }
+      }
+      v14LastImage = image
+      return
+    }
     const ackPromise = createWaiter(
       ackWaiters,
       BLE_ACK_TIMEOUT_MS,
@@ -432,11 +597,47 @@ export const tauriBleAdapter: BleAdapter = {
 
   async sendHighlight(colors) {
     await ensureConnection()
+    if (isCurrentV14Device()) {
+      const info = v14DeviceInfo ?? await readV14DeviceInfo()
+      if (!v14LastImage && colors.length > 0) {
+        throw new Error('请先把当前图案发送到拼豆板，再使用颜色高亮')
+      }
+      const frames = colors.length === 0
+        ? buildBleV14HighlightFrames({ rgb: [0, 0, 0], points: [] })
+        : colors.flatMap((color) => {
+            const normalizedColor = normalizeRgb565Color(color)
+            return buildBleV14HighlightFrames({
+              rgb: normalizedColor,
+              points: getV14HighlightPoints(
+                v14LastImage as Uint8Array,
+                info.width,
+                info.height,
+                normalizedColor
+              )
+            })
+          })
+      await sendBleV14Frames(
+        frames,
+        (chunk) => writePacket(
+          BEAD_SCREEN_BLE_V1_4.writeUuid,
+          chunk,
+          BEAD_SCREEN_BLE_V1_4.serviceUuid
+        ),
+        {
+          maxWriteBytes: currentV14ChunkSize,
+          frameGapMs: BEAD_SCREEN_BLE_V1_4.highlightFrameGapMs
+        }
+      )
+      return
+    }
     await writePacket(BLE_CHARACTERISTIC_UUID, buildHighlightPacket(colors))
   },
 
   async scanWifiNetworks() {
     await ensureConnection()
+    if (isCurrentV14Device()) {
+      throw new Error('PDD V1.4 协议未提供 WiFi 扫描与配网指令')
+    }
     wifiResponses.length = 0
     await writePacket(
       BLE_CHARACTERISTIC_UUID,
@@ -465,6 +666,9 @@ export const tauriBleAdapter: BleAdapter = {
 
   async connectWifiNetwork({ ssid, password }) {
     await ensureConnection()
+    if (isCurrentV14Device()) {
+      throw new Error('PDD V1.4 协议未提供 WiFi 扫描与配网指令')
+    }
     if (!ssid.trim()) {
       throw new Error('请选择要连接的 WiFi 热点')
     }

@@ -28,6 +28,23 @@ import {
   decodeUtf8,
   parseWifiScanResult
 } from '@/utils/ble-packet'
+import {
+  BEAD_SCREEN_BLE_V1_4,
+  BLE_V1_4_COMMAND,
+  buildBleV14DiyImageFrames,
+  buildBleV14HighlightFrames,
+  buildBleV14SyncTimeFrame,
+  decodeBleV14DeviceInfo,
+  decodeBleV14Frame,
+  isBleV14DeviceName,
+  sendBleV14Frames,
+  type BleV14DeviceInfo
+} from '@/protocols/bead-screen-ble-v1_4'
+import {
+  getV14HighlightPoints,
+  normalizeRgb565Color,
+  rgb565PayloadToRgb888
+} from './v14-image'
 import type { BleAdapter, BleDeviceStatus, BleKnownDevice } from './types'
 
 interface AckWaiter {
@@ -48,14 +65,26 @@ interface ActivationWaiter {
   reject: (error: Error) => void
 }
 
+interface V14FrameWaiter {
+  type: number
+  timer: ReturnType<typeof setTimeout>
+  resolve: (value: Uint8Array) => void
+  reject: (error: Error) => void
+}
+
 let bleDevice: BluetoothDevice | null = null
 let imageCharacteristic: BluetoothRemoteGATTCharacteristic | null = null
 let wifiCharacteristic: BluetoothRemoteGATTCharacteristic | null = null
+let v14NotifyCharacteristic: BluetoothRemoteGATTCharacteristic | null = null
+let v14DeviceInfo: BleV14DeviceInfo | null = null
+let v14LastImage: Uint8Array | null = null
 let imageNotifyReady = false
 let wifiNotifyReady = false
+let v14NotifyReady = false
 let ackWaiters: AckWaiter[] = []
 let statusWaiters: StatusWaiter[] = []
 let activationWaiters: ActivationWaiter[] = []
+let v14FrameWaiters: V14FrameWaiter[] = []
 
 function wait(ms: number) {
   return new Promise<void>((resolve) => {
@@ -64,7 +93,7 @@ function wait(ms: number) {
 }
 
 function normalizeBleDeviceUuid(name?: string | null) {
-  const match = name?.match(/BeadCraft-([0-9A-F]{12})/i)
+  const match = name?.match(/(?:BeadCraft-|PDD_)([0-9A-F]{6,12})/i)
   return match?.[1]?.toUpperCase() || ''
 }
 
@@ -80,15 +109,21 @@ function getBleDeviceKey(device?: BluetoothDevice | null) {
   return device.id || normalizeBleDeviceUuid(device.name) || device.name || ''
 }
 
-function isBeadCraftDevice(
+function isTargetBleDevice(
   device?: Pick<BluetoothDevice, 'name'> | null
 ): device is BluetoothDevice {
-  return !!device?.name?.startsWith('BeadCraft-')
+  return !!device?.name && (
+    device.name.startsWith('BeadCraft-') || isBleV14DeviceName(device.name)
+  )
+}
+
+function isConnectedV14Device() {
+  return isBleV14DeviceName(bleDevice?.name)
 }
 
 function mergeKnownBleDevices(devices: BluetoothDevice[] = []) {
   const merged = new Map<string, BluetoothDevice>()
-  ;[...devices, bleDevice].filter(isBeadCraftDevice).forEach((device) => {
+  ;[...devices, bleDevice].filter(isTargetBleDevice).forEach((device) => {
     const key = getBleDeviceKey(device)
     if (!key || merged.has(key)) {
       return
@@ -101,7 +136,7 @@ function mergeKnownBleDevices(devices: BluetoothDevice[] = []) {
 function serializeKnownDevice(device: BluetoothDevice): BleKnownDevice {
   return {
     key: getBleDeviceKey(device),
-    name: device.name || 'BeadCraft',
+    name: device.name || '拼豆板',
     uuid: normalizeBleDeviceUuid(device.name)
   }
 }
@@ -121,8 +156,12 @@ function isMatchingConnectedDevice(uuid?: string) {
 function resetBluetoothState() {
   imageCharacteristic = null
   wifiCharacteristic = null
+  v14NotifyCharacteristic = null
+  v14DeviceInfo = null
+  v14LastImage = null
   imageNotifyReady = false
   wifiNotifyReady = false
+  v14NotifyReady = false
 
   while (ackWaiters.length) {
     const waiter = ackWaiters.shift()
@@ -142,6 +181,14 @@ function resetBluetoothState() {
 
   while (activationWaiters.length) {
     const waiter = activationWaiters.shift()
+    if (waiter) {
+      clearTimeout(waiter.timer)
+      waiter.reject(new Error('Bluetooth disconnected'))
+    }
+  }
+
+  while (v14FrameWaiters.length) {
+    const waiter = v14FrameWaiters.shift()
     if (waiter) {
       clearTimeout(waiter.timer)
       waiter.reject(new Error('Bluetooth disconnected'))
@@ -197,6 +244,33 @@ function handleAckNotification(event: Event) {
   waiter.resolve(code)
 }
 
+function handleV14Notification(event: Event) {
+  const target = event.target as BluetoothRemoteGATTCharacteristic | null
+  const value = target?.value
+  if (!value || value.byteLength < 4) {
+    return
+  }
+
+  const bytes = new Uint8Array(
+    value.buffer.slice(value.byteOffset, value.byteOffset + value.byteLength)
+  )
+  let type: number
+  try {
+    type = decodeBleV14Frame(bytes).type
+  } catch (error) {
+    console.warn('忽略无法解析的 PDD V1.4 通知:', error)
+    return
+  }
+
+  const index = v14FrameWaiters.findIndex((waiter) => waiter.type === type)
+  if (index < 0) {
+    return
+  }
+  const [waiter] = v14FrameWaiters.splice(index, 1)
+  clearTimeout(waiter.timer)
+  waiter.resolve(bytes)
+}
+
 function waitForAck(timeoutMs = BLE_ACK_TIMEOUT_MS) {
   return new Promise<number>((resolve, reject) => {
     const waiter: AckWaiter = {
@@ -250,6 +324,37 @@ function waitForActivation(timeoutMs = BLE_ACTIVATION_TIMEOUT_MS) {
   })
 }
 
+function waitForV14Frame(type: number, timeoutMs = BLE_ACK_TIMEOUT_MS) {
+  return new Promise<Uint8Array>((resolve, reject) => {
+    const waiter: V14FrameWaiter = {
+      type,
+      timer: setTimeout(() => {
+        const index = v14FrameWaiters.indexOf(waiter)
+        if (index >= 0) {
+          v14FrameWaiters.splice(index, 1)
+        }
+        reject(
+          new Error(
+            `等待 PDD V1.4 响应 0x${type.toString(16).padStart(4, '0')} 超时`
+          )
+        )
+      }, timeoutMs),
+      resolve,
+      reject
+    }
+    v14FrameWaiters.push(waiter)
+  })
+}
+
+function rejectLatestV14Waiter(error: Error) {
+  const waiter = v14FrameWaiters.pop()
+  if (!waiter) {
+    return
+  }
+  clearTimeout(waiter.timer)
+  waiter.reject(error)
+}
+
 function rejectLatestActivationWaiter(error: Error) {
   const waiter = activationWaiters.pop()
   if (!waiter) return
@@ -296,6 +401,43 @@ async function writePacket(
   }
 }
 
+async function writeV14Frame(frame: Uint8Array) {
+  if (!imageCharacteristic || !isConnectedV14Device()) {
+    throw new Error('PDD V1.4 写特征尚未就绪')
+  }
+  await sendBleV14Frames(
+    [frame],
+    (chunk) => writePacket(imageCharacteristic as BluetoothRemoteGATTCharacteristic, chunk),
+    { maxWriteBytes: 244 }
+  )
+}
+
+async function requestV14Frame(frame: Uint8Array, expectedType: number) {
+  const response = waitForV14Frame(expectedType)
+  try {
+    await writeV14Frame(frame)
+  } catch (error) {
+    rejectLatestV14Waiter(
+      error instanceof Error ? error : new Error('PDD V1.4 指令发送失败')
+    )
+  }
+  return await response
+}
+
+async function readV14DeviceInfo() {
+  const now = new Date()
+  const response = await requestV14Frame(
+    buildBleV14SyncTimeFrame({
+      hour: now.getHours(),
+      minute: now.getMinutes(),
+      second: now.getSeconds()
+    }),
+    BLE_V1_4_COMMAND.DEVICE_INFO_AND_TIME
+  )
+  v14DeviceInfo = decodeBleV14DeviceInfo(response)
+  return v14DeviceInfo
+}
+
 function readWifiValue(
   value: DataView | null
 ): { code: number; status: string; payload: string } | null {
@@ -330,15 +472,15 @@ async function requestBleDevice(uuid?: string, forcePicker = false) {
   }
 
   const exactFilters = uuid
-    ? [{ name: `BeadCraft-${uuid}` }]
-    : [{ namePrefix: 'BeadCraft-' }]
+    ? [{ name: `BeadCraft-${uuid}` }, { name: `PDD_${uuid}` }]
+    : [{ namePrefix: 'BeadCraft-' }, { namePrefix: BEAD_SCREEN_BLE_V1_4.deviceNamePrefix }]
 
   let nextDevice: BluetoothDevice
 
   try {
     nextDevice = await navigator.bluetooth.requestDevice({
       filters: exactFilters,
-      optionalServices: [BLE_SERVICE_UUID]
+      optionalServices: [BLE_SERVICE_UUID, BEAD_SCREEN_BLE_V1_4.serviceUuid]
     })
   } catch (error) {
     if (
@@ -350,8 +492,11 @@ async function requestBleDevice(uuid?: string, forcePicker = false) {
     }
 
     nextDevice = await navigator.bluetooth.requestDevice({
-      filters: [{ namePrefix: 'BeadCraft-' }],
-      optionalServices: [BLE_SERVICE_UUID]
+      filters: [
+        { namePrefix: 'BeadCraft-' },
+        { namePrefix: BEAD_SCREEN_BLE_V1_4.deviceNamePrefix }
+      ],
+      optionalServices: [BLE_SERVICE_UUID, BEAD_SCREEN_BLE_V1_4.serviceUuid]
     })
   }
 
@@ -380,7 +525,7 @@ async function getAuthorizedBluetoothDevices() {
     }
   }
 
-  return mergeKnownBleDevices(devices.filter(isBeadCraftDevice))
+  return mergeKnownBleDevices(devices.filter(isTargetBleDevice))
 }
 
 async function connectKnownAuthorizedDevice(deviceKey: string) {
@@ -391,7 +536,7 @@ async function connectKnownAuthorizedDevice(deviceKey: string) {
   const devices = await getAuthorizedBluetoothDevices()
   const matchedDevice = devices.find((device) => getBleDeviceKey(device) === deviceKey)
   if (!matchedDevice) {
-    throw new Error('未找到已授权的 BeadCraft 设备')
+    throw new Error('未找到已授权的拼豆板设备')
   }
 
   if (bleDevice) {
@@ -402,6 +547,9 @@ async function connectKnownAuthorizedDevice(deviceKey: string) {
   bleDevice.addEventListener('gattserverdisconnected', handleBluetoothDisconnect)
   resetBluetoothState()
   await ensureCharacteristics(normalizeBleDeviceUuid(bleDevice.name) || undefined)
+  if (isConnectedV14Device()) {
+    await readV14DeviceInfo()
+  }
   return normalizeBleDeviceUuid(bleDevice.name) || null
 }
 
@@ -412,11 +560,26 @@ async function ensureCharacteristics(uuid?: string) {
     throw new Error('目标蓝牙设备未暴露 GATT 服务')
   }
 
+  const isMatchingDevice = !uuid || normalizeBleDeviceUuid(bleDevice.name) === uuid
   if (
+    isConnectedV14Device() &&
+    imageCharacteristic &&
+    v14NotifyCharacteristic &&
+    bleDevice.gatt.connected &&
+    isMatchingDevice
+  ) {
+    return {
+      imageCharacteristic,
+      wifiCharacteristic: null
+    }
+  }
+
+  if (
+    !isConnectedV14Device() &&
     imageCharacteristic &&
     wifiCharacteristic &&
     bleDevice.gatt.connected &&
-    (!uuid || normalizeBleDeviceUuid(bleDevice.name) === uuid)
+    isMatchingDevice
   ) {
     return {
       imageCharacteristic,
@@ -425,6 +588,34 @@ async function ensureCharacteristics(uuid?: string) {
   }
 
   const server = await bleDevice.gatt.connect()
+
+  if (isConnectedV14Device()) {
+    const service = await server.getPrimaryService(BEAD_SCREEN_BLE_V1_4.serviceUuid)
+    const nextWriteCharacteristic = await service.getCharacteristic(
+      BEAD_SCREEN_BLE_V1_4.writeUuid
+    )
+    const nextNotifyCharacteristic = await service.getCharacteristic(
+      BEAD_SCREEN_BLE_V1_4.notifyUuid
+    )
+
+    if (!v14NotifyReady) {
+      await nextNotifyCharacteristic.startNotifications()
+      nextNotifyCharacteristic.addEventListener(
+        'characteristicvaluechanged',
+        handleV14Notification
+      )
+      v14NotifyReady = true
+    }
+
+    imageCharacteristic = nextWriteCharacteristic
+    wifiCharacteristic = null
+    v14NotifyCharacteristic = nextNotifyCharacteristic
+    return {
+      imageCharacteristic,
+      wifiCharacteristic: null
+    }
+  }
+
   const service = await server.getPrimaryService(BLE_SERVICE_UUID)
   const nextImageCharacteristic = await service.getCharacteristic(BLE_CHARACTERISTIC_UUID)
   const nextWifiCharacteristic = await service.getCharacteristic(
@@ -457,6 +648,9 @@ async function ensureCharacteristics(uuid?: string) {
 export const h5BleAdapter: BleAdapter = {
   async connectTargetDevice(uuid) {
     await ensureCharacteristics(uuid)
+    if (isConnectedV14Device()) {
+      await readV14DeviceInfo()
+    }
     const deviceId = normalizeBleDeviceUuid(bleDevice?.name)
     return deviceId || null
   },
@@ -464,6 +658,9 @@ export const h5BleAdapter: BleAdapter = {
   async addTargetDevice() {
     await requestBleDevice(undefined, true)
     await ensureCharacteristics(normalizeBleDeviceUuid(bleDevice?.name) || undefined)
+    if (isConnectedV14Device()) {
+      await readV14DeviceInfo()
+    }
     const deviceId = normalizeBleDeviceUuid(bleDevice?.name)
     return deviceId || null
   },
@@ -479,6 +676,10 @@ export const h5BleAdapter: BleAdapter = {
 
   async readStatus() {
     const { imageCharacteristic } = await ensureCharacteristics()
+    if (isConnectedV14Device()) {
+      const info = await readV14DeviceInfo()
+      return { brightness: info.brightness }
+    }
     const statusPromise = waitForStatus()
     try {
       await writePacket(
@@ -496,6 +697,13 @@ export const h5BleAdapter: BleAdapter = {
 
   async activateDevice(accessToken) {
     const { imageCharacteristic } = await ensureCharacteristics()
+    if (isConnectedV14Device()) {
+      const info = v14DeviceInfo ?? await readV14DeviceInfo()
+      if (info.passwordFlag === 0) {
+        return
+      }
+      throw new Error('PDD V1.4 协议未定义支付授权解锁指令，已阻止发送旧版解锁包')
+    }
     const statusPromise = waitForActivation()
     try {
       for (const packet of buildDeviceActivationPackets(accessToken)) {
@@ -515,6 +723,24 @@ export const h5BleAdapter: BleAdapter = {
   async sendImage(payload) {
     const { imageCharacteristic } = await ensureCharacteristics()
 
+    if (isConnectedV14Device()) {
+      const info = v14DeviceInfo ?? await readV14DeviceInfo()
+      const image = rgb565PayloadToRgb888(payload, info.width, info.height)
+      const frames = buildBleV14DiyImageFrames(image)
+      for (let index = 0; index < frames.length; index += 1) {
+        const response = await requestV14Frame(frames[index], BLE_V1_4_COMMAND.DIY_IMAGE)
+        const status = decodeBleV14Frame(response).payload[0]
+        const expectedStatus = index === frames.length - 1 ? 1 : 3
+        if (status !== expectedStatus) {
+          throw new Error(
+            `PDD 图案第 ${index + 1}/${frames.length} 帧被拒绝（状态 ${status ?? '空'}）`
+          )
+        }
+      }
+      v14LastImage = image
+      return
+    }
+
     for (const packet of buildImagePackets(payload, BLE_CHUNK_SIZE)) {
       await writePacket(imageCharacteristic, packet)
     }
@@ -527,11 +753,44 @@ export const h5BleAdapter: BleAdapter = {
 
   async sendHighlight(colors) {
     const { imageCharacteristic } = await ensureCharacteristics()
+    if (isConnectedV14Device()) {
+      const info = v14DeviceInfo ?? await readV14DeviceInfo()
+      if (!v14LastImage && colors.length > 0) {
+        throw new Error('请先把当前图案发送到拼豆板，再使用颜色高亮')
+      }
+
+      const frames = colors.length === 0
+        ? buildBleV14HighlightFrames({ rgb: [0, 0, 0], points: [] })
+        : colors.flatMap((color) => {
+            const normalizedColor = normalizeRgb565Color(color)
+            return buildBleV14HighlightFrames({
+              rgb: normalizedColor,
+              points: getV14HighlightPoints(
+                v14LastImage as Uint8Array,
+                info.width,
+                info.height,
+                normalizedColor
+              )
+            })
+          })
+      await sendBleV14Frames(
+        frames,
+        (chunk) => writePacket(imageCharacteristic, chunk),
+        {
+          maxWriteBytes: 244,
+          frameGapMs: BEAD_SCREEN_BLE_V1_4.highlightFrameGapMs
+        }
+      )
+      return
+    }
     await writePacket(imageCharacteristic, buildHighlightPacket(colors))
   },
 
   async scanWifiNetworks() {
     const { imageCharacteristic, wifiCharacteristic } = await ensureCharacteristics()
+    if (isConnectedV14Device() || !wifiCharacteristic) {
+      throw new Error('PDD V1.4 协议未提供 WiFi 扫描与配网指令')
+    }
 
     await writePacket(imageCharacteristic, Uint8Array.from([BLE_WIFI_SCAN_PACKET]))
 
@@ -570,6 +829,9 @@ export const h5BleAdapter: BleAdapter = {
 
   async connectWifiNetwork({ ssid, password }) {
     const { imageCharacteristic, wifiCharacteristic } = await ensureCharacteristics()
+    if (isConnectedV14Device() || !wifiCharacteristic) {
+      throw new Error('PDD V1.4 协议未提供 WiFi 扫描与配网指令')
+    }
 
     if (!ssid.trim()) {
       throw new Error('请选择要连接的 WiFi 热点')

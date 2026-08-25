@@ -62,7 +62,7 @@ export function PairSheetH5({
                   <div className='ble-device-empty'>{statusMessage}</div>
                 ) : devices.length === 0 ? (
                   <div className='ble-device-empty'>
-                    还没有已授权的 BeadCraft 设备，点“添加设备”进行首次连接。
+                    还没有已授权的拼豆板设备，点“添加设备”进行首次连接。
                   </div>
                 ) : (
                   devices.map((device) => (
@@ -77,7 +77,7 @@ export function PairSheetH5({
                     >
                       <span className='ble-device-radio' />
                       <span className='ble-device-info'>
-                        <span className='ble-device-title'>{device.uuid || device.name || 'BeadCraft'}</span>
+                        <span className='ble-device-title'>{device.name || device.uuid || '拼豆板'}</span>
                         <span className='ble-device-meta'>{device.meta}</span>
                       </span>
                     </button>

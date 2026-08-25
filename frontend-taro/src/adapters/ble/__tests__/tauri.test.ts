@@ -5,6 +5,7 @@ import {
   BLE_SERVICE_UUID,
   BLE_WIFI_SCAN_CHARACTERISTIC_UUID
 } from '@/constants/ble'
+import { BEAD_SCREEN_BLE_V1_4 } from '@/protocols/bead-screen-ble-v1_4'
 
 const mocks = vi.hoisted(() => ({
   checkPermissions: vi.fn(),
@@ -134,6 +135,46 @@ describe('tauriBleAdapter', () => {
       expect.arrayContaining([0x03]),
       'withoutResponse',
       BLE_SERVICE_UUID
+    )
+  })
+
+  it('connects PDD V1.4 and reads the hardware-info brightness response', async () => {
+    const pddDevice = {
+      ...beadCraftDevice,
+      address: 'AD:FF:3D:CB:72:4E',
+      name: 'PDD_CB724E',
+      services: [BEAD_SCREEN_BLE_V1_4.serviceUuid]
+    }
+    mocks.startScan.mockImplementation(async (handler: (devices: unknown[]) => void) => {
+      handler([pddDevice])
+    })
+    mocks.send.mockImplementation(
+      async (characteristic: string, data: number[], _mode: string, service: string) => {
+        if (
+          characteristic === BEAD_SCREEN_BLE_V1_4.writeUuid &&
+          service === BEAD_SCREEN_BLE_V1_4.serviceUuid &&
+          data[2] === 0x01 &&
+          data[3] === 0x80
+        ) {
+          mocks.handlers.get(BEAD_SCREEN_BLE_V1_4.notifyUuid)?.([
+            8, 0, 1, 128, 3, 0, 0, 25
+          ])
+        }
+      }
+    )
+
+    const { tauriBleAdapter } = await import('../tauri')
+    await expect(tauriBleAdapter.connectTargetDevice()).resolves.toBe('CB724E')
+    await expect(tauriBleAdapter.readStatus?.()).resolves.toEqual({ brightness: 25 })
+    expect(mocks.subscribe).toHaveBeenCalledWith(
+      BEAD_SCREEN_BLE_V1_4.notifyUuid,
+      BEAD_SCREEN_BLE_V1_4.serviceUuid,
+      expect.any(Function)
+    )
+    expect(mocks.subscribe).not.toHaveBeenCalledWith(
+      BLE_WIFI_SCAN_CHARACTERISTIC_UUID,
+      BLE_SERVICE_UUID,
+      expect.any(Function)
     )
   })
 

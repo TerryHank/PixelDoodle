@@ -1,4 +1,8 @@
-import type { ConnectionMode } from '@/types/device'
+import type {
+  ConnectionMode,
+  DeviceCharacteristicStatus,
+  DeviceConnectionStatus
+} from '@/types/device'
 
 export type UploadAreaMode = 'upload'
 
@@ -39,6 +43,38 @@ export function getBleConnectedToastMessage(input: {
   }
 
   return '蓝牙连接成功'
+}
+
+export function restoreBleConnectedUuid(input: {
+  targetDeviceUuid: string | null
+  connectionStatus: DeviceConnectionStatus
+  characteristicStatus: DeviceCharacteristicStatus
+}) {
+  if (
+    input.connectionStatus !== 'connected' ||
+    input.characteristicStatus !== 'ready'
+  ) {
+    return null
+  }
+
+  return input.targetDeviceUuid?.trim().toUpperCase() || null
+}
+
+export function selectAuthorizedDeviceForReconnect<T extends { uuid: string }>(
+  devices: T[],
+  rememberedUuid: string | null
+) {
+  const normalizedRememberedUuid = rememberedUuid?.trim().toUpperCase() || ''
+  if (normalizedRememberedUuid) {
+    const rememberedDevice = devices.find(
+      (device) => device.uuid.trim().toUpperCase() === normalizedRememberedUuid
+    )
+    if (rememberedDevice) {
+      return rememberedDevice
+    }
+  }
+
+  return devices.length === 1 ? devices[0] : null
 }
 
 export function deriveH5HomeViewState(

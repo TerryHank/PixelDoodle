@@ -155,4 +155,62 @@ describe('h5BleAdapter.readStatus', () => {
       Uint8Array.from([0x0A])
     )
   })
+
+  it('connects to a real-protocol PDD device and reads V1.4 brightness', async () => {
+    let notificationHandler: ((event: Event) => void) | undefined
+    const notifyCharacteristic = {
+      startNotifications: vi.fn().mockResolvedValue(undefined),
+      addEventListener: vi.fn((_name: string, handler: (event: Event) => void) => {
+        notificationHandler = handler
+      })
+    }
+    const writeCharacteristic = {
+      writeValueWithoutResponse: vi.fn().mockImplementation(async (input: Uint8Array) => {
+        if (input[2] === 0x01 && input[3] === 0x80) {
+          const response = Uint8Array.from([8, 0, 1, 128, 3, 0, 0, 25])
+          notificationHandler?.({
+            target: { value: new DataView(response.buffer) }
+          } as unknown as Event)
+        }
+      })
+    }
+    const device = {
+      id: 'PDD_CB724E-id',
+      name: 'PDD_CB724E',
+      gatt: {
+        connected: false,
+        connect: vi.fn().mockImplementation(async () => {
+          device.gatt.connected = true
+          return {
+            getPrimaryService: vi.fn().mockResolvedValue({
+              getCharacteristic: vi
+                .fn()
+                .mockResolvedValueOnce(writeCharacteristic)
+                .mockResolvedValueOnce(notifyCharacteristic)
+            })
+          }
+        })
+      },
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn()
+    }
+
+    const requestDevice = vi.fn().mockResolvedValue(device)
+    vi.stubGlobal('navigator', { bluetooth: { requestDevice } })
+
+    const { h5BleAdapter } = await import('../h5')
+    await expect(h5BleAdapter.connectTargetDevice()).resolves.toBe('CB724E')
+    await expect(h5BleAdapter.readStatus?.()).resolves.toEqual({ brightness: 25 })
+    expect(requestDevice).toHaveBeenCalledWith(
+      expect.objectContaining({
+        filters: expect.arrayContaining([{ namePrefix: 'PDD_' }]),
+        optionalServices: expect.arrayContaining([
+          '000000fa-0000-1000-8000-00805f9b34fb'
+        ])
+      })
+    )
+    expect(writeCharacteristic.writeValueWithoutResponse).toHaveBeenCalledWith(
+      expect.objectContaining({ length: 8 })
+    )
+  })
 })

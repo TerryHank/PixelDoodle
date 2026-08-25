@@ -75,7 +75,7 @@ describe('拼豆屏 BLE V1.4 上位机协议', () => {
     expect(Array.from(buildBleV14BoardModeFrame(2))).toEqual([5, 0, 4, 1, 2])
     expect(Array.from(buildBleV14ScreenPowerFrame(true))).toEqual([5, 0, 7, 1, 1])
     expect(Array.from(buildBleV14SyncTimeFrame({ hour: 9, minute: 8, second: 7 }))).toEqual([
-      7, 0, 1, 128, 9, 8, 7
+      8, 0, 1, 128, 9, 8, 7, 0
     ])
     expect(() => buildBleV14BrightnessFrame(9)).toThrow('亮度')
   })

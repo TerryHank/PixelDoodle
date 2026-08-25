@@ -28,6 +28,14 @@ import './index.h5.scss'
 
 const PAGE_SIZE = 20
 
+async function returnToCreation(url = '/pages/home/index') {
+  if (Taro.getCurrentPages().length > 1) {
+    await Taro.navigateBack()
+    return
+  }
+  await Taro.redirectTo({ url })
+}
+
 interface MaterialPreviewCanvasProps {
   work: MaterialGalleryWork
 }
@@ -198,11 +206,16 @@ export default function MaterialsPageH5() {
           throw new Error('当前作品无法自动备份，请先释放应用存储空间后重试')
         }
       }
-      savePendingMaterialImport(payload)
-      applyMaterialPatternImport(payload)
-      await Taro.redirectTo({
-        url: '/pages/home/index?materialImport=1'
-      })
+      if (Taro.getCurrentPages().length > 1) {
+        applyMaterialPatternImport(payload)
+        await Taro.navigateBack()
+      } else {
+        savePendingMaterialImport(payload)
+        applyMaterialPatternImport(payload)
+        await Taro.redirectTo({
+          url: '/pages/home/index?materialImport=1'
+        })
+      }
     } catch (error) {
       Taro.showToast({
         title: error instanceof Error ? error.message : '素材套用失败',
@@ -222,7 +235,7 @@ export default function MaterialsPageH5() {
           <button
             className='materials-hero__back'
             type='button'
-            onClick={() => Taro.redirectTo({ url: '/pages/home/index' })}
+            onClick={() => void returnToCreation()}
           >
             ← 返回创作
           </button>
