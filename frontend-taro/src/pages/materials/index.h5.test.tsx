@@ -25,5 +25,7 @@ describe('materials H5 page', () => {
     expect(html).toContain('全部来源')
     expect(html).toContain('全部分类')
     expect(html).toContain('104 × 74')
+    expect(html).toContain('搜索历史')
+    expect(html).toContain('收藏到本地图册')
   })
 })

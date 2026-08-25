@@ -9,6 +9,10 @@ import {
   getMaterialSourceLabel
 } from '@/features/material-library/model'
 import {
+  normalizeMaterialSearchQuery,
+  recordMaterialSearch
+} from '@/features/material-library/search-history'
+import {
   BOARD_SIZE_OPTIONS,
   getPresetColors,
   getBoardSize
@@ -24,9 +28,11 @@ import {
 import { usePatternStore } from '@/store/pattern-store'
 import { useHistoryStore } from '@/store/history-store'
 import type { MaterialGalleryWork } from '@/types/material-library'
+import { readPersistedState, writePersistedState } from '@/utils/persistence'
 import './index.h5.scss'
 
 const PAGE_SIZE = 20
+const SEARCH_HISTORY_STORAGE_KEY = 'pixeldoodle:material-search-history-v1'
 
 async function returnToCreation(url = '/pages/home/index') {
   if (Taro.getCurrentPages().length > 1) {
@@ -117,7 +123,11 @@ export default function MaterialsPageH5() {
   const [isLoading, setIsLoading] = useState(true)
   const [errorMessage, setErrorMessage] = useState('')
   const [applyingId, setApplyingId] = useState<number | null>(null)
+  const [savingId, setSavingId] = useState<number | null>(null)
   const [reloadToken, setReloadToken] = useState(0)
+  const [searchHistory, setSearchHistory] = useState<string[]>(() =>
+    readPersistedState<string[]>(SEARCH_HISTORY_STORAGE_KEY, [])
+  )
   const selectedBoard = getBoardSize(boardId)
 
   useEffect(() => {
@@ -161,8 +171,50 @@ export default function MaterialsPageH5() {
 
   function commitSearch(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
+    const normalizedQuery = normalizeMaterialSearchQuery(queryInput)
+    const nextHistory = recordMaterialSearch(searchHistory, normalizedQuery)
+    setQueryInput(normalizedQuery)
+    setSearchHistory(nextHistory)
+    writePersistedState(SEARCH_HISTORY_STORAGE_KEY, nextHistory)
     setPage(1)
-    setQuery(queryInput.trim())
+    setQuery(normalizedQuery)
+  }
+
+  function selectSearchHistory(value: string) {
+    setQueryInput(value)
+    setQuery(value)
+    setPage(1)
+    const nextHistory = recordMaterialSearch(searchHistory, value)
+    setSearchHistory(nextHistory)
+    writePersistedState(SEARCH_HISTORY_STORAGE_KEY, nextHistory)
+  }
+
+  function clearSearchHistory() {
+    setSearchHistory([])
+    writePersistedState(SEARCH_HISTORY_STORAGE_KEY, [])
+  }
+
+  async function prepareMaterial(workId: number) {
+    const response = await getMaterialGalleryWork(workId)
+    let patternState = usePatternStore.getState()
+    if (patternState.fullPaletteList.length === 0) {
+      await patternState.loadPalette()
+      patternState = usePatternStore.getState()
+    }
+    const targetColors = getPresetColors(
+      patternState.fullPaletteList,
+      patternState.presets,
+      patternState.palettePreset
+    )
+    return {
+      work: response.work,
+      payload: buildMaterialPatternImport(response.work, {
+        boardSize: selectedBoard,
+        colors: targetColors,
+        palettePreset: patternState.palettePreset
+      }),
+      patternState
+    }
   }
 
   async function applyMaterial(workId: number) {
@@ -173,27 +225,11 @@ export default function MaterialsPageH5() {
     setApplyingId(workId)
     Taro.showLoading({ title: '正在适配钉板...' })
     try {
-      const response = await getMaterialGalleryWork(workId)
-      let patternState = usePatternStore.getState()
-      if (patternState.fullPaletteList.length === 0) {
-        await patternState.loadPalette()
-        patternState = usePatternStore.getState()
-      }
-
-      const targetColors = getPresetColors(
-        patternState.fullPaletteList,
-        patternState.presets,
-        patternState.palettePreset
-      )
-      const payload = buildMaterialPatternImport(response.work, {
-        boardSize: selectedBoard,
-        colors: targetColors,
-        palettePreset: patternState.palettePreset
-      })
+      const { payload, patternState, work } = await prepareMaterial(workId)
       if (patternState.totalBeads > 0) {
         const backupSaved = useHistoryStore.getState().addEntry({
           id: `before-material-${Date.now()}`,
-          title: `套用「${response.work.title}」前的作品`,
+          title: `套用「${work.title}」前的作品`,
           createdAt: new Date().toISOString(),
           sourceLabel: '素材套用前自动备份',
           gridSize: { ...patternState.gridSize },
@@ -225,6 +261,37 @@ export default function MaterialsPageH5() {
     } finally {
       Taro.hideLoading()
       setApplyingId(null)
+    }
+  }
+
+  async function saveMaterialToLocalGallery(workId: number) {
+    if (savingId !== null || applyingId !== null) return
+    setSavingId(workId)
+    Taro.showLoading({ title: '正在收藏素材...' })
+    try {
+      const { payload, work } = await prepareMaterial(workId)
+      const saved = useHistoryStore.getState().addEntry({
+        id: `material-${work.source}-${work.id}-${payload.boardSize.width}x${payload.boardSize.height}`,
+        title: payload.title,
+        createdAt: new Date().toISOString(),
+        sourceLabel: `素材收藏 · ${getMaterialSourceLabel(work.source)}`,
+        gridSize: { ...payload.boardSize },
+        totalBeads: payload.totalBeads,
+        palettePreset: payload.palettePreset,
+        pixelMatrix: payload.pixelMatrix.map((row) => [...row]),
+        colorSummary: payload.colorSummary.map((item) => ({ ...item }))
+      })
+      if (!saved) throw new Error('本地图册保存失败，请检查应用存储空间')
+      Taro.showToast({ title: '已收藏到本地图册', icon: 'success' })
+    } catch (error) {
+      Taro.showToast({
+        title: error instanceof Error ? error.message : '素材收藏失败',
+        icon: 'none',
+        duration: 2600
+      })
+    } finally {
+      Taro.hideLoading()
+      setSavingId(null)
     }
   }
 
@@ -303,6 +370,19 @@ export default function MaterialsPageH5() {
           <button className='materials-filters__submit' type='submit'>搜索素材</button>
         </form>
 
+        <div className='materials-history' aria-label='素材搜索历史'>
+          <div>
+            <strong>搜索历史</strong>
+            <small>素材可收藏到本地图册，断网后继续编辑。</small>
+          </div>
+          <div className='materials-history__chips'>
+            {searchHistory.length ? searchHistory.slice(0, 8).map((item) => (
+              <button key={item} type='button' onClick={() => selectSearchHistory(item)}>{item}</button>
+            )) : <span>还没有搜索记录</span>}
+          </div>
+          {searchHistory.length ? <button type='button' onClick={clearSearchHistory}>清空</button> : null}
+        </div>
+
         <div className='materials-summary' aria-live='polite'>
           <span>{isLoading ? '正在读取素材库…' : `找到 ${total.toLocaleString()} 张可适配图纸`}</span>
           <span title={fallbackReason || undefined}>
@@ -355,6 +435,14 @@ export default function MaterialsPageH5() {
                     {applyingId === work.id
                       ? '正在套用…'
                       : `套用到 ${selectedBoard.label} 并编辑`}
+                  </button>
+                  <button
+                    className='material-card__save'
+                    type='button'
+                    disabled={savingId !== null || applyingId !== null}
+                    onClick={() => void saveMaterialToLocalGallery(work.id)}
+                  >
+                    {savingId === work.id ? '正在收藏…' : '收藏到本地图册'}
                   </button>
                 </div>
               </article>

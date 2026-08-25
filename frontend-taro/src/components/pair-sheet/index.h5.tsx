@@ -29,6 +29,14 @@ export function PairSheetH5({
   onSelectDevice,
   onAddDevice
 }: PairSheetH5Props) {
+  const secureContext =
+    typeof window === 'undefined' ||
+    window.isSecureContext ||
+    window.location.hostname === 'localhost' ||
+    window.location.hostname === '127.0.0.1'
+  const hasAuthorizedDevice = devices.length > 0
+  const hasConnectedDevice = devices.some((device) => device.connected)
+
   return (
     <div
       id='ble-pair-dialog'
@@ -93,6 +101,21 @@ export function PairSheetH5({
               >
                 添加设备
               </button>
+            </div>
+            <div className='ble-diagnostics' aria-label='蓝牙连接诊断'>
+              <strong>连接诊断</strong>
+              <span className={secureContext ? 'is-ok' : 'is-error'}>
+                {secureContext ? '✓' : '×'} HTTPS 或 localhost 安全环境
+              </span>
+              <span className={bleAvailable ? 'is-ok' : 'is-error'}>
+                {bleAvailable ? '✓' : '×'} 浏览器蓝牙能力
+              </span>
+              <span className={hasAuthorizedDevice ? 'is-ok' : 'is-pending'}>
+                {hasAuthorizedDevice ? '✓' : '·'} 已授权设备
+              </span>
+              <span className={hasConnectedDevice ? 'is-ok' : 'is-pending'}>
+                {hasConnectedDevice ? '✓' : '·'} 当前 GATT 连接
+              </span>
             </div>
           </div>
         </div>

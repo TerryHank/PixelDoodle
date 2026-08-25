@@ -165,7 +165,13 @@ describe('tauriBleAdapter', () => {
 
     const { tauriBleAdapter } = await import('../tauri')
     await expect(tauriBleAdapter.connectTargetDevice()).resolves.toBe('CB724E')
-    await expect(tauriBleAdapter.readStatus?.()).resolves.toEqual({ brightness: 25 })
+    await expect(tauriBleAdapter.readStatus?.()).resolves.toEqual({
+      brightness: 25,
+      boardWidth: 104,
+      boardHeight: 104,
+      rotationDegrees: 0,
+      passwordFlag: 0
+    })
     expect(mocks.subscribe).toHaveBeenCalledWith(
       BEAD_SCREEN_BLE_V1_4.notifyUuid,
       BEAD_SCREEN_BLE_V1_4.serviceUuid,

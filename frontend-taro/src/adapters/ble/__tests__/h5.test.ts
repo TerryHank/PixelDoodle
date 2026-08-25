@@ -200,7 +200,13 @@ describe('h5BleAdapter.readStatus', () => {
 
     const { h5BleAdapter } = await import('../h5')
     await expect(h5BleAdapter.connectTargetDevice()).resolves.toBe('CB724E')
-    await expect(h5BleAdapter.readStatus?.()).resolves.toEqual({ brightness: 25 })
+    await expect(h5BleAdapter.readStatus?.()).resolves.toEqual({
+      brightness: 25,
+      boardWidth: 104,
+      boardHeight: 104,
+      rotationDegrees: 0,
+      passwordFlag: 0
+    })
     expect(requestDevice).toHaveBeenCalledWith(
       expect.objectContaining({
         filters: expect.arrayContaining([{ namePrefix: 'PDD_' }]),

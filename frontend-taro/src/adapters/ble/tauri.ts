@@ -505,7 +505,13 @@ export const tauriBleAdapter: BleAdapter = {
     await ensureConnection()
     if (isCurrentV14Device()) {
       const info = await readV14DeviceInfo()
-      return { brightness: info.brightness }
+      return {
+        brightness: info.brightness,
+        boardWidth: info.width,
+        boardHeight: info.height,
+        rotationDegrees: info.rotation * 90,
+        passwordFlag: info.passwordFlag
+      }
     }
     const statusPromise = createWaiter(
       statusWaiters,

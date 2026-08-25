@@ -27,6 +27,10 @@
   gap: 12PX;
 }
 
+.device-monitor__metrics {
+  flex-wrap: wrap;
+}
+
 .device-monitor__eyebrow,
 .device-monitor__title,
 .device-monitor__metric-value,
@@ -61,7 +65,7 @@
 }
 
 .device-monitor__metric {
-  flex: 1;
+  flex: 1 1 28%;
   min-width: 0;
   padding: 10PX;
   border-radius: 12PX;

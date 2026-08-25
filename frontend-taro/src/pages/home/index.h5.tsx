@@ -2212,6 +2212,9 @@ export default function HomePageH5() {
                   )
                 }}
                 onSave={handleSaveEditor}
+                onOpenWarehouse={() => {
+                  void Taro.redirectTo({ url: '/pages/warehouse/index' })
+                }}
                 onCloudSave={() => {
                   void handleSaveCloudEditor()
                 }}

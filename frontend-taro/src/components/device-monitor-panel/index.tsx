@@ -58,6 +58,30 @@ export function DeviceMonitorPanel({
             <Text className='device-monitor__metric-value'>{activeAlerts.length}</Text>
             <Text className='device-monitor__metric-label'>活动告警</Text>
           </View>
+          <View className='device-monitor__metric'>
+            <Text className='device-monitor__metric-value'>
+              {device.telemetry?.boardWidth && device.telemetry?.boardHeight
+                ? `${device.telemetry.boardWidth}×${device.telemetry.boardHeight}`
+                : '—'}
+            </Text>
+            <Text className='device-monitor__metric-label'>设备板型</Text>
+          </View>
+          <View className='device-monitor__metric'>
+            <Text className='device-monitor__metric-value'>
+              {device.telemetry?.rotationDegrees != null
+                ? `${device.telemetry.rotationDegrees}°`
+                : '—'}
+            </Text>
+            <Text className='device-monitor__metric-label'>屏幕方向</Text>
+          </View>
+          <View className='device-monitor__metric'>
+            <Text className='device-monitor__metric-value'>
+              {device.telemetry?.passwordFlag == null
+                ? '—'
+                : device.telemetry.passwordFlag}
+            </Text>
+            <Text className='device-monitor__metric-label'>密码预留标志</Text>
+          </View>
         </View>
       ) : (
         <Text className='device-monitor__hint'>连接设备后自动读取心跳、亮度和传输结果。</Text>

@@ -70,6 +70,10 @@ export interface DeviceTelemetrySnapshot {
   supplyVoltageV?: number
   currentA?: number
   brightness?: number
+  boardWidth?: number
+  boardHeight?: number
+  rotationDegrees?: number
+  passwordFlag?: number
   freeHeapBytes?: number
   resetReason?: string
 }

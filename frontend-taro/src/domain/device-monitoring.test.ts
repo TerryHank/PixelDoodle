@@ -16,7 +16,11 @@ describe('device monitoring domain', () => {
       at: 1_000,
       telemetry: {
         firmwareVersion: '1.2.3',
-        temperatureC: 42
+        temperatureC: 42,
+        boardWidth: 104,
+        boardHeight: 104,
+        rotationDegrees: 90,
+        passwordFlag: 0
       }
     })
 
@@ -27,7 +31,11 @@ describe('device monitoring domain', () => {
       lastHeartbeatAt: 1_000,
       telemetry: {
         firmwareVersion: '1.2.3',
-        temperatureC: 42
+        temperatureC: 42,
+        boardWidth: 104,
+        boardHeight: 104,
+        rotationDegrees: 90,
+        passwordFlag: 0
       }
     })
     expect(next.history[0]).toMatchObject({

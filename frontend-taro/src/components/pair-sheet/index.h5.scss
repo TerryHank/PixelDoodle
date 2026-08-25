@@ -1,1 +1,19 @@
 /* H5 dialog styling intentionally reuses the legacy selectors from template-h5.scss. */
+
+.ble-diagnostics {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 7px;
+  margin-top: 12px;
+  padding: 11px;
+  border: 1px solid var(--border);
+  border-radius: var(--btn-radius);
+  color: var(--text-secondary);
+  background: var(--bg-secondary);
+  font-size: 12px;
+}
+
+.ble-diagnostics strong { grid-column: 1 / -1; color: var(--text-primary); }
+.ble-diagnostics .is-ok { color: #047857; }
+.ble-diagnostics .is-error { color: #b42345; }
+.ble-diagnostics .is-pending { color: #9a6700; }

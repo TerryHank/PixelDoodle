@@ -1,8 +1,10 @@
 import { describe, expect, it } from 'vitest'
 import type { PaletteColor } from '@/types/api'
 import {
+  analyzePatternInventory,
   adjustInventoryQuantity,
   buildInventoryCsv,
+  deductPatternInventory,
   filterInventoryRows,
   parseInventoryCsv
 } from './model'
@@ -32,5 +34,35 @@ describe('bead warehouse model', () => {
       errors: ['第 3 行色号 A1 重复', '第 4 行未知色号 Z9']
     })
     expect(buildInventoryCsv(colors, { A1: 12 })).toContain('A1,12\nB2,0')
+  })
+
+  it('calculates current-pattern shortages before changing stock', () => {
+    const requirements = analyzePatternInventory([
+      { ...colors[0], count: 30 },
+      { ...colors[1], count: 12 }
+    ], { A1: 40, B2: 5 })
+
+    expect(requirements).toEqual([
+      expect.objectContaining({ code: 'B2', required: 12, available: 5, remaining: 0, shortage: 7 }),
+      expect.objectContaining({ code: 'A1', required: 30, available: 40, remaining: 10, shortage: 0 })
+    ])
+    expect(deductPatternInventory({ A1: 40, B2: 5 }, requirements)).toEqual({
+      applied: false,
+      quantities: { A1: 40, B2: 5 },
+      shortages: [expect.objectContaining({ code: 'B2', shortage: 7 })]
+    })
+  })
+
+  it('deducts a sufficient current pattern atomically without negative stock', () => {
+    const requirements = analyzePatternInventory([
+      { ...colors[0], count: 30 },
+      { ...colors[1], count: 12 }
+    ], { A1: 40, B2: 20 })
+
+    expect(deductPatternInventory({ A1: 40, B2: 20, C3: 9 }, requirements)).toEqual({
+      applied: true,
+      quantities: { A1: 10, B2: 8, C3: 9 },
+      shortages: []
+    })
   })
 })

@@ -8,6 +8,10 @@ export interface BleKnownDevice {
 
 export interface BleDeviceStatus {
   brightness: number
+  boardWidth?: number
+  boardHeight?: number
+  rotationDegrees?: number
+  passwordFlag?: number
 }
 
 export interface BleAdapter {

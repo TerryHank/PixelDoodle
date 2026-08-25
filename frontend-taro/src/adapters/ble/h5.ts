@@ -678,7 +678,13 @@ export const h5BleAdapter: BleAdapter = {
     const { imageCharacteristic } = await ensureCharacteristics()
     if (isConnectedV14Device()) {
       const info = await readV14DeviceInfo()
-      return { brightness: info.brightness }
+      return {
+        brightness: info.brightness,
+        boardWidth: info.width,
+        boardHeight: info.height,
+        rotationDegrees: info.rotation * 90,
+        passwordFlag: info.passwordFlag
+      }
     }
     const statusPromise = waitForStatus()
     try {

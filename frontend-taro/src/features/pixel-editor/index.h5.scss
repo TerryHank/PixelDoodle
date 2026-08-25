@@ -405,6 +405,18 @@
   background: #9c6221;
 }
 
+.pixel-editor__save-button--warehouse {
+  min-width: auto;
+  min-height: 36px;
+  padding: 0 12px;
+  border: 1px solid #9c6221;
+  border-radius: 999px;
+  background: #fff4d5;
+  color: #75400e;
+  font-size: 12px;
+  font-weight: 800;
+}
+
 .pixel-editor__viewport {
   order: 2;
   min-height: min(58vh, 610px);
@@ -699,6 +711,13 @@
 
   .pixel-editor__save-button {
     flex: none;
+  }
+
+  .pixel-editor__save-button--warehouse {
+    min-width: 64px;
+    min-height: 32px;
+    padding: 0 7px;
+    font-size: 10px;
   }
 
   .pixel-editor__viewport {

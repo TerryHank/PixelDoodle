@@ -1,4 +1,4 @@
-import type { PaletteColor } from '@/types/api'
+import type { ColorSummaryItem, PaletteColor } from '@/types/api'
 
 export type InventoryOperation = 'in' | 'out' | 'set'
 export type InventoryStatusFilter = 'all' | 'in-stock' | 'low' | 'out'
@@ -8,6 +8,17 @@ export interface InventoryRow {
   color: PaletteColor
   quantity: number
   status: Exclude<InventoryStatusFilter, 'all'>
+}
+
+export interface PatternInventoryRequirement {
+  code: string
+  name: string
+  nameZh: string
+  hex: string
+  required: number
+  available: number
+  remaining: number
+  shortage: number
 }
 
 export function adjustInventoryQuantity(
@@ -26,6 +37,53 @@ export function inventoryStatus(quantity: number, lowThreshold: number): Invento
   if (quantity <= 0) return 'out'
   if (quantity <= lowThreshold) return 'low'
   return 'in-stock'
+}
+
+export function analyzePatternInventory(
+  colorSummary: ColorSummaryItem[],
+  quantities: Record<string, number>
+) {
+  return colorSummary
+    .filter((item) => item.count > 0)
+    .map<PatternInventoryRequirement>((item) => {
+      const required = Math.max(0, Math.round(item.count))
+      const available = Math.max(0, Math.round(quantities[item.code] ?? 0))
+      return {
+        code: item.code,
+        name: item.name,
+        nameZh: item.name_zh,
+        hex: item.hex,
+        required,
+        available,
+        remaining: Math.max(0, available - required),
+        shortage: Math.max(0, required - available)
+      }
+    })
+    .sort((left, right) => right.shortage - left.shortage || right.required - left.required)
+}
+
+export function deductPatternInventory(
+  quantities: Record<string, number>,
+  requirements: PatternInventoryRequirement[]
+) {
+  const shortages = requirements.filter((item) => item.shortage > 0)
+  if (shortages.length > 0) {
+    return {
+      applied: false as const,
+      quantities: { ...quantities },
+      shortages
+    }
+  }
+
+  const next = { ...quantities }
+  requirements.forEach((item) => {
+    next[item.code] = Math.max(0, Math.round((next[item.code] ?? 0) - item.required))
+  })
+  return {
+    applied: true as const,
+    quantities: next,
+    shortages: [] as PatternInventoryRequirement[]
+  }
 }
 
 export function filterInventoryRows(

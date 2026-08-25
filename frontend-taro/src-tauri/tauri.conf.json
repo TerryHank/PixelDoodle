@@ -1,7 +1,7 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
   "productName": "DIY拼豆",
-  "version": "14.1.1",
+  "version": "14.2.0",
   "identifier": "com.terry.pixeldoodle",
   "build": {
     "frontendDist": "../dist-h5",
@@ -36,7 +36,7 @@
     "android": {
       "debugApplicationIdSuffix": ".debug",
       "minSdkVersion": 26,
-      "versionCode": 140101
+      "versionCode": 140200
     }
   }
 }

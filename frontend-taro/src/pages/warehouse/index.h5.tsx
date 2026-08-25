@@ -1,8 +1,10 @@
 import { useEffect, useMemo, useState, type ChangeEvent } from 'react'
+import Taro from '@tarojs/taro'
 import { AppTabBar } from '@/components/app-tab-bar'
 import { fileAdapter } from '@/adapters/file'
 import {
   buildInventoryCsv,
+  analyzePatternInventory,
   filterInventoryRows,
   parseInventoryCsv,
   type InventoryOperation,
@@ -16,11 +18,16 @@ import './index.scss'
 export default function WarehousePageH5() {
   const colors = usePatternStore((state) => state.fullPaletteList)
   const loadPalette = usePatternStore((state) => state.loadPalette)
+  const colorSummary = usePatternStore((state) => state.colorSummary)
+  const totalBeads = usePatternStore((state) => state.totalBeads)
   const quantities = useWarehouseStore((state) => state.quantities)
   const lowThreshold = useWarehouseStore((state) => state.lowThreshold)
   const beadsPerGram = useWarehouseStore((state) => state.beadsPerGram)
   const adjust = useWarehouseStore((state) => state.adjust)
   const importValues = useWarehouseStore((state) => state.importValues)
+  const consumePattern = useWarehouseStore((state) => state.consumePattern)
+  const undoLastDeduction = useWarehouseStore((state) => state.undoLastDeduction)
+  const lastDeduction = useWarehouseStore((state) => state.lastDeduction)
   const setLowThreshold = useWarehouseStore((state) => state.setLowThreshold)
   const setBeadsPerGram = useWarehouseStore((state) => state.setBeadsPerGram)
   const [query, setQuery] = useState('')
@@ -49,6 +56,11 @@ export default function WarehousePageH5() {
   const rows = useMemo(() => filterInventoryRows(colors, quantities, {
     query, status, series, sort, lowThreshold
   }), [colors, lowThreshold, quantities, query, series, sort, status])
+  const patternRequirements = useMemo(
+    () => analyzePatternInventory(colorSummary, quantities),
+    [colorSummary, quantities]
+  )
+  const patternShortages = patternRequirements.filter((item) => item.shortage > 0)
   const total = Object.values(quantities).reduce((sum, value) => sum + Math.max(0, value), 0)
   const managed = Object.values(quantities).filter((value) => value > 0).length
 
@@ -85,6 +97,30 @@ export default function WarehousePageH5() {
     setMessage('豆仓 CSV 已导出')
   }
 
+  async function consumeCurrentPattern() {
+    if (!patternRequirements.length) {
+      setMessage('当前没有可扣减的作品，请先生成或打开作品')
+      return
+    }
+    if (patternShortages.length) {
+      setMessage(`库存不足：${patternShortages.slice(0, 3).map((item) => `${item.code} 缺 ${item.shortage}`).join('，')}`)
+      return
+    }
+    const result = await Taro.showModal({
+      title: '扣减当前作品用量',
+      content: `将从豆仓扣减 ${totalBeads} 颗、${patternRequirements.length} 种颜色。是否继续？`,
+      confirmText: '确认扣减',
+      confirmColor: '#9a4b0d'
+    })
+    if (result.confirm && consumePattern(patternRequirements)) {
+      setMessage(`已按当前作品扣减 ${totalBeads} 颗，可撤销本次扣减`)
+    }
+  }
+
+  function undoConsumption() {
+    if (undoLastDeduction()) setMessage('已撤销上一次作品库存扣减')
+  }
+
   return (
     <main className='warehouse-page'>
       <div className='warehouse-page__content'>
@@ -98,6 +134,37 @@ export default function WarehousePageH5() {
           <strong>{managed}</strong><span>有库存色号</span>
           <strong>{total}</strong><span>库存总豆数</span>
           <strong>{rows.filter((row) => row.status === 'low' || row.status === 'out').length}</strong><span>当前筛选预警</span>
+        </section>
+
+        <section className='warehouse-pattern' aria-label='当前作品库存核对'>
+          <div className='warehouse-pattern__heading'>
+            <div>
+              <span>作品与豆仓联动</span>
+              <h2>{totalBeads > 0 ? `当前作品 · ${totalBeads} 颗` : '当前没有打开的作品'}</h2>
+            </div>
+            <div className='warehouse-pattern__actions'>
+              {lastDeduction ? <button type='button' onClick={undoConsumption}>撤销上次扣减</button> : null}
+              <button
+                type='button'
+                disabled={!patternRequirements.length || patternShortages.length > 0}
+                onClick={() => void consumeCurrentPattern()}
+              >按作品扣减库存</button>
+            </div>
+          </div>
+          {patternRequirements.length ? (
+            <div className='warehouse-pattern__list'>
+              {patternRequirements.map((item) => (
+                <article className={item.shortage ? 'is-short' : 'is-ready'} key={item.code}>
+                  <span style={{ backgroundColor: item.hex }} />
+                  <strong>{item.code}</strong>
+                  <small>需要 {item.required} · 库存 {item.available}</small>
+                  <b>{item.shortage ? `缺 ${item.shortage}` : `余 ${item.remaining}`}</b>
+                </article>
+              ))}
+            </div>
+          ) : (
+            <p>先在创作页生成或打开作品，这里会自动列出每个色号的需求和缺口。</p>
+          )}
         </section>
 
         <section className='warehouse-adjust' aria-label='库存调整'>

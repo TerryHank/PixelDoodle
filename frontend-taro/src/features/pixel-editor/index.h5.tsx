@@ -62,6 +62,7 @@ export interface PixelEditorH5Props {
   onChange: (matrix: PixelMatrix) => void
   onPalettePresetChange: (preset: string) => void
   onSave: () => void
+  onOpenWarehouse?: () => void
   onCloudSave?: () => void
   isCloudSaving?: boolean
   cloudSaved?: boolean
@@ -87,6 +88,7 @@ export function PixelEditorH5({
   onChange,
   onPalettePresetChange,
   onSave,
+  onOpenWarehouse,
   onCloudSave,
   isCloudSaving = false,
   cloudSaved = false,
@@ -609,6 +611,15 @@ export function PixelEditorH5({
             <img src={saveIcon} alt='' />
             <span>保存</span>
           </button>
+          {onOpenWarehouse ? (
+            <button
+              className='pixel-editor__save-button pixel-editor__save-button--warehouse'
+              type='button'
+              onClick={onOpenWarehouse}
+            >
+              豆仓核对
+            </button>
+          ) : null}
           {onCloudSave ? (
             <button
               className='pixel-editor__save-button pixel-editor__save-button--cloud'
