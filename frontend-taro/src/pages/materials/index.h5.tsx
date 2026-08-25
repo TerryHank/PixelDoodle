@@ -367,7 +367,7 @@ export default function MaterialsPageH5() {
           </button>
         </nav>
       </div>
-      <AppTabBar current='materials' />
+      <AppTabBar />
     </main>
   )
 }

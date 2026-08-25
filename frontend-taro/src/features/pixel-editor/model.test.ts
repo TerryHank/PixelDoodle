@@ -7,6 +7,8 @@ import {
   createEmptyPixelMatrix,
   floodFillPixelMatrix,
   getBoardSize,
+  mirrorPixelMatrixHorizontally,
+  rotatePixelMatrixClockwise,
   rasterizeGridLine,
   resizePixelMatrix,
   setPixelCell
@@ -24,6 +26,25 @@ const presets: PalettePresetMap = {
 }
 
 describe('pixel editor model', () => {
+  it('mirrors and rotates matrices without mutating the source', () => {
+    const source = [
+      ['A1', 'A2'],
+      ['B1', 'B2']
+    ]
+
+    expect(mirrorPixelMatrixHorizontally(source)).toEqual([
+      ['A2', 'A1'],
+      ['B2', 'B1']
+    ])
+    expect(rotatePixelMatrixClockwise(source)).toEqual([
+      ['B1', 'A1'],
+      ['B2', 'A2']
+    ])
+    expect(source).toEqual([
+      ['A1', 'A2'],
+      ['B1', 'B2']
+    ])
+  })
   it('keeps the six requested board sizes in product order', () => {
     expect(BOARD_SIZE_OPTIONS.map((option) => option.id)).toEqual([
       '29x29',

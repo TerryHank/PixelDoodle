@@ -12,7 +12,7 @@ export default function MaterialsFallbackPage() {
       >
         返回创作
       </Button>
-      <AppTabBar current='materials' />
+      <AppTabBar />
     </View>
   )
 }

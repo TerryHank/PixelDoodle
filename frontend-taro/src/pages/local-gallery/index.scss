@@ -1,0 +1,23 @@
+.local-gallery-page { min-height: 100vh; background: #fff7e2; color: #342619; }
+.local-gallery-page__scroll { height: 100vh; }
+.local-gallery-page__content { box-sizing: border-box; max-width: 820PX; margin: 0 auto; padding: 28PX 20PX 120PX; }
+.local-gallery-page__heading { display: flex; flex-direction: column; gap: 5PX; margin-bottom: 18PX; }
+.local-gallery-page__eyebrow { color: #b35b13; font-size: 12PX; font-weight: 800; }
+.local-gallery-page__title { font-size: 28PX; font-weight: 900; }
+.local-gallery-page__subtitle, .local-work-card__meta { color: #75563a; font-size: 13PX; }
+.local-gallery-page__filters { display: grid; grid-template-columns: minmax(0, 1fr) 150PX 150PX; gap: 10PX; margin-bottom: 12PX; }
+.local-gallery-page__filters input, .local-gallery-page__picker, .local-work-card__meta input { box-sizing: border-box; min-height: 42PX; padding: 10PX 12PX; border: 1PX solid #d9ac73; border-radius: 12PX; background: #fff; }
+.local-gallery-page__count { display: block; margin-bottom: 10PX; color: #8f4308; font-weight: 800; }
+.local-gallery-page__empty { padding: 48PX 18PX; border: 1PX dashed #d9ac73; border-radius: 18PX; background: #fffaf0; text-align: center; }
+.local-gallery-page__list { display: grid; gap: 12PX; }
+.local-work-card { display: grid; grid-template-columns: 96PX minmax(0, 1fr) auto; gap: 14PX; align-items: center; padding: 14PX; border: 1PX solid #e0b77f; border-radius: 18PX; background: #fff; box-shadow: 0 8PX 24PX rgba(122, 67, 14, .08); }
+.local-work-card__meta { display: flex; min-width: 0; flex-direction: column; gap: 4PX; }
+.local-work-card__title { overflow: hidden; color: #342619; font-size: 17PX; font-weight: 900; text-overflow: ellipsis; white-space: nowrap; }
+.local-work-card__actions { display: flex; flex-direction: column; gap: 7PX; }
+.local-work-card__actions button { min-width: 84PX; margin: 0; border-color: #d9ac73; color: #7a430e; }
+@media (max-width: 640PX) {
+  .local-gallery-page__filters { grid-template-columns: 1fr 1fr; }
+  .local-gallery-page__filters input { grid-column: 1 / -1; }
+  .local-work-card { grid-template-columns: 74PX minmax(0, 1fr); }
+  .local-work-card__actions { grid-column: 1 / -1; flex-direction: row; flex-wrap: wrap; }
+}

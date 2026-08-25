@@ -8,21 +8,21 @@ import localGalleryIcon from '@/assets/v13/tabs/local-gallery.png'
 import profileIcon from '@/assets/v13/tabs/profile.png'
 import './index.scss'
 
-export type AppTabKey = 'community' | 'materials' | 'tool' | 'profile'
+export type AppTabKey = 'localGallery' | 'warehouse' | 'tool' | 'profile'
 
 const TAB_CONFIG: Record<
   AppTabKey,
   { label: string; url: string; icon: string; activeIcon: string }
 > = {
-  community: {
+  warehouse: {
     label: '豆仓',
-    url: '/pages/community/index',
+    url: '/pages/warehouse/index',
     icon: beanIcon,
     activeIcon: beanActiveIcon
   },
-  materials: {
+  localGallery: {
     label: '本地图库',
-    url: '/pages/materials/index',
+    url: '/pages/local-gallery/index',
     icon: localGalleryIcon,
     activeIcon: localGalleryIcon
   },
@@ -41,7 +41,7 @@ const TAB_CONFIG: Record<
 }
 
 export interface AppTabBarProps {
-  current: AppTabKey
+  current?: AppTabKey
 }
 
 export function AppTabBar({ current }: AppTabBarProps) {
@@ -57,7 +57,7 @@ export function AppTabBar({ current }: AppTabBarProps) {
 
   return (
     <View className='app-tab-bar'>
-      {(['tool', 'materials', 'community', 'profile'] as AppTabKey[]).map((tab) => {
+      {(['tool', 'localGallery', 'warehouse', 'profile'] as AppTabKey[]).map((tab) => {
         const item = TAB_CONFIG[tab]
         const active = tab === current
 

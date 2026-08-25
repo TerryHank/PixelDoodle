@@ -86,6 +86,19 @@ export default function ProfilePage() {
             <Text className='profile-business-card__arrow'>进入 →</Text>
           </View>
 
+          <View
+            className='profile-business-card'
+            onClick={() => {
+              void Taro.redirectTo({ url: '/pages/community/index' })
+            }}
+          >
+            <View>
+              <Text className='history-section__title'>社区广场</Text>
+              <Text className='history-section__subtitle'>浏览、评论和下载其他用户分享的拼豆作品</Text>
+            </View>
+            <Text className='profile-business-card__arrow'>进入 →</Text>
+          </View>
+
           <View className='history-section'>
             <View className='history-section__header'>
               <View>

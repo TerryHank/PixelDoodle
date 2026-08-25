@@ -43,7 +43,7 @@
   transition: filter 0.16s ease, transform 0.16s ease;
 }
 
-.app-tab-bar__item--active.app-tab-bar__item--materials .app-tab-bar__icon,
+.app-tab-bar__item--active.app-tab-bar__item--localGallery .app-tab-bar__icon,
 .app-tab-bar__item--active.app-tab-bar__item--profile .app-tab-bar__icon {
   filter: sepia(1) saturate(7) hue-rotate(350deg) brightness(1.04);
   transform: scale(1.06);

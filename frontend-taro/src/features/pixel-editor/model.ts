@@ -35,6 +35,22 @@ export function clonePixelMatrix(matrix: PixelMatrix): PixelMatrix {
   return matrix.map((row) => [...row])
 }
 
+export function mirrorPixelMatrixHorizontally(matrix: PixelMatrix): PixelMatrix {
+  return matrix.map((row) => [...row].reverse())
+}
+
+export function rotatePixelMatrixClockwise(matrix: PixelMatrix): PixelMatrix {
+  const height = matrix.length
+  const width = matrix[0]?.length ?? 0
+  if (height === 0 || width === 0 || matrix.some((row) => row.length !== width)) {
+    return clonePixelMatrix(matrix)
+  }
+
+  return Array.from({ length: width }, (_, y) =>
+    Array.from({ length: height }, (_, x) => matrix[height - 1 - x][y])
+  )
+}
+
 export function matricesEqual(left: PixelMatrix, right: PixelMatrix) {
   if (left.length !== right.length) {
     return false

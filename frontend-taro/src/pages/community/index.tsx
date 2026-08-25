@@ -21,6 +21,7 @@ export default function CommunityPage() {
   const [selectedPost, setSelectedPost] = useState<CommunityPostDetail | null>(null)
   const [commentDraft, setCommentDraft] = useState('')
   const [isLoading, setIsLoading] = useState(false)
+  const [loadFailed, setLoadFailed] = useState(false)
   const [isSubmittingComment, setIsSubmittingComment] = useState(false)
   const userId = useUserStore((state) => state.id)
   const userNickname = useUserStore((state) => state.nickname)
@@ -28,12 +29,14 @@ export default function CommunityPage() {
 
   async function refreshPosts() {
     setIsLoading(true)
+    setLoadFailed(false)
     try {
       const response = await listCommunityPosts(24)
       setPosts(response.posts)
-    } catch (error) {
+    } catch {
+      setLoadFailed(true)
       Taro.showToast({
-        title: error instanceof Error ? error.message : '社区加载失败',
+        title: '社区服务未连接',
         icon: 'none'
       })
     } finally {
@@ -144,6 +147,10 @@ export default function CommunityPage() {
           {isLoading ? (
             <View className='community-page__empty'>
               <Text>正在加载社区作品...</Text>
+            </View>
+          ) : loadFailed ? (
+            <View className='community-page__empty'>
+              <Text>社区服务暂未连接，本地创作、图库和素材库仍可正常使用。</Text>
             </View>
           ) : posts.length === 0 ? (
             <View className='community-page__empty'>
@@ -260,7 +267,7 @@ export default function CommunityPage() {
         </View>
       ) : null}
 
-      <AppTabBar current='community' />
+      <AppTabBar />
     </View>
   )
 }

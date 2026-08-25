@@ -17,6 +17,8 @@ function persist(entries: PatternHistoryEntry[]) {
 export interface HistoryStoreState {
   entries: PatternHistoryEntry[]
   addEntry: (entry: PatternHistoryEntry) => boolean
+  renameEntry: (id: string, title: string) => boolean
+  removeEntry: (id: string) => boolean
   clearHistory: () => void
 }
 
@@ -34,6 +36,22 @@ export const useHistoryStore = create<HistoryStoreState>((set, get) => ({
         entries: nextEntries
       }
     })
+    return saved
+  },
+  renameEntry: (id, title) => {
+    const normalizedTitle = title.trim().slice(0, 40)
+    if (!normalizedTitle) return false
+    const nextEntries = get().entries.map((entry) =>
+      entry.id === id ? { ...entry, title: normalizedTitle } : entry
+    )
+    const saved = persist(nextEntries)
+    set({ entries: nextEntries })
+    return saved
+  },
+  removeEntry: (id) => {
+    const nextEntries = get().entries.filter((entry) => entry.id !== id)
+    const saved = persist(nextEntries)
+    set({ entries: nextEntries })
     return saved
   },
   clearHistory: () =>

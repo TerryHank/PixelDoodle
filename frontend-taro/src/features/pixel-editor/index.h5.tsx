@@ -15,8 +15,6 @@ import fillActiveIcon from '@/assets/v13/editor/fill-active.png'
 import fillIcon from '@/assets/v13/editor/fill.png'
 import numbersActiveIcon from '@/assets/v13/editor/numbers-active.png'
 import numbersIcon from '@/assets/v13/editor/numbers.png'
-import penActiveIcon from '@/assets/v13/editor/pen-active.png'
-import penIcon from '@/assets/v13/editor/pen.png'
 import redoActiveIcon from '@/assets/v13/editor/redo-active.png'
 import redoIcon from '@/assets/v13/editor/redo.png'
 import saveIcon from '@/assets/v13/editor/save.png'
@@ -28,13 +26,15 @@ import {
   createEmptyPixelMatrix,
   floodFillPixelMatrix,
   getPresetColors,
+  mirrorPixelMatrixHorizontally,
   matricesEqual,
   rasterizeGridLine,
+  rotatePixelMatrixClockwise,
   setPixelCell
 } from './model'
 import './index.h5.scss'
 
-type EditorTool = 'pen' | 'eraser' | 'fill' | 'select' | 'pan'
+type EditorTool = 'pen' | 'eyedropper' | 'eraser' | 'fill' | 'select' | 'pan'
 
 const HISTORY_LIMIT = 40
 const EDITOR_TOOLS: Array<{
@@ -44,7 +44,8 @@ const EDITOR_TOOLS: Array<{
   activeIcon?: string
   glyph?: string
 }> = [
-  { value: 'pen', label: '取色', icon: penIcon, activeIcon: penActiveIcon },
+  { value: 'pen', label: '画笔', glyph: '✎' },
+  { value: 'eyedropper', label: '吸管', glyph: '⌾' },
   { value: 'eraser', label: '橡皮擦', icon: eraserIcon, activeIcon: eraserActiveIcon },
   { value: 'fill', label: '填充', icon: fillIcon, activeIcon: fillActiveIcon },
   { value: 'select', label: '选格', glyph: '✓' },
@@ -99,6 +100,12 @@ export function PixelEditorH5({
   const activePointerIdRef = useRef<number | null>(null)
   const lastCellRef = useRef<{ x: number; y: number } | null>(null)
   const selectionActionRef = useRef(true)
+  const panStartRef = useRef<{
+    clientX: number
+    clientY: number
+    scrollLeft: number
+    scrollTop: number
+  } | null>(null)
   const [workingMatrix, setWorkingMatrix] = useState(() => clonePixelMatrix(matrix))
   const [undoStack, setUndoStack] = useState<PixelMatrix[]>([])
   const [redoStack, setRedoStack] = useState<PixelMatrix[]>([])
@@ -331,7 +338,7 @@ export function PixelEditorH5({
   }
 
   function handlePointerDown(event: ReactPointerEvent<HTMLCanvasElement>) {
-    if (tool === 'pan' || activePointerIdRef.current !== null) {
+    if (activePointerIdRef.current !== null) {
       return
     }
 
@@ -342,6 +349,29 @@ export function PixelEditorH5({
 
     event.preventDefault()
     lastCellRef.current = null
+
+    if (tool === 'pan') {
+      const viewport = viewportRef.current
+      if (!viewport) return
+      activePointerIdRef.current = event.pointerId
+      event.currentTarget.setPointerCapture(event.pointerId)
+      panStartRef.current = {
+        clientX: event.clientX,
+        clientY: event.clientY,
+        scrollLeft: viewport.scrollLeft,
+        scrollTop: viewport.scrollTop
+      }
+      return
+    }
+
+    if (tool === 'eyedropper') {
+      const code = workingMatrixRef.current[cell.y]?.[cell.x]
+      if (code) {
+        setSelectedCode(code)
+        setTool('pen')
+      }
+      return
+    }
 
     if (tool === 'select') {
       const key = `${cell.x}:${cell.y}`
@@ -368,6 +398,14 @@ export function PixelEditorH5({
   }
 
   function finishStroke(event?: ReactPointerEvent<HTMLCanvasElement>) {
+    if (
+      panStartRef.current &&
+      (!event || activePointerIdRef.current === event.pointerId)
+    ) {
+      panStartRef.current = null
+      activePointerIdRef.current = null
+      return
+    }
     if (
       !drawingRef.current ||
       (event && activePointerIdRef.current !== event.pointerId)
@@ -492,6 +530,19 @@ export function PixelEditorH5({
     const previous = workingMatrixRef.current
     const next = createEmptyPixelMatrix(previous[0]?.length ?? 1, previous.length)
     recordChange(previous, next)
+  }
+
+  function mirrorCanvas() {
+    const previous = workingMatrixRef.current
+    recordChange(previous, mirrorPixelMatrixHorizontally(previous))
+  }
+
+  function rotateCanvas() {
+    const previous = workingMatrixRef.current
+    if (previous.length !== (previous[0]?.length ?? 0)) {
+      return
+    }
+    recordChange(previous, rotatePixelMatrixClockwise(previous))
   }
 
   function selectAllPlacedCells() {
@@ -628,6 +679,24 @@ export function PixelEditorH5({
             <img src={showCodes ? numbersActiveIcon : numbersIcon} alt='' />
             <span className='pixel-editor__tool-label--hidden'>色号</span>
           </button>
+          <button className='pixel-editor__tool' type='button' onClick={mirrorCanvas}>
+            <span className='pixel-editor__tool-glyph' aria-hidden='true'>↔</span>
+            <span>镜像</span>
+          </button>
+          <button
+            className='pixel-editor__tool'
+            type='button'
+            disabled={workingMatrix.length !== (workingMatrix[0]?.length ?? 0)}
+            title={
+              workingMatrix.length === (workingMatrix[0]?.length ?? 0)
+                ? '顺时针旋转 90°'
+                : '矩形钉板为保持尺寸暂不支持 90° 旋转'
+            }
+            onClick={rotateCanvas}
+          >
+            <span className='pixel-editor__tool-glyph' aria-hidden='true'>↻</span>
+            <span>旋转</span>
+          </button>
         </div>
         <div className='pixel-editor__zoom' aria-label='画布缩放'>
           <button
@@ -664,6 +733,23 @@ export function PixelEditorH5({
           aria-label={`${boardLabel} 像素画布`}
           onPointerDown={handlePointerDown}
           onPointerMove={(event) => {
+            if (
+              tool === 'pan' &&
+              panStartRef.current &&
+              activePointerIdRef.current === event.pointerId
+            ) {
+              event.preventDefault()
+              const viewport = viewportRef.current
+              if (viewport) {
+                viewport.scrollLeft =
+                  panStartRef.current.scrollLeft -
+                  (event.clientX - panStartRef.current.clientX)
+                viewport.scrollTop =
+                  panStartRef.current.scrollTop -
+                  (event.clientY - panStartRef.current.clientY)
+              }
+              return
+            }
             if (
               drawingRef.current &&
               activePointerIdRef.current === event.pointerId
