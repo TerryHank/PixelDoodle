@@ -47,6 +47,47 @@ function Get-Sha256Hex {
     }
 }
 
+function Sync-TauriBleGradlePlugin {
+    param(
+        [Parameter(Mandatory)][string]$AndroidDirectory,
+        [Parameter(Mandatory)][string]$CargoHome
+    )
+
+    $registrySourceRoot = Join-Path $CargoHome 'registry\src'
+    $pluginAndroidDir = Get-ChildItem -LiteralPath $registrySourceRoot -Directory |
+        ForEach-Object { Join-Path $_.FullName 'tauri-plugin-blec-0.12.0\android' } |
+        Where-Object { Test-Path -LiteralPath $_ -PathType Container } |
+        Select-Object -First 1
+    if (-not $pluginAndroidDir) {
+        throw 'tauri-plugin-blec 0.12.0 Android library was not found in the Cargo registry'
+    }
+
+    $settingsPath = Join-Path $AndroidDirectory 'tauri.settings.gradle'
+    $buildPath = Join-Path $AndroidDirectory 'app\tauri.build.gradle.kts'
+    $settings = Get-Content -LiteralPath $settingsPath -Raw
+    if ($settings -notmatch "include ':tauri-plugin-blec'") {
+        $escapedPluginPath = $pluginAndroidDir.Replace('\', '\\')
+        $settings = $settings.TrimEnd() + [Environment]::NewLine +
+            "include ':tauri-plugin-blec'" + [Environment]::NewLine +
+            "project(':tauri-plugin-blec').projectDir = new File(`"$escapedPluginPath`")" +
+            [Environment]::NewLine
+        [System.IO.File]::WriteAllText($settingsPath, $settings, [System.Text.UTF8Encoding]::new($false))
+    }
+
+    $build = Get-Content -LiteralPath $buildPath -Raw
+    if ($build -notmatch 'implementation\(project\(\":tauri-plugin-blec\"\)\)') {
+        $anchor = '  implementation(project(":tauri-android"))'
+        if (-not $build.Contains($anchor)) {
+            throw "Tauri Android dependency anchor was not found: $buildPath"
+        }
+        $build = $build.Replace(
+            $anchor,
+            "$anchor$([Environment]::NewLine)  implementation(project(`":tauri-plugin-blec`"))"
+        )
+        [System.IO.File]::WriteAllText($buildPath, $build, [System.Text.UTF8Encoding]::new($false))
+    }
+}
+
 $frontendDir = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '..')).Path
 $tauriDir = Join-Path $frontendDir 'src-tauri'
 $androidDir = Join-Path $tauriDir 'gen\android'
@@ -110,16 +151,20 @@ $tauriPropertiesContent = @(
 Write-Host "Synchronized Android version metadata: $version ($androidVersionCode)"
 
 $targets = @(
-    @{ Triple = 'aarch64-linux-android'; Clang = 'aarch64-linux-android24'; Abi = 'arm64-v8a' },
-    @{ Triple = 'armv7-linux-androideabi'; Clang = 'armv7a-linux-androideabi24'; Abi = 'armeabi-v7a' },
-    @{ Triple = 'i686-linux-android'; Clang = 'i686-linux-android24'; Abi = 'x86' },
-    @{ Triple = 'x86_64-linux-android'; Clang = 'x86_64-linux-android24'; Abi = 'x86_64' }
+    @{ Triple = 'aarch64-linux-android'; Clang = 'aarch64-linux-android26'; Abi = 'arm64-v8a' },
+    @{ Triple = 'armv7-linux-androideabi'; Clang = 'armv7a-linux-androideabi26'; Abi = 'armeabi-v7a' },
+    @{ Triple = 'i686-linux-android'; Clang = 'i686-linux-android26'; Abi = 'x86' },
+    @{ Triple = 'x86_64-linux-android'; Clang = 'x86_64-linux-android26'; Abi = 'x86_64' }
 )
 
 Push-Location $frontendDir
 $previousTaroOutputRoot = $env:TARO_OUTPUT_ROOT
 $previousTauriConfig = $env:TAURI_CONFIG
 $previousTauriAndroidProjectPath = $env:TAURI_ANDROID_PROJECT_PATH
+$previousWryAndroidPackage = $env:WRY_ANDROID_PACKAGE
+$previousTauriAndroidPackage = $env:TAURI_ANDROID_PACKAGE_UNESCAPED
+$previousWryAndroidLibrary = $env:WRY_ANDROID_LIBRARY
+$previousWryKotlinOutput = $env:WRY_ANDROID_KOTLIN_FILES_OUT_DIR
 try {
     Write-Host 'Building the Taro H5 frontend...'
     $resolvedFrontendDir = (Resolve-Path -LiteralPath $frontendDir).Path
@@ -139,6 +184,12 @@ try {
         }
     } | ConvertTo-Json -Compress)
     $env:TAURI_ANDROID_PROJECT_PATH = $androidDir
+    $generatedKotlinDir = Join-Path $androidDir 'app\src\main\java\com\terry\pixeldoodle\generated'
+    New-Item -ItemType Directory -Path $generatedKotlinDir -Force | Out-Null
+    $env:WRY_ANDROID_PACKAGE = [string]$tauriConfig.identifier
+    $env:TAURI_ANDROID_PACKAGE_UNESCAPED = [string]$tauriConfig.identifier
+    $env:WRY_ANDROID_LIBRARY = 'pixeldoodle_lib'
+    $env:WRY_ANDROID_KOTLIN_FILES_OUT_DIR = $generatedKotlinDir
     Invoke-Checked $npm @('run', 'sync:local-wasm')
     Invoke-Checked $npm @('exec', '--', 'taro', 'build', '--type', 'h5')
     Invoke-Checked $cargo @(
@@ -158,7 +209,7 @@ try {
         }
 
         $cargoTarget = $triple.ToUpperInvariant().Replace('-', '_')
-        $env:ANDROID_NATIVE_API_LEVEL = '24'
+        $env:ANDROID_NATIVE_API_LEVEL = '26'
         $env:TARGET_AR = $llvmAr
         $env:TARGET_CC = $clang
         $env:TARGET_CXX = $clangxx
@@ -189,6 +240,8 @@ try {
         Copy-Item -LiteralPath $sourceLibrary -Destination $jniLibrary -Force
         Invoke-Checked $llvmStrip @('--strip-debug', $jniLibrary)
     }
+
+    Sync-TauriBleGradlePlugin -AndroidDirectory $androidDir -CargoHome $env:CARGO_HOME
 
     Write-Host 'Packaging and debug-signing the universal APK...'
     $builtApk = Join-Path $androidDir 'app\build\outputs\apk\universal\debug\app-universal-debug.apk'
@@ -227,5 +280,9 @@ finally {
     $env:TARO_OUTPUT_ROOT = $previousTaroOutputRoot
     $env:TAURI_CONFIG = $previousTauriConfig
     $env:TAURI_ANDROID_PROJECT_PATH = $previousTauriAndroidProjectPath
+    $env:WRY_ANDROID_PACKAGE = $previousWryAndroidPackage
+    $env:TAURI_ANDROID_PACKAGE_UNESCAPED = $previousTauriAndroidPackage
+    $env:WRY_ANDROID_LIBRARY = $previousWryAndroidLibrary
+    $env:WRY_ANDROID_KOTLIN_FILES_OUT_DIR = $previousWryKotlinOutput
     Pop-Location
 }

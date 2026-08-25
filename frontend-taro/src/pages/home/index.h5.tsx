@@ -1828,9 +1828,9 @@ export default function HomePageH5() {
   const isBleReady =
     bleConnectionStatus === 'connected' && bleCharacteristicStatus === 'ready'
   const bleAvailable =
-    typeof navigator !== 'undefined' && !!navigator.bluetooth
+    isTauri() || (typeof navigator !== 'undefined' && !!navigator.bluetooth)
   const bleUnavailableMessage = isTauri()
-    ? '当前 Android APP 使用系统 WebView，系统不提供 Web Bluetooth。真实设备连接需要接入 Tauri 原生 BLE 桥接；这不是 Taro 页面故障。'
+    ? '请开启系统蓝牙，并允许附近设备权限。'
     : '当前浏览器不支持 Web Bluetooth。Web 版请使用支持该能力的 Chrome 或 Edge，并通过 HTTPS 或 localhost 打开。'
   const monitoredDeviceId = (bleConnectedUuid || targetDeviceUuid).trim().toUpperCase()
   const monitoredDevice = monitoredDeviceId

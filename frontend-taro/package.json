@@ -1,6 +1,6 @@
 {
   "name": "frontend-taro",
-  "version": "14.0.4",
+  "version": "14.0.5",
   "private": true,
   "description": "PixelDoodle Taro app",
   "templateInfo": {
@@ -46,6 +46,7 @@
   "dependencies": {
     "@babel/runtime": "^7.24.4",
     "@cloudbase/js-sdk": "3.8.1",
+    "@mnlphlp/plugin-blec": "0.12.0",
     "@react-navigation/bottom-tabs": "6.5.20",
     "@react-navigation/native": "6.1.17",
     "@react-navigation/native-stack": "^6.3.29",
