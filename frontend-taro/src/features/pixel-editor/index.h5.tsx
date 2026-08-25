@@ -34,7 +34,7 @@ import {
 } from './model'
 import './index.h5.scss'
 
-type EditorTool = 'pen' | 'eraser' | 'fill' | 'pan'
+type EditorTool = 'pen' | 'eraser' | 'fill' | 'select' | 'pan'
 
 const HISTORY_LIMIT = 40
 const EDITOR_TOOLS: Array<{
@@ -42,11 +42,13 @@ const EDITOR_TOOLS: Array<{
   label: string
   icon?: string
   activeIcon?: string
+  glyph?: string
 }> = [
   { value: 'pen', label: '取色', icon: penIcon, activeIcon: penActiveIcon },
   { value: 'eraser', label: '橡皮擦', icon: eraserIcon, activeIcon: eraserActiveIcon },
   { value: 'fill', label: '填充', icon: fillIcon, activeIcon: fillActiveIcon },
-  { value: 'pan', label: '移动' }
+  { value: 'select', label: '选格', glyph: '✓' },
+  { value: 'pan', label: '移动', glyph: '↔' }
 ]
 
 export interface PixelEditorH5Props {
@@ -96,6 +98,7 @@ export function PixelEditorH5({
   const drawingRef = useRef(false)
   const activePointerIdRef = useRef<number | null>(null)
   const lastCellRef = useRef<{ x: number; y: number } | null>(null)
+  const selectionActionRef = useRef(true)
   const [workingMatrix, setWorkingMatrix] = useState(() => clonePixelMatrix(matrix))
   const [undoStack, setUndoStack] = useState<PixelMatrix[]>([])
   const [redoStack, setRedoStack] = useState<PixelMatrix[]>([])
@@ -104,6 +107,7 @@ export function PixelEditorH5({
   const [selectedPreset, setSelectedPreset] = useState(palettePreset)
   const [zoom, setZoom] = useState(1)
   const [showCodes, setShowCodes] = useState(false)
+  const [selectedCells, setSelectedCells] = useState<Set<string>>(() => new Set())
 
   const presetColors = useMemo(
     () => getPresetColors(colors, presets, selectedPreset),
@@ -205,7 +209,24 @@ export function PixelEditorH5({
         })
       })
     }
-  }, [canvasHeight, canvasWidth, cellSize, colorLookup, showCodes, workingMatrix])
+
+    if (selectedCells.size > 0) {
+      context.fillStyle = 'rgba(35, 199, 220, 0.28)'
+      context.strokeStyle = '#06b6d4'
+      context.lineWidth = Math.max(1, Math.min(3, cellSize * 0.18))
+      selectedCells.forEach((key) => {
+        const [x, y] = key.split(':').map(Number)
+        if (!Number.isInteger(x) || !Number.isInteger(y)) return
+        context.fillRect(x * cellSize, y * cellSize, cellSize, cellSize)
+        context.strokeRect(
+          x * cellSize + context.lineWidth / 2,
+          y * cellSize + context.lineWidth / 2,
+          Math.max(0, cellSize - context.lineWidth),
+          Math.max(0, cellSize - context.lineWidth)
+        )
+      })
+    }
+  }, [canvasHeight, canvasWidth, cellSize, colorLookup, selectedCells, showCodes, workingMatrix])
 
   function recordChange(previous: PixelMatrix, next: PixelMatrix) {
     if (matricesEqual(previous, next)) {
@@ -293,6 +314,22 @@ export function PixelEditorH5({
     workingMatrixRef.current = next
   }
 
+  function selectAtPointer(event: ReactPointerEvent<HTMLCanvasElement>) {
+    const cell = resolvePointerCell(event)
+    if (!cell) return
+
+    const previousCell = lastCellRef.current
+    if (previousCell?.x === cell.x && previousCell.y === cell.y) return
+    lastCellRef.current = cell
+    const key = `${cell.x}:${cell.y}`
+    setSelectedCells((current) => {
+      const next = new Set(current)
+      if (selectionActionRef.current) next.add(key)
+      else next.delete(key)
+      return next
+    })
+  }
+
   function handlePointerDown(event: ReactPointerEvent<HTMLCanvasElement>) {
     if (tool === 'pan' || activePointerIdRef.current !== null) {
       return
@@ -305,6 +342,16 @@ export function PixelEditorH5({
 
     event.preventDefault()
     lastCellRef.current = null
+
+    if (tool === 'select') {
+      const key = `${cell.x}:${cell.y}`
+      selectionActionRef.current = !selectedCells.has(key)
+      activePointerIdRef.current = event.pointerId
+      event.currentTarget.setPointerCapture(event.pointerId)
+      drawingRef.current = true
+      selectAtPointer(event)
+      return
+    }
 
     if (tool === 'fill') {
       const previous = workingMatrixRef.current
@@ -331,6 +378,10 @@ export function PixelEditorH5({
     drawingRef.current = false
     activePointerIdRef.current = null
     lastCellRef.current = null
+    if (tool === 'select') {
+      strokeStartRef.current = null
+      return
+    }
     const previous = strokeStartRef.current
     strokeStartRef.current = null
     if (!previous) {
@@ -356,6 +407,21 @@ export function PixelEditorH5({
     )
     setZoom(Math.max(0.4, nextZoom))
   }
+
+  useEffect(() => {
+    const frame = window.requestAnimationFrame(() => fitCanvasToViewport())
+    return () => window.cancelAnimationFrame(frame)
+  }, [workingMatrix.length, workingMatrix[0]?.length])
+
+  useEffect(() => {
+    const frame = window.requestAnimationFrame(() => {
+      const viewport = viewportRef.current
+      if (!viewport) return
+      viewport.scrollLeft = Math.max(0, (viewport.scrollWidth - viewport.clientWidth) / 2)
+      viewport.scrollTop = Math.max(0, (viewport.scrollHeight - viewport.clientHeight) / 2)
+    })
+    return () => window.cancelAnimationFrame(frame)
+  }, [canvasHeight, canvasWidth])
 
   function undo() {
     const previous = undoStack[undoStack.length - 1]
@@ -428,6 +494,43 @@ export function PixelEditorH5({
     recordChange(previous, next)
   }
 
+  function selectAllPlacedCells() {
+    const next = new Set<string>()
+    workingMatrixRef.current.forEach((row, y) => {
+      row.forEach((code, x) => {
+        if (code) next.add(`${x}:${y}`)
+      })
+    })
+    setSelectedCells(next)
+    setTool('select')
+  }
+
+  function invertPlacedSelection() {
+    setSelectedCells((current) => {
+      const next = new Set<string>()
+      workingMatrixRef.current.forEach((row, y) => {
+        row.forEach((code, x) => {
+          const key = `${x}:${y}`
+          if (code && !current.has(key)) next.add(key)
+        })
+      })
+      return next
+    })
+    setTool('select')
+  }
+
+  function updateSelectedCells(code: string | null) {
+    if (selectedCells.size === 0) return
+    const previous = workingMatrixRef.current
+    let next = previous
+    selectedCells.forEach((key) => {
+      const [x, y] = key.split(':').map(Number)
+      next = setPixelCell(next, x, y, code)
+    })
+    recordChange(previous, next)
+    setSelectedCells(new Set())
+  }
+
   return (
     <section className='pixel-editor' aria-label='拼豆像素编辑器'>
       <div className='pixel-editor__header'>
@@ -483,7 +586,7 @@ export function PixelEditorH5({
                 {item.icon ? (
                   <img src={active ? item.activeIcon : item.icon} alt='' />
                 ) : (
-                  <span className='pixel-editor__tool-glyph' aria-hidden='true'>↔</span>
+                  <span className='pixel-editor__tool-glyph' aria-hidden='true'>{item.glyph}</span>
                 )}
                 <span className={item.icon ? 'pixel-editor__tool-label--hidden' : ''}>{item.label}</span>
               </button>
@@ -566,7 +669,8 @@ export function PixelEditorH5({
               activePointerIdRef.current === event.pointerId
             ) {
               event.preventDefault()
-              paintAtPointer(event)
+              if (tool === 'select') selectAtPointer(event)
+              else paintAtPointer(event)
             }
           }}
           onPointerUp={finishStroke}
@@ -575,6 +679,23 @@ export function PixelEditorH5({
           style={{ width: `${canvasWidth}px`, height: `${canvasHeight}px` }}
         />
       </div>
+
+      <section className='pixel-editor__correction' aria-label='色号校对'>
+        <div className='pixel-editor__correction-heading'>
+          <div>
+            <strong>色号校对</strong>
+            <small>选中格子后，可批量改色或删除；下方色板用于选择替换色号。</small>
+          </div>
+          <span>已选 {selectedCells.size}</span>
+        </div>
+        <div className='pixel-editor__correction-actions'>
+          <button type='button' onClick={selectAllPlacedCells}>全选非空</button>
+          <button type='button' onClick={invertPlacedSelection}>反选</button>
+          <button type='button' disabled={selectedCells.size === 0} onClick={() => setSelectedCells(new Set())}>取消选择</button>
+          <button type='button' disabled={selectedCells.size === 0 || !selectedCode} onClick={() => updateSelectedCells(selectedCode || null)}>改为 {selectedCode || '所选色号'}</button>
+          <button className='is-danger' type='button' disabled={selectedCells.size === 0} onClick={() => updateSelectedCells(null)}>删除</button>
+        </div>
+      </section>
 
       <div className='pixel-editor__palette-panel'>
         <div className='pixel-editor__palette-heading'>
@@ -611,7 +732,7 @@ export function PixelEditorH5({
               aria-pressed={selectedCode === color.code}
               onClick={() => {
                 setSelectedCode(color.code)
-                setTool('pen')
+                if (selectedCells.size === 0) setTool('pen')
               }}
             >
               <span style={{ backgroundColor: color.hex }} />

@@ -886,10 +886,18 @@ export function generatePatternLocalJs({
   const grid = resolveLocalGridSize(sourceWidth, sourceHeight, options)
 
   const adjustedSelection = cloneRaster(selectionRaster)
-  applyContrast(adjustedSelection, options.contrast)
-  applySaturation(adjustedSelection, options.saturation)
-  applySharpness(adjustedSelection, options.sharpness)
-  consolidateExtremes(adjustedSelection)
+  if (!options.preserve_detail || options.contrast !== 0) {
+    applyContrast(adjustedSelection, options.contrast)
+  }
+  if (!options.preserve_detail || options.saturation !== 0) {
+    applySaturation(adjustedSelection, options.saturation)
+  }
+  if (!options.preserve_detail || options.sharpness !== 0) {
+    applySharpness(adjustedSelection, options.sharpness)
+  }
+  if (!options.preserve_detail) {
+    consolidateExtremes(adjustedSelection)
+  }
 
   const selectionPixels = rasterToPixels(adjustedSelection)
   const allowed = allowedPaletteIndices(paletteState, options.palette_preset)
@@ -907,10 +915,18 @@ export function generatePatternLocalJs({
   const subPalette = subPaletteIndices.map((index) => colors[index])
 
   const adjustedMid = cloneRaster(midRaster)
-  applyContrast(adjustedMid, options.contrast)
-  applySaturation(adjustedMid, options.saturation)
-  applySharpness(adjustedMid, options.sharpness)
-  consolidateExtremes(adjustedMid)
+  if (!options.preserve_detail || options.contrast !== 0) {
+    applyContrast(adjustedMid, options.contrast)
+  }
+  if (!options.preserve_detail || options.saturation !== 0) {
+    applySaturation(adjustedMid, options.saturation)
+  }
+  if (!options.preserve_detail || options.sharpness !== 0) {
+    applySharpness(adjustedMid, options.sharpness)
+  }
+  if (!options.preserve_detail) {
+    consolidateExtremes(adjustedMid)
+  }
 
   const quantized = quantizePixels(
     adjustedMid,
@@ -925,7 +941,9 @@ export function generatePatternLocalJs({
   )
   const totalPixels = grid.width * grid.height
 
-  cleanupRareColors(matrix, paletteState, totalPixels, 0.005)
+  if (!options.preserve_detail) {
+    cleanupRareColors(matrix, paletteState, totalPixels, 0.005)
+  }
 
   if (options.similarity_threshold > 0) {
     mergeSimilarColors(matrix, paletteState, options.similarity_threshold)
@@ -935,7 +953,9 @@ export function generatePatternLocalJs({
     capMaxColors(matrix, paletteState, options.max_colors)
   }
 
-  smoothEdges(matrix, paletteState)
+  if (!options.preserve_detail) {
+    smoothEdges(matrix, paletteState)
+  }
 
   if (options.remove_bg) {
     removeBackground(matrix)

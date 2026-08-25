@@ -2,13 +2,14 @@
 
 ## 当前交付
 
-- APK：`dist-apk/PixelDoodle-13.0.1-debug-universal.apk`
+- APK：`dist-apk/DIY-Pindou-14.0.4-debug-universal.apk`
 - 包名：`com.terry.pixeldoodle.debug`
-- 版本：`13.0.1`（versionCode `130001`）
+- 应用名称：`DIY拼豆`
+- 版本：`14.0.4`（versionCode `140004`）
 - Android：minSdk 24，targetSdk 36
 - ABI：`arm64-v8a`、`armeabi-v7a`、`x86`、`x86_64`
-- 大小：`117,565,018` 字节
-- SHA-256：`64E1495AB0494CB85A8A516F018208187A3DA68A0CA545D7B96573CDCB34658F`
+- 大小：`116,841,742` 字节
+- SHA-256：`47AF5B21DC379A7E2189817BBC1C8FDFEC50EA2FBCC8BD08E0B1BD102E9B7836`
 - 签名：Android Debug，APK Signature Scheme v2
 
 这是安装测试包，不是应用商店发布包。
@@ -51,11 +52,12 @@ npm run apk:tauri:release
   同源素材 API 可用时优先使用完整在线库，不可用时自动切到离线库。
 - PNG、PDF、JSON 导出已接入 Tauri 官方 dialog/fs 插件；Android 会打开系统“另存为”并在
   用户选择位置后写入，不再依赖 WebView 的 `<a download>`。
-- 校准弹窗固定显示确认操作区；导入图片按原图比例适配到所选钉板范围，例如竖图在 29
-  最大边下生成 13×29 图纸，不再强制裁为 29×29 方形。
+- 像素图纸导入包含操作指引、选图、网格位置/单格大小微调、裁剪、本地识别进度、结果和色号校对；照片导入直接本地量化。两者都不再显示“高精度/快速”选择。
+- 颜色套餐、六种钉板和照片配色直接平铺。豆子数量直接决定分辨率，固定结果画框不随钉板切换改变；导入图片按原图比例居中并保留白边，不强制裁方或拉伸。
+- 色号校对支持格子滑选、页内全选、全选、取消选择、反选、批量替换色号和删除，完成后进入编辑器。
 - Android 普通与自适应启动图标已替换为 UI 切图中的蓝/粉双兔角色图标。
-- 万相 CloudBase Web SDK 适配器仍保留；默认为本地像素化，只有显式选择万相风格才调用云端。
-  本期按要求暂不部署或验收 CloudBase。将来启用前必须配置 `TARO_APP_CLOUDBASE_*`，并完成
+- 万相 CloudBase Web SDK 适配器源码仍保留，但本期已移除入口和运行时初始化，不会调用云端。
+  将来恢复前必须配置 `TARO_APP_CLOUDBASE_*`，并完成
   云函数、安全来源和登录规则部署。详见
   [`WANXIANG_CLOUDBASE.md`](./WANXIANG_CLOUDBASE.md)。
 - 云保存、支付、分润等接口仍需接入线上 API 后再做真机验收。

@@ -2262,7 +2262,7 @@ checksum = "a89322df9ebe1c1578d689c92318e070967d1042b512afbe49518723f4e6d5cd"
 
 [[package]]
 name = "pixeldoodle"
-version = "13.0.1"
+version = "14.0.4"
 dependencies = [
  "log",
  "serde",

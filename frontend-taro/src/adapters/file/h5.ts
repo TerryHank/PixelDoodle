@@ -14,7 +14,7 @@ async function saveWithTauri(name: string, mime: string, data: ArrayBuffer) {
   const path = await save({
     defaultPath: name,
     filters: extension
-      ? [{ name: mime || 'PixelDoodle export', extensions: [extension] }]
+      ? [{ name: mime || 'DIY拼豆导出', extensions: [extension] }]
       : undefined
   })
   if (!path) {

@@ -215,7 +215,7 @@ try {
     }
 
     $outputDir = Join-Path $frontendDir 'dist-apk'
-    $outputApk = Join-Path $outputDir "PixelDoodle-$version-debug-universal.apk"
+    $outputApk = Join-Path $outputDir "DIY-Pindou-$version-debug-universal.apk"
     New-Item -ItemType Directory -Path $outputDir -Force | Out-Null
     Copy-Item -LiteralPath $builtApk -Destination $outputApk -Force
     $hash = Get-Sha256Hex $outputApk

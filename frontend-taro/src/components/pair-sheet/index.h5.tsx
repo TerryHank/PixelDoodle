@@ -59,7 +59,7 @@ export function PairSheetH5({
                 aria-label='已授权蓝牙设备'
               >
                 {!bleAvailable ? (
-                  <div className='ble-device-empty'>当前浏览器不支持 Web Bluetooth</div>
+                  <div className='ble-device-empty'>{statusMessage}</div>
                 ) : devices.length === 0 ? (
                   <div className='ble-device-empty'>
                     还没有已授权的 BeadCraft 设备，点“添加设备”进行首次连接。

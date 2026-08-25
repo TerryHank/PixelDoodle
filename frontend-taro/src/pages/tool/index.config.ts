@@ -1,3 +1,3 @@
 export default definePageConfig({
-  navigationBarTitleText: 'PixelDoodle 工具'
+  navigationBarTitleText: 'DIY拼豆工具'
 })

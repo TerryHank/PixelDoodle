@@ -156,8 +156,6 @@
 }
 
 .material-card__canvas {
-  width: auto;
-  height: auto;
   max-width: 92%;
   max-height: 92%;
   image-rendering: pixelated;
@@ -298,13 +296,46 @@
 }
 
 @media (max-width: 420px) {
-  .materials-filters,
-  .materials-grid {
+  .materials-filters {
     grid-template-columns: 1fr;
+  }
+
+  .materials-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 8px;
   }
 
   .materials-field--search,
   .materials-filters__submit {
     grid-column: auto;
+  }
+
+  .material-card__body {
+    padding: 10px 8px;
+  }
+
+  .material-card h2 {
+    margin-bottom: 6px;
+    font-size: 14px;
+  }
+
+  .material-card__badges {
+    gap: 4px;
+    margin-top: 7px;
+  }
+
+  .material-card__category,
+  .material-card__tag,
+  .material-card__source {
+    padding: 3px 6px;
+    font-size: 10px;
+  }
+
+  .material-card__apply {
+    min-height: 38px;
+    margin-top: 9px;
+    padding: 4px 6px;
+    font-size: 11px;
+    line-height: 1.25;
   }
 }

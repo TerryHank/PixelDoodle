@@ -50,6 +50,28 @@ function createQuadrantRaster() {
   }
 }
 
+function createCenterDetailRaster(width: number, height: number) {
+  const data = new Uint8ClampedArray(width * height * 4)
+  const left = Math.floor(width / 3)
+  const right = Math.ceil((width * 2) / 3)
+  const top = Math.floor(height / 3)
+  const bottom = Math.ceil((height * 2) / 3)
+
+  for (let y = 0; y < height; y += 1) {
+    for (let x = 0; x < width; x += 1) {
+      const offset = (y * width + x) * 4
+      const isCenter = x >= left && x < right && y >= top && y < bottom
+      const value = isCenter ? 255 : 0
+      data[offset] = value
+      data[offset + 1] = value
+      data[offset + 2] = value
+      data[offset + 3] = 255
+    }
+  }
+
+  return { width, height, data }
+}
+
 describe('local-generation-js', () => {
   it('resolves pixel-size mode from source dimensions', () => {
     expect(
@@ -165,6 +187,44 @@ describe('local-generation-js', () => {
     expect(result.grid_size).toEqual({ width: 104, height: 74 })
     expect(result.pixel_matrix).toHaveLength(74)
     expect(result.pixel_matrix.every((row) => row.length === 104)).toBe(true)
+  })
+
+  it('keeps isolated photo detail in high-precision mode', () => {
+    const shared = {
+      sourceWidth: 12,
+      sourceHeight: 12,
+      selectionRaster: createCenterDetailRaster(3, 3),
+      midRaster: createCenterDetailRaster(12, 12),
+      colors: [
+        { code: 'K', name: 'Black', name_zh: '黑色', hex: '#000000', rgb: [0, 0, 0] as [number, number, number] },
+        { code: 'W', name: 'White', name_zh: '白色', hex: '#FFFFFF', rgb: [255, 255, 255] as [number, number, number] }
+      ],
+      presets: {}
+    }
+    const baseOptions = {
+      mode: 'fixed_grid',
+      grid_width: 3,
+      grid_height: 3,
+      led_size: 64,
+      pixel_size: 8,
+      use_dithering: false,
+      palette_preset: '221',
+      max_colors: 2,
+      similarity_threshold: 0,
+      remove_bg: false,
+      contrast: 0,
+      saturation: 0,
+      sharpness: 0
+    }
+
+    const standard = generatePatternLocalJs({ ...shared, options: baseOptions })
+    const detailed = generatePatternLocalJs({
+      ...shared,
+      options: { ...baseOptions, preserve_detail: true }
+    })
+
+    expect(standard.pixel_matrix[1][1]).toBe('K')
+    expect(detailed.pixel_matrix[1][1]).toBe('W')
   })
 
   it('cleans rare colors and smooths isolated pixels like the Rust engine', () => {

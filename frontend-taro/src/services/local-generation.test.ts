@@ -62,7 +62,8 @@ describe('local-generation helpers', () => {
       remove_bg: false,
       contrast: 1.5,
       saturation: 0.25,
-      sharpness: 2
+      sharpness: 2,
+      preserve_detail: false
     })
   })
 
@@ -164,7 +165,7 @@ describe('local-generation helpers', () => {
     expect(getLocalGenerationUnavailableReason()).toBeNull()
   })
 
-  it('falls back to the main-thread JS engine when the module worker crashes', async () => {
+  it('decodes the blob URL directly when Android WebView rejects fetch', async () => {
     getEnvMock.mockReturnValue('WEB')
     class FailingWorker {
       listeners = new Map<string, (event?: unknown) => void>()
@@ -193,14 +194,10 @@ describe('local-generation helpers', () => {
     vi.stubGlobal('window', {})
     vi.stubGlobal('Worker', FailingWorker)
     vi.stubGlobal('Image', MockImage)
-    vi.stubGlobal('URL', {
-      createObjectURL: vi.fn(() => 'blob:compatibility-image'),
-      revokeObjectURL: vi.fn()
+    const fetchMock = vi.fn(async () => {
+      throw new TypeError('Failed to fetch')
     })
-    vi.stubGlobal(
-      'fetch',
-      vi.fn(async () => new Response(new Blob(['image']), { status: 200 }))
-    )
+    vi.stubGlobal('fetch', fetchMock)
     vi.stubGlobal('document', {
       createElement: () => {
         const canvas = {
@@ -246,5 +243,6 @@ describe('local-generation helpers', () => {
       ['W1', 'W1'],
       ['W1', 'W1']
     ])
+    expect(fetchMock).toHaveBeenCalledTimes(1)
   })
 })

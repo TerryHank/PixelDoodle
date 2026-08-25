@@ -36,6 +36,7 @@ export interface LocalGenerateOptions {
   contrast: number
   saturation: number
   sharpness: number
+  preserve_detail?: boolean
 }
 
 interface WorkerRequest {
@@ -130,7 +131,9 @@ export function buildLocalGenerateOptions(fields: Record<string, string>): Local
     remove_bg: String(fields.remove_bg ?? 'false').toLowerCase() === 'true',
     contrast: Number(fields.contrast ?? '0') || 0,
     saturation: Number(fields.saturation ?? '0') || 0,
-    sharpness: Number(fields.sharpness ?? '0') || 0
+    sharpness: Number(fields.sharpness ?? '0') || 0,
+    preserve_detail:
+      String(fields.preserve_detail ?? 'false').toLowerCase() === 'true'
   }
 }
 
@@ -398,31 +401,24 @@ async function generatePatternLocallyForH5Js(
     throw new Error('调色板尚未加载完成，无法启用兼容模式')
   }
 
-  const response = await fetch(filePath)
-  if (!response.ok) {
-    throw new Error('兼容模式读取图片失败')
-  }
-  const objectUrl = URL.createObjectURL(await response.blob())
-  try {
-    const image = await loadBrowserImage(objectUrl)
-    const options = buildLocalGenerateOptions(fields)
-    const grid = resolveLocalGridSize(image.width, image.height, options)
-    const result = generatePatternLocalJs({
-      sourceWidth: image.width,
-      sourceHeight: image.height,
-      selectionRaster: drawImageRaster(image, 120, 120),
-      midRaster: drawImageRaster(image, grid.width * 4, grid.height * 4),
-      options,
-      colors: paletteData.colors,
-      presets: paletteData.presets
-    })
-    return validateLocalGenerationGrid(
-      normalizeGeneratePatternResponse(result, options.palette_preset),
-      options
-    )
-  } finally {
-    URL.revokeObjectURL(objectUrl)
-  }
+  // Android WebView can display a blob URL even when fetch(blobUrl) is rejected.
+  // Decode the already-local image directly so compatibility mode stays offline.
+  const image = await loadBrowserImage(filePath)
+  const options = buildLocalGenerateOptions(fields)
+  const grid = resolveLocalGridSize(image.width, image.height, options)
+  const result = generatePatternLocalJs({
+    sourceWidth: image.width,
+    sourceHeight: image.height,
+    selectionRaster: drawImageRaster(image, 120, 120),
+    midRaster: drawImageRaster(image, grid.width * 4, grid.height * 4),
+    options,
+    colors: paletteData.colors,
+    presets: paletteData.presets
+  })
+  return validateLocalGenerationGrid(
+    normalizeGeneratePatternResponse(result, options.palette_preset),
+    options
+  )
 }
 
 export async function generatePatternLocally(
@@ -432,6 +428,11 @@ export async function generatePatternLocally(
 ) {
   if (getRuntimeEnv() === 'weapp') {
     return generatePatternLocallyForWeapp(filePath, fields, paletteData)
+  }
+
+  const options = buildLocalGenerateOptions(fields)
+  if (options.preserve_detail) {
+    return generatePatternLocallyForH5Js(filePath, fields, paletteData)
   }
 
   try {

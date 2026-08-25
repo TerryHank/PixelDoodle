@@ -76,7 +76,7 @@ describe('pattern store defaults', () => {
     )
   })
 
-  it('passes the explicit H5 style-transfer choice into generation fields', async () => {
+  it('keeps generation fields local-only in V14', async () => {
     generatePatternMock.mockResolvedValue({
       mode: 'local-wasm',
       response: {
@@ -90,12 +90,10 @@ describe('pattern store defaults', () => {
       }
     })
 
-    await usePatternStore.getState().generateFromFile('blob:test-image', {
-      styleTransfer: 'none'
-    })
+    await usePatternStore.getState().generateFromFile('blob:test-image')
 
     expect(buildGenerateFieldsMock).toHaveBeenCalledWith(
-      expect.objectContaining({ styleTransfer: 'none' })
+      expect.not.objectContaining({ styleTransfer: expect.anything() })
     )
   })
 })

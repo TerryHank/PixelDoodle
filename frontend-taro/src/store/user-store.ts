@@ -17,7 +17,7 @@ function createDefaultProfile(): UserProfile {
     id,
     nickname,
     avatarSeed: nickname,
-    bio: '用 PixelDoodle 生成拼豆图案',
+    bio: '用 DIY拼豆生成拼豆图案',
     autoShareToCommunity: false
   }
 }

@@ -5,7 +5,6 @@ import beanIcon from '@/assets/v13/tabs/bean.png'
 import homeActiveIcon from '@/assets/v13/tabs/home-active.png'
 import homeIcon from '@/assets/v13/tabs/home.png'
 import localGalleryIcon from '@/assets/v13/tabs/local-gallery.png'
-import profileActiveIcon from '@/assets/v13/tabs/profile-active.png'
 import profileIcon from '@/assets/v13/tabs/profile.png'
 import './index.scss'
 
@@ -37,7 +36,7 @@ const TAB_CONFIG: Record<
     label: '我的',
     url: '/pages/profile/index',
     icon: profileIcon,
-    activeIcon: profileActiveIcon
+    activeIcon: profileIcon
   }
 }
 
@@ -65,7 +64,8 @@ export function AppTabBar({ current }: AppTabBarProps) {
         return (
           <View
             key={tab}
-            className={`app-tab-bar__item ${active ? 'app-tab-bar__item--active' : ''}`}
+            className={`app-tab-bar__item app-tab-bar__item--${tab} ${active ? 'app-tab-bar__item--active' : ''}`}
+            aria-current={active ? 'page' : undefined}
             hoverClass='app-tab-bar__item--hover'
             hoverStayTime={40}
             onClick={() => {

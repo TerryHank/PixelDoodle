@@ -1,4 +1,5 @@
 import Taro from '@tarojs/taro'
+import { isTauri } from '@tauri-apps/api/core'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import '@/styles/template-h5.scss'
 import luoxiaoheiOriginal from '@/assets/examples/luoxiaohei_original.jpg'
@@ -13,7 +14,10 @@ import { bleAdapter } from '@/adapters/ble'
 import type { BleKnownDevice } from '@/adapters/ble/types'
 import { fileAdapter } from '@/adapters/file'
 import { AppTabBar } from '@/components/app-tab-bar'
-import { CropDialogH5 } from '@/components/crop-dialog/index.h5'
+import {
+  CropDialogH5,
+  type ImportWorkflowStep
+} from '@/components/crop-dialog/index.h5'
 import { DeviceMonitorPanel } from '@/components/device-monitor-panel'
 import { PairSheetH5, type PairSheetBleOption } from '@/components/pair-sheet/index.h5'
 import { PatternThumb } from '@/components/pattern-thumb'
@@ -26,15 +30,14 @@ import {
   V13LaunchScreen
 } from '@/components/v13-home/index.h5'
 import { PixelEditorH5 } from '@/features/pixel-editor/index.h5'
-import { GENERATION_STYLES } from '@/constants/generation-styles'
 import {
   BOARD_SIZE_OPTIONS,
   buildPixelColorSummary,
   countPlacedBeads,
   createEmptyPixelMatrix,
-  getBoardSize,
-  resizePixelMatrix
+  getBoardSize
 } from '@/features/pixel-editor/model'
+import { fitPixelMatrixToBoard } from '@/features/material-library/model'
 import {
   clampCropRect,
   createFullImageCropRect,
@@ -42,6 +45,10 @@ import {
   zoomCropRect,
   type CropRect
 } from '@/features/image-calibration/model'
+import {
+  buildImageImportPlan,
+  type ImageImportMode
+} from '@/features/image-calibration/import-mode'
 import { autoSendGeneratedPattern } from '@/services/ble-image-sync'
 import { publishCommunityPost } from '@/services/community-service'
 import { consumePendingCloudWorkEdit } from '@/services/cloud-work-edit'
@@ -90,10 +97,7 @@ const VALID_IMAGE_EXTENSIONS = ['jpg', 'jpeg', 'png', 'gif', 'webp']
 const MAX_CROP_IMAGE_EDGE = 4096
 const MAX_CROP_IMAGE_PIXELS = 16 * 1024 * 1024
 const LOCAL_DRAFT_STORAGE_KEY = 'pixeldoodle:pixel-editor-draft'
-const LOCAL_GENERATION_MODE = 'local'
 let ownedOriginalImageUrl: string | null = null
-
-type StyleTransferMode = 'none' | 'wanxiang'
 
 interface PixelEditorDraft {
   version: 1
@@ -227,6 +231,7 @@ export default function HomePageH5() {
   const imageOperationOwnerRef = useRef<symbol | null>(null)
   const cropLoadOwnerRef = useRef<symbol | null>(null)
   const cropSourceUrlRef = useRef<string | null>(null)
+  const importProgressTimerRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const cropStateRef = useRef<CropState>({
     file: null,
     img: null,
@@ -241,7 +246,6 @@ export default function HomePageH5() {
   const [authorizedBleDevices, setAuthorizedBleDevices] = useState<BleKnownDevice[]>([])
   const [bleConnectedUuid, setBleConnectedUuid] = useState<string | null>(null)
   const [difficultyMode, setDifficultyMode] = useState('0.25')
-  const [styleTransferMode, setStyleTransferMode] = useState<StyleTransferMode>('none')
   const [customPixelSize, setCustomPixelSize] = useState(8)
   const [cropZoom, setCropZoom] = useState(1)
   const [cropGridSize, setCropGridSize] = useState({ width: 29, height: 29 })
@@ -249,6 +253,12 @@ export default function HomePageH5() {
   const [cropImageStyle, setCropImageStyle] = useState<Record<string, string>>({})
   const [cropBoxStyle, setCropBoxStyle] = useState<Record<string, string>>({})
   const [isCropDialogOpen, setIsCropDialogOpen] = useState(false)
+  const [imageImportMode, setImageImportMode] = useState<ImageImportMode>('photo')
+  const imageImportModeRef = useRef<ImageImportMode>('photo')
+  const [photoColorStyle, setPhotoColorStyle] = useState<'natural' | 'vivid' | 'soft'>('natural')
+  const photoColorStyleRef = useRef<'natural' | 'vivid' | 'soft'>('natural')
+  const [importWorkflowStep, setImportWorkflowStep] = useState<ImportWorkflowStep>('guide')
+  const [importProgress, setImportProgress] = useState(0)
   const [shareTitle, setShareTitle] = useState('')
   const [shareDescription, setShareDescription] = useState('')
   const [isPublishing, setIsPublishing] = useState(false)
@@ -268,13 +278,20 @@ export default function HomePageH5() {
   const [showV13Launch, setShowV13Launch] = useState(false)
 
   useEffect(() => {
-    document.title = '创物集 DIY 拼豆 · v13'
-    const launchKey = 'pixeldoodle:v13-launch-shown'
+    document.title = 'DIY拼豆 · v14'
+    const launchKey = 'pixeldoodle:v14-launch-shown'
     if (window.sessionStorage.getItem(launchKey)) return
     window.sessionStorage.setItem(launchKey, '1')
     setShowV13Launch(true)
     const timer = window.setTimeout(() => setShowV13Launch(false), 1450)
     return () => window.clearTimeout(timer)
+  }, [])
+
+  useEffect(() => () => {
+    if (importProgressTimerRef.current) {
+      clearInterval(importProgressTimerRef.current)
+      importProgressTimerRef.current = null
+    }
   }, [])
 
   useEffect(() => {
@@ -386,7 +403,6 @@ export default function HomePageH5() {
   const boardSize = usePatternStore((state) => state.boardSize)
   const totalBeads = usePatternStore((state) => state.totalBeads)
   const originalImage = usePatternStore((state) => state.originalImage)
-  const styleIndex = usePatternStore((state) => state.styleIndex)
   const removeBackground = usePatternStore((state) => state.removeBackground)
   const difficulty = usePatternStore((state) => state.difficulty)
   const isGenerating = usePatternStore((state) => state.isGenerating)
@@ -668,6 +684,21 @@ export default function HomePageH5() {
     setCropZoom(1)
   }
 
+  function stopImportProgress(nextProgress = 0) {
+    if (importProgressTimerRef.current) {
+      clearInterval(importProgressTimerRef.current)
+      importProgressTimerRef.current = null
+    }
+    setImportProgress(nextProgress)
+  }
+
+  function startImportProgress() {
+    stopImportProgress(8)
+    importProgressTimerRef.current = setInterval(() => {
+      setImportProgress((current) => Math.min(92, current + Math.max(1, Math.round((96 - current) * 0.08))))
+    }, 180)
+  }
+
   function getCropViewportBounds() {
     const isCompactViewport = window.innerWidth <= 768
     const horizontalInset = isCompactViewport ? 56 : 128
@@ -680,8 +711,50 @@ export default function HomePageH5() {
   }
 
   function cancelCrop() {
+    stopImportProgress()
     setIsCropDialogOpen(false)
     resetCropState()
+    setImportWorkflowStep('guide')
+  }
+
+  function cancelImportWorkflow() {
+    if (imageOperationOwnerRef.current) {
+      showToast('正在识别图纸，请稍候')
+      return
+    }
+    if (importWorkflowStep === 'result' || importWorkflowStep === 'correction') {
+      usePatternStore.getState().clear()
+    }
+    cancelCrop()
+  }
+
+  function finishImportWorkflow() {
+    const state = usePatternStore.getState()
+    if (hasGeneratedPattern(state.pixelMatrix)) {
+      const title = sanitizePatternTitle(shareTitle || '未命名图案')
+      persistEditorDraft(state.pixelMatrix, title, null, false)
+      rememberGeneratedPattern({
+        title,
+        sourceLabel: imageImportModeRef.current === 'photo' ? '照片转拼豆' : '导入图纸'
+      })
+      showToast('图案已本地生成')
+    }
+    stopImportProgress()
+    setIsCropDialogOpen(false)
+    resetCropState()
+    setImportWorkflowStep('guide')
+  }
+
+  function startPixelImportWorkflow() {
+    if (imageOperationOwnerRef.current || isGenerating) {
+      showToast('图片正在生成，请稍候')
+      return
+    }
+    imageImportModeRef.current = 'pixel-art'
+    setImageImportMode('pixel-art')
+    resetCropState()
+    setImportWorkflowStep('guide')
+    setIsCropDialogOpen(true)
   }
 
   function validateSelectedFile(file: File) {
@@ -724,7 +797,8 @@ export default function HomePageH5() {
 
   async function downsampleCropImageIfNeeded(
     image: HTMLImageElement,
-    sourceUrl: string
+    sourceUrl: string,
+    importMode: ImageImportMode
   ) {
     const pixelScale = Math.sqrt(
       MAX_CROP_IMAGE_PIXELS / Math.max(1, image.width * image.height)
@@ -744,11 +818,17 @@ export default function HomePageH5() {
     canvas.height = Math.max(1, Math.round(image.height * scale))
     const context = canvas.getContext('2d')
     if (!context) throw new Error('当前设备无法处理这张大图')
-    context.imageSmoothingEnabled = true
-    context.imageSmoothingQuality = 'high'
+    context.imageSmoothingEnabled = importMode === 'photo'
+    if (importMode === 'photo') {
+      context.imageSmoothingQuality = 'high'
+    }
     context.drawImage(image, 0, 0, canvas.width, canvas.height)
     const blob = await new Promise<Blob | null>((resolve) => {
-      canvas.toBlob(resolve, 'image/jpeg', 0.92)
+      canvas.toBlob(
+        resolve,
+        importMode === 'pixel-art' ? 'image/png' : 'image/jpeg',
+        0.92
+      )
     })
     if (!blob) throw new Error('大图优化失败，请选择尺寸较小的图片')
 
@@ -772,10 +852,11 @@ export default function HomePageH5() {
     resetCropState()
 
     try {
+      const importMode = imageImportModeRef.current
       const sourceUrl = URL.createObjectURL(file)
       replaceCropSourceUrl(sourceUrl)
       const sourceImage = await loadCropImage(sourceUrl)
-      const prepared = await downsampleCropImageIfNeeded(sourceImage, sourceUrl)
+      const prepared = await downsampleCropImageIfNeeded(sourceImage, sourceUrl, importMode)
       if (cropLoadOwnerRef.current !== operationToken) return
 
       const image = prepared.image
@@ -813,7 +894,13 @@ export default function HomePageH5() {
       })
       setCropImageUrl(prepared.imageUrl)
       updateCropBox()
+      setImportWorkflowStep(importMode === 'pixel-art' ? 'align' : 'recognizing')
       setIsCropDialogOpen(true)
+      if (importMode === 'photo') {
+        window.setTimeout(() => {
+          void confirmCrop()
+        }, 0)
+      }
     } catch (error) {
       resetCropState()
       showToast(error instanceof Error ? error.message : '图片读取失败')
@@ -845,6 +932,24 @@ export default function HomePageH5() {
     }
   }
 
+  function openImageFilePicker(importMode: ImageImportMode) {
+    if (imageOperationOwnerRef.current || isGenerating) {
+      showToast('图片正在生成，请稍候')
+      return
+    }
+
+    const input = fileInputRef.current
+    if (!input) {
+      showToast('图片选择器尚未就绪，请重试')
+      return
+    }
+
+    imageImportModeRef.current = importMode
+    setImageImportMode(importMode)
+    input.value = ''
+    input.click()
+  }
+
   async function confirmCrop() {
     if (imageOperationOwnerRef.current) {
       showToast('图片正在生成，请稍候')
@@ -859,9 +964,16 @@ export default function HomePageH5() {
       return
     }
 
+    const importPlan = buildImageImportPlan(
+      imageImportModeRef.current,
+      cropState.box.width,
+      cropState.box.height,
+      cropGridSize.width,
+      cropGridSize.height
+    )
     const canvas = document.createElement('canvas')
-    canvas.width = Math.max(1, Math.round(cropState.box.width))
-    canvas.height = Math.max(1, Math.round(cropState.box.height))
+    canvas.width = importPlan.canvasWidth
+    canvas.height = importPlan.canvasHeight
     const context = canvas.getContext('2d')
 
     if (!context) {
@@ -869,6 +981,10 @@ export default function HomePageH5() {
       return
     }
 
+    context.imageSmoothingEnabled = importPlan.imageSmoothingEnabled
+    if (importPlan.imageSmoothingEnabled) {
+      context.imageSmoothingQuality = 'high'
+    }
     context.drawImage(
       image,
       cropState.box.x,
@@ -882,7 +998,7 @@ export default function HomePageH5() {
     )
 
     const blob = await new Promise<Blob | null>((resolve) => {
-      canvas.toBlob(resolve, 'image/jpeg', 0.95)
+      canvas.toBlob(resolve, importPlan.mimeType, 0.95)
     })
 
     if (!blob) {
@@ -895,46 +1011,86 @@ export default function HomePageH5() {
       return
     }
 
-    const croppedFileName = `${file.name.replace(/\.[^.]+$/, '') || 'image'}.jpg`
-    const croppedFile = new File([blob], croppedFileName, { type: 'image/jpeg' })
+    const croppedFileName = `${file.name.replace(/\.[^.]+$/, '') || 'image'}.${importPlan.extension}`
+    const croppedFile = new File([blob], croppedFileName, { type: importPlan.mimeType })
     const croppedUrl = URL.createObjectURL(croppedFile)
     replaceOwnedOriginalImageUrl(croppedUrl)
-    cancelCrop()
+    setImportWorkflowStep('recognizing')
+    startImportProgress()
     usePatternStore.setState({ exampleImage: null, isGenerating: true })
-    const previousBoardSize = { ...usePatternStore.getState().boardSize }
-    usePatternStore.getState().setBoardSize(cropGridSize)
     try {
-      await runGenerate(croppedUrl, croppedFile.name)
+      await runGenerate(croppedUrl, croppedFile.name, Symbol('import-preview'), {
+        showLoading: false,
+        previewOnly: true
+      })
+      stopImportProgress(100)
+      setImportWorkflowStep('result')
     } catch (error) {
-      usePatternStore.getState().setBoardSize(previousBoardSize)
+      stopImportProgress()
+      setImportWorkflowStep(imageImportModeRef.current === 'pixel-art' ? 'crop' : 'guide')
       showToast(error instanceof Error ? error.message : '图片生成失败')
     }
   }
 
-  function handleGenerationModeChange(value: string) {
+  function handleImportPrevious() {
+    if (importWorkflowStep === 'correction') {
+      setImportWorkflowStep('result')
+      return
+    }
+    if (importWorkflowStep === 'crop') {
+      setImportWorkflowStep('align')
+      return
+    }
+    if (importWorkflowStep === 'align') {
+      setImportWorkflowStep('guide')
+      return
+    }
+    if (importWorkflowStep === 'result') {
+      cancelCrop()
+    }
+  }
+
+  async function regenerateImportResult() {
     if (imageOperationOwnerRef.current) {
-      showToast('图片正在生成，请稍候')
+      showToast('正在更新预览，请稍候')
       return
     }
+    const source = usePatternStore.getState().originalImage
+    if (!source) return
 
-    if (value === LOCAL_GENERATION_MODE) {
-      setStyleTransferMode('none')
-      showToast('已切换为本地像素化，不会调用万相')
-      return
+    setImportWorkflowStep('recognizing')
+    startImportProgress()
+    usePatternStore.setState({ isGenerating: true })
+    try {
+      await runGenerate(source, undefined, Symbol('refresh-import-preview'), {
+        showLoading: false,
+        previewOnly: true
+      })
+      stopImportProgress(100)
+      setImportWorkflowStep('result')
+    } catch (error) {
+      stopImportProgress()
+      setImportWorkflowStep('result')
+      showToast(error instanceof Error ? error.message : '预览更新失败')
     }
+  }
 
-    const nextStyleIndex = Number.parseInt(value.replace(/^wanxiang:/, ''), 10)
-    if (!GENERATION_STYLES.some((style) => style.index === nextStyleIndex)) {
-      showToast('万相风格无效，请重新选择')
-      return
+  function handleImportPaletteChange(value: string) {
+    usePatternStore.getState().setPalettePreset(value)
+    void regenerateImportResult()
+  }
+
+  function handleImportColorStyleChange(value: 'natural' | 'vivid' | 'soft') {
+    photoColorStyleRef.current = value
+    setPhotoColorStyle(value)
+    void regenerateImportResult()
+  }
+
+  function handleImportBoardSelect(boardId: string) {
+    handleCropBoardChange(boardId)
+    if (importWorkflowStep === 'result' || importWorkflowStep === 'correction') {
+      void regenerateImportResult()
     }
-
-    usePatternStore.getState().setStyleIndex(nextStyleIndex)
-    setStyleTransferMode('wanxiang')
-    const styleName = GENERATION_STYLES.find(
-      (style) => style.index === nextStyleIndex
-    )?.name
-    showToast(`已选择万相${styleName ? `「${styleName}」` : ''}，生成时将使用云端 AI`)
   }
 
   async function handleRegenerateWithSelectedMode() {
@@ -951,22 +1107,43 @@ export default function HomePageH5() {
   }
 
   function getGenerateOverrides() {
+    const store = usePatternStore.getState()
+    const paletteCodes = store.presets[store.palettePreset]?.codes
+    const paletteColorLimit = paletteCodes?.length ?? store.fullPaletteList.length
+    const photoAdjustments = imageImportModeRef.current === 'photo'
+      ? photoColorStyleRef.current === 'vivid'
+        ? { contrast: 18, saturation: 25, sharpness: 30 }
+        : photoColorStyleRef.current === 'soft'
+          ? { contrast: -5, saturation: -20, sharpness: 10 }
+          : { contrast: 10, saturation: 8, sharpness: 24 }
+      : { contrast: 0, saturation: 0, sharpness: 0 }
+    const qualityOverrides = {
+      ...photoAdjustments,
+      useDithering: false,
+      maxColors: Math.max(1, paletteColorLimit),
+      similarityThreshold: 0,
+      preserveDetail: true
+    }
+
     if (difficultyMode === 'custom') {
       return {
         mode: 'pixel_size' as const,
-        pixelSize: customPixelSize
+        pixelSize: customPixelSize,
+        ...qualityOverrides
       }
     }
 
     return {
-      mode: 'fixed_grid' as const
+      mode: 'fixed_grid' as const,
+      ...qualityOverrides
     }
   }
 
   async function runGenerate(
     filePath: string,
     fileName?: string,
-    operationToken = Symbol('generate-image')
+    operationToken = Symbol('generate-image'),
+    options: { showLoading?: boolean; previewOnly?: boolean } = {}
   ) {
     const currentOwner = imageOperationOwnerRef.current
     if (currentOwner && currentOwner !== operationToken) {
@@ -976,27 +1153,70 @@ export default function HomePageH5() {
     imageOperationOwnerRef.current = operationToken
 
     try {
-      Taro.showLoading({
-        title: styleTransferMode === 'wanxiang' ? '万相生成中...' : '生成中...'
-      })
+      if (options.showLoading !== false) {
+        Taro.showLoading({ title: '正在本地识别...' })
+      }
+      const targetBoard = { ...usePatternStore.getState().boardSize }
+      const sourceImage = await loadCropImage(filePath)
+      const containedGrid = fitImageWithinBoardGrid(
+        sourceImage.width,
+        sourceImage.height,
+        targetBoard.width,
+        targetBoard.height
+      )
+      const generationOverrides = getGenerateOverrides()
       const response = await usePatternStore.getState().generateFromFile(filePath, {
         fileName,
-        styleTransfer: styleTransferMode,
-        ...getGenerateOverrides()
+        ...generationOverrides,
+        ...(generationOverrides.mode === 'fixed_grid'
+          ? {
+              gridWidth: containedGrid.width,
+              gridHeight: containedGrid.height
+            }
+          : {})
       })
+      const responseMatchesBoard =
+        response.grid_size.width === targetBoard.width &&
+        response.grid_size.height === targetBoard.height
+      const containedMatrix = responseMatchesBoard
+        ? response.pixel_matrix
+        : fitPixelMatrixToBoard(response.pixel_matrix, targetBoard)
+      const containedSummary = responseMatchesBoard
+        ? response.color_summary
+        : buildPixelColorSummary(containedMatrix, usePatternStore.getState().fullPaletteList)
+      const containedResponse = responseMatchesBoard
+        ? response
+        : {
+            ...response,
+            grid_size: targetBoard,
+            pixel_matrix: containedMatrix,
+            color_summary: containedSummary,
+            total_beads: countPlacedBeads(containedMatrix)
+          }
+
+      if (!responseMatchesBoard) {
+        usePatternStore.setState({
+          pixelMatrix: containedResponse.pixel_matrix,
+          gridSize: containedResponse.grid_size,
+          colorSummary: containedResponse.color_summary,
+          totalBeads: containedResponse.total_beads
+        })
+      }
       useDeviceStore.getState().clearHighlightCodes()
       const nextTitle = sanitizePatternTitle(fileName || shareTitle || '未命名图案')
       setCloudWork(null)
       setIsCloudSynced(false)
-      persistEditorDraft(response.pixel_matrix, nextTitle, null, false)
+      if (fileName || !shareTitle.trim()) {
+        setShareTitle(nextTitle)
+      }
+      if (options.previewOnly) {
+        return containedResponse
+      }
+      persistEditorDraft(containedResponse.pixel_matrix, nextTitle, null, false)
       rememberGeneratedPattern({
         title: nextTitle,
         sourceLabel: fileName ? '上传图片' : '示例图'
       })
-
-      if (fileName || !shareTitle.trim()) {
-        setShareTitle(nextTitle)
-      }
 
       let sentToBle = false
       let sendErrorMessage = ''
@@ -1067,10 +1287,7 @@ export default function HomePageH5() {
         }
       }
 
-      const generationMessage =
-        styleTransferMode === 'wanxiang'
-          ? '万相风格图已生成并转换为拼豆图'
-          : '图案已生成'
+      const generationMessage = '图案已本地生成'
 
       showToast(
         sendErrorMessage
@@ -1079,12 +1296,14 @@ export default function HomePageH5() {
             ? `${generationMessage}并已推送到设备${publishMessage}`
             : `${generationMessage}${publishMessage}`
       )
-      return response
+      return containedResponse
     } finally {
       if (imageOperationOwnerRef.current === operationToken) {
         imageOperationOwnerRef.current = null
       }
-      await hideLoadingSafely(() => Taro.hideLoading())
+      if (options.showLoading !== false) {
+        await hideLoadingSafely(() => Taro.hideLoading())
+      }
     }
   }
 
@@ -1282,32 +1501,10 @@ export default function HomePageH5() {
     }
 
     if (previousMatrix.length > 0) {
-      const resized = resizePixelMatrix(
-        previousMatrix,
-        nextBoard.width,
-        nextBoard.height
-      )
-      const croppedBeads = Math.max(
-        0,
-        countPlacedBeads(previousMatrix) - countPlacedBeads(resized)
-      )
-      if (
-        croppedBeads > 0 &&
-        !window.confirm(
-          `调整为 ${nextBoard.label} 将裁掉 ${croppedBeads} 颗珠子。继续前会自动保存恢复快照，是否继续？`
-        )
-      ) {
-        return
-      }
-      if (croppedBeads > 0) {
-        rememberGeneratedPattern({
-          title: shareTitle || '尺寸调整前作品',
-          sourceLabel: '钉板缩小前自动备份'
-        })
-      }
+      const resized = fitPixelMatrixToBoard(previousMatrix, nextBoard)
       store.setBoardSize({ width: nextBoard.width, height: nextBoard.height })
       syncEditedPattern(resized)
-      showToast(`画布已调整为 ${nextBoard.label}`)
+      showToast(`作品已等比例适配到 ${nextBoard.label}`)
       return
     }
 
@@ -1339,6 +1536,40 @@ export default function HomePageH5() {
     cropState.zoom = 1
     setCropZoom(1)
     updateCropBox()
+  }
+
+  function handleNudgeCrop(deltaX: number, deltaY: number) {
+    const cropState = cropStateRef.current
+    if (!cropState.img) return
+
+    const stepX = Math.max(1, cropState.box.width * 0.02)
+    const stepY = Math.max(1, cropState.box.height * 0.02)
+    cropState.box = clampCropRect(
+      {
+        ...cropState.box,
+        x: cropState.box.x + deltaX * stepX,
+        y: cropState.box.y + deltaY * stepY
+      },
+      cropState.img.width,
+      cropState.img.height
+    )
+    updateCropBox()
+  }
+
+  function handleCropBoardChange(boardId: string) {
+    const nextBoard = getBoardSize(boardId)
+    const cropImage = cropStateRef.current.img
+    usePatternStore.getState().setBoardSize(nextBoard)
+    if (cropImage) {
+      setCropGridSize(
+        fitImageWithinBoardGrid(
+          cropStateRef.current.box.width,
+          cropStateRef.current.box.height,
+          nextBoard.width,
+          nextBoard.height
+        )
+      )
+    }
   }
 
   async function handleChangeDifficulty(nextDifficultyValue: string) {
@@ -1598,6 +1829,9 @@ export default function HomePageH5() {
     bleConnectionStatus === 'connected' && bleCharacteristicStatus === 'ready'
   const bleAvailable =
     typeof navigator !== 'undefined' && !!navigator.bluetooth
+  const bleUnavailableMessage = isTauri()
+    ? '当前 Android APP 使用系统 WebView，系统不提供 Web Bluetooth。真实设备连接需要接入 Tauri 原生 BLE 桥接；这不是 Taro 页面故障。'
+    : '当前浏览器不支持 Web Bluetooth。Web 版请使用支持该能力的 Chrome 或 Edge，并通过 HTTPS 或 localhost 打开。'
   const monitoredDeviceId = (bleConnectedUuid || targetDeviceUuid).trim().toUpperCase()
   const monitoredDevice = monitoredDeviceId
     ? monitoredDevices[monitoredDeviceId] ?? null
@@ -1725,7 +1959,7 @@ export default function HomePageH5() {
   }, [authorizedBleDevices, bleConnectedUuid, isBleReady, targetDeviceUuid])
   const pairSheetStatusMessage = useMemo(() => {
     if (!bleAvailable) {
-      return '当前浏览器不支持 Web Bluetooth'
+      return bleUnavailableMessage
     }
     if (bleConnectionStatus === 'connecting') {
       return '正在连接蓝牙设备...'
@@ -1740,7 +1974,7 @@ export default function HomePageH5() {
       return `已授权设备 ${authorizedBleDevices.length} 台，可直接点击连接`
     }
     return '还没有已授权的 BeadCraft 设备，点“添加设备”进行首次连接。'
-  }, [authorizedBleDevices.length, bleAvailable, bleConnectedUuid, bleConnectionStatus, isBleReady])
+  }, [authorizedBleDevices.length, bleAvailable, bleConnectedUuid, bleConnectionStatus, bleUnavailableMessage, isBleReady])
   const pairSheetStatusTone: 'default' | 'ready' | 'connected' = isBleReady && bleConnectedUuid
     ? 'connected'
     : authorizedBleDevices.length > 0
@@ -1762,8 +1996,7 @@ export default function HomePageH5() {
             onChange={(event) => handleUploadFileSelection(event.target.files?.[0] ?? null)}
           />
           {hasPattern ? (
-            <details className='v13-advanced-tools'>
-              <summary>高级设置</summary>
+            <section className='v13-editor-tools' aria-label='创作快捷设置'>
               <div className='canvas-toolbar'>
             <button
               id='clear-btn'
@@ -1785,6 +2018,7 @@ export default function HomePageH5() {
                 <path d='M5 9.5V21h14V9.5' />
                 <path d='M9 21v-6h6v6' />
               </svg>
+              <span className='toolbar-btn-label'>主页</span>
             </button>
             <button
               id='bg-toggle'
@@ -1795,7 +2029,8 @@ export default function HomePageH5() {
               title='自动去除背景'
               type='button'
             >
-              背
+              <span className='toolbar-btn-glyph'>背</span>
+              <span className='toolbar-btn-label'>去背</span>
             </button>
             <label
               id='upload-btn'
@@ -1805,40 +2040,26 @@ export default function HomePageH5() {
               aria-disabled={isGenerating}
             >
               <span className='toolbar-btn-icon'>+</span>
+              <span className='toolbar-btn-label'>换图</span>
             </label>
-            <select
+            <span
               id='generation-style'
               className='led-size-btn generation-style-select'
-              title='图片生成方式'
-              aria-label='图片生成方式'
-              value={
-                styleTransferMode === 'wanxiang'
-                  ? `wanxiang:${styleIndex}`
-                  : LOCAL_GENERATION_MODE
-              }
-              disabled={isGenerating}
-              onChange={(event) => handleGenerationModeChange(event.target.value)}
+              title='V14 仅使用离线本地像素化'
+              aria-label='图片生成方式：本地像素化'
             >
-              <option value={LOCAL_GENERATION_MODE}>本地像素化</option>
-              {GENERATION_STYLES.map((style) => (
-                <option key={style.index} value={`wanxiang:${style.index}`}>
-                  万相 · {style.name}
-                </option>
-              ))}
-            </select>
+              本地像素化
+            </span>
             <button
               id='regenerate-btn'
               className='toolbar-btn'
               type='button'
               disabled={!originalImage || isGenerating}
               onClick={() => void handleRegenerateWithSelectedMode()}
-              title={
-                styleTransferMode === 'wanxiang'
-                  ? '使用所选万相风格重新生成'
-                  : '使用本地像素化重新生成'
-              }
+              title='使用本地像素化重新生成'
             >
-              {styleTransferMode === 'wanxiang' ? 'AI' : '重'}
+              <span className='toolbar-btn-glyph'>重</span>
+              <span className='toolbar-btn-label'>重生成</span>
             </button>
             <select
               id='board-size'
@@ -1886,9 +2107,10 @@ export default function HomePageH5() {
                 <path d='m7 10 5 5 5-5' />
                 <path d='M5 21h14' />
               </svg>
+              <span className='toolbar-btn-label'>导出</span>
             </button>
               </div>
-            </details>
+            </section>
           ) : null}
 
           <div
@@ -1945,14 +2167,8 @@ export default function HomePageH5() {
               <V13HomeLanding
                 hasLocalDraft={hasLocalDraft}
                 onCreate={() => setIsCreationSetupOpen(true)}
-                onPixelImport={() => {
-                  setStyleTransferMode('none')
-                  fileInputRef.current?.click()
-                }}
-                onPhotoImport={() => {
-                  setStyleTransferMode('none')
-                  fileInputRef.current?.click()
-                }}
+                onPixelImport={startPixelImportWorkflow}
+                onPhotoImport={() => openImageFilePicker('photo')}
                 onOpenLibrary={() => {
                   void Taro.redirectTo({ url: '/pages/materials/index' })
                 }}
@@ -2174,23 +2390,50 @@ export default function HomePageH5() {
       <div id='serial-toast' className='serial-toast' style={{ display: 'none' }} />
       <CropDialogH5
         open={isCropDialogOpen}
+        step={importWorkflowStep}
+        progress={importProgress}
         imageUrl={cropImageUrl}
         cropImageRef={cropImageRef}
         cropImageStyle={cropImageStyle}
         cropBoxStyle={cropBoxStyle}
-        boardLabel={`${cropGridSize.width} × ${cropGridSize.height}（完整保留原图）`}
+        boardLabel={selectedBoard.label}
         gridWidth={cropGridSize.width}
         gridHeight={cropGridSize.height}
         zoom={cropZoom}
-        confirmLabel={
-          styleTransferMode === 'wanxiang'
-            ? '万相生成并转换为拼豆图'
-            : '本地像素化并生成'
-        }
-        onCancel={cancelCrop}
+        importMode={imageImportMode}
+        paletteOptions={Object.entries(presets).map(([id, preset]) => ({
+          id,
+          label: preset.label
+        }))}
+        selectedPalette={palettePreset}
+        boardOptions={BOARD_SIZE_OPTIONS.map((option) => ({ id: option.id, label: option.label }))}
+        selectedBoard={selectedBoard.id}
+        colorStyle={photoColorStyle}
+        pixelMatrix={pixelMatrix}
+        paletteColors={fullPaletteList}
+        colorSummary={colorSummary}
+        totalBeads={totalBeads}
+        modeHint={buildImageImportPlan(
+          imageImportMode,
+          1,
+          1,
+          cropGridSize.width,
+          cropGridSize.height
+        ).hint}
+        onCancel={cancelImportWorkflow}
+        onChooseFile={() => openImageFilePicker('pixel-art')}
+        onPrevious={handleImportPrevious}
+        onNext={() => setImportWorkflowStep('crop')}
         onConfirm={() => void confirmCrop()}
+        onFinish={finishImportWorkflow}
+        onOpenCorrection={() => setImportWorkflowStep('correction')}
+        onPatternChange={syncEditedPattern}
         onReset={handleResetCrop}
         onZoomChange={handleCropZoomChange}
+        onNudge={handleNudgeCrop}
+        onPaletteChange={handleImportPaletteChange}
+        onBoardChange={handleImportBoardSelect}
+        onColorStyleChange={handleImportColorStyleChange}
         onMouseDown={(event) => {
           event.preventDefault()
           const cropState = cropStateRef.current

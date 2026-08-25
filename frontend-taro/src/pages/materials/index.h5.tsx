@@ -72,6 +72,11 @@ const MaterialPreviewCanvas = memo(function MaterialPreviewCanvas({
     <canvas
       ref={canvasRef}
       className='material-card__canvas'
+      style={
+        work.width >= work.height
+          ? { width: '92%', height: 'auto' }
+          : { width: 'auto', height: '92%' }
+      }
       role='img'
       aria-label={`${work.title} 拼豆图纸预览`}
     />
@@ -222,7 +227,7 @@ export default function MaterialsPageH5() {
             ← 返回创作
           </button>
           <div>
-            <span className='materials-hero__eyebrow'>PixelDoodle Materials</span>
+            <span className='materials-hero__eyebrow'>DIY拼豆素材</span>
             <h1>全尺寸拼豆素材库</h1>
             <p>搜索已量化图纸，选择目标钉板后可直接套用并继续编辑。</p>
           </div>

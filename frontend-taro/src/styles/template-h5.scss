@@ -1805,31 +1805,9 @@ body,
   display: none;
 }
 
-.v13-advanced-tools {
+.v13-editor-tools {
   width: min(100%, 820px);
   margin: 10px auto 12px;
-}
-
-.v13-advanced-tools > summary {
-  width: max-content;
-  margin: 0 0 0 auto;
-  padding: 8px 15px;
-  border: 2px solid #c17a2b;
-  border-radius: 999px;
-  background: #fff4d7;
-  color: #75440f;
-  font-size: 12px;
-  font-weight: 750;
-  cursor: pointer;
-  list-style: none;
-}
-
-.v13-advanced-tools > summary::-webkit-details-marker {
-  display: none;
-}
-
-.v13-advanced-tools[open] > summary {
-  margin-bottom: 8px;
 }
 
 .canvas-toolbar:not(.canvas-toolbar--hidden) {
@@ -1843,8 +1821,54 @@ body,
   background: rgba(255, 241, 211, 0.92);
 }
 
-.v13-advanced-tools .canvas-toolbar {
+.v13-editor-tools .canvas-toolbar {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
   margin-bottom: 0;
+  overflow: visible;
+}
+
+.v13-editor-tools .toolbar-btn,
+.v13-editor-tools .led-size-btn {
+  width: 100%;
+  min-width: 0;
+  height: 54px;
+  padding: 5px 8px;
+  border-style: dashed;
+  border-radius: 12px;
+  flex-direction: column;
+  gap: 2px;
+  justify-content: center;
+  line-height: 1.15;
+}
+
+.v13-editor-tools .toolbar-btn-label {
+  font-size: 10px;
+  font-weight: 750;
+}
+
+.v13-editor-tools .toolbar-btn-glyph,
+.v13-editor-tools .toolbar-btn-icon {
+  font-size: 16px;
+  font-weight: 800;
+  line-height: 1;
+}
+
+.v13-editor-tools .generation-style-select,
+.v13-editor-tools .board-size-select {
+  grid-column: span 2;
+  font-size: 12px;
+}
+
+.v13-editor-tools .generation-style-select {
+  padding: 5px 8px;
+  background-image: none;
+}
+
+.v13-editor-tools .mode-quick-btn {
+  padding: 5px 6px;
+  font-size: 11px;
 }
 
 .canvas-toolbar:not(.canvas-toolbar--hidden) .toolbar-btn,
@@ -1963,8 +1987,14 @@ body,
     margin-top: 10px;
   }
 
-  .v13-advanced-tools {
+  .v13-editor-tools {
     width: calc(100% - 24px);
+  }
+
+  .v13-editor-tools .canvas-toolbar {
+    width: 100%;
+    padding-bottom: 10px;
+    overflow: visible;
   }
 
   .color-panel,

@@ -7,7 +7,6 @@ import {
 } from './local-generation'
 import { exportPatternLocally } from './local-export'
 import { getLocalPalette } from './local-palette'
-import { transformImageStyle } from './style-transfer'
 
 export type ExportKind = 'png' | 'pdf' | 'json'
 
@@ -21,9 +20,6 @@ export interface GeneratePatternInput {
   gridHeight: number
   palettePreset: string
   styleIndex: number
-  styleTransfer?: 'none' | 'wanxiang'
-  prompt?: string
-  referenceImageUrl?: string
   mode?: 'fixed_grid' | 'pixel_size'
   ledSize?: number
   pixelSize?: number
@@ -34,6 +30,7 @@ export interface GeneratePatternInput {
   contrast?: number
   saturation?: number
   sharpness?: number
+  preserveDetail?: boolean
 }
 
 function normalizeGenerationError(error: unknown) {
@@ -62,18 +59,8 @@ export function buildGenerateFields(input: GeneratePatternInput) {
     remove_bg: String(Boolean(input.removeBackground)),
     contrast: String(input.contrast ?? 0),
     saturation: String(input.saturation ?? 0),
-    sharpness: String(input.sharpness ?? 0)
-  }
-
-  if (input.styleTransfer) {
-    fields.style_transfer = input.styleTransfer
-  }
-
-  if (input.prompt?.trim()) {
-    fields.prompt = input.prompt.trim()
-  }
-  if (input.referenceImageUrl?.trim()) {
-    fields.reference_image_url = input.referenceImageUrl.trim()
+    sharpness: String(input.sharpness ?? 0),
+    preserve_detail: String(Boolean(input.preserveDetail))
   }
 
   return fields
@@ -90,18 +77,15 @@ export async function generatePattern(
   paletteData?: LocalPaletteData
 ): Promise<GeneratePatternOutcome> {
   try {
-    const styledImage = await transformImageStyle({ filePath, fileName, fields })
     const response = await generatePatternLocally(
-      styledImage.filePath,
+      filePath,
       fields,
       paletteData ?? getLocalPalette()
     )
 
     return {
       mode: getRuntimeEnv() === 'weapp' ? 'local-js' : 'local-wasm',
-      response: styledImage.generatedImage
-        ? { ...response, ai_image: styledImage.generatedImage }
-        : response
+      response
     }
   } catch (error) {
     throw normalizeGenerationError(error)

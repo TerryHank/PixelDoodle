@@ -28,10 +28,10 @@ export function V13LaunchScreen({ visible }: V13LaunchScreenProps) {
     <div
       className='v13-launch-screen'
       style={{ '--v13-launch-bg': `url(${launchBackground})` } as CSSProperties}
-      aria-label='创物集 DIY 拼豆启动页'
+      aria-label='DIY拼豆启动页'
     >
       <img className='v13-launch-screen__hero' src={homeHero} alt='' />
-      <img className='v13-launch-screen__logo' src={launchLogo} alt='创物集 潮玩手作 DIY 拼豆' />
+      <img className='v13-launch-screen__logo' src={launchLogo} alt='DIY拼豆' />
     </div>
   )
 }
@@ -57,14 +57,14 @@ const HOME_ACTIONS = [
   {
     key: 'pixel-import',
     title: '导入像素画',
-    subtitle: '一键导入，开始拼豆旅程',
+    subtitle: '保留硬边，不平滑原像素',
     card: cardPixelImport,
     button: buttonPixelImport
   },
   {
     key: 'photo-import',
-    title: '导入图片',
-    subtitle: '一键识别，生成图纸',
+    title: '照片转拼豆',
+    subtitle: '等比取样，量化为拼豆色',
     card: cardPhotoImport,
     button: buttonPhotoImport
   },
@@ -103,14 +103,14 @@ export function V13HomeLanding({
         <button className='v13-round-action' type='button' onClick={onCreate} aria-label='开始自由创作'>
           <img src={powerIcon} alt='' />
         </button>
-        <img className='v13-home__logo' src={homeLogo} alt='创物集 DIY 拼豆' />
+        <img className='v13-home__logo' src={homeLogo} alt='DIY拼豆' />
         <button className='v13-round-action' type='button' onClick={onOpenConnection} aria-label='连接拼豆设备'>
           <img src={linkIcon} alt='' />
         </button>
       </header>
 
       <img className='v13-home__hero' src={homeHero} alt='' />
-      <h1 id='v13-home-title' className='v13-visually-hidden'>创物集 DIY 拼豆首页</h1>
+      <h1 id='v13-home-title' className='v13-visually-hidden'>DIY拼豆首页</h1>
 
       <div className='v13-home__action-panel'>
         <div className='v13-home__action-grid'>

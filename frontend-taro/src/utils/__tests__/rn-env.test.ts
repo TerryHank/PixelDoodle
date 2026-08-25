@@ -38,7 +38,7 @@ describe('rn env utils', () => {
     }
 
     expect(typedRnConfig.outputRoot).toBe('dist-rn')
-    expect(typedRnConfig.rn?.appName).toBe('PixelDoodle')
+    expect(typedRnConfig.rn?.appName).toBe('DIY拼豆')
   })
 
   it('exposes rn build scripts', () => {

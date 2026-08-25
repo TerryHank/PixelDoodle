@@ -1,3 +1,3 @@
 export default definePageConfig({
-  navigationBarTitleText: 'PixelDoodle 社区'
+  navigationBarTitleText: 'DIY拼豆社区'
 })

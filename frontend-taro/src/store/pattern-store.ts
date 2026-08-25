@@ -58,10 +58,7 @@ export interface PatternState {
     filePath: string,
     options?: {
       fileName?: string
-      prompt?: string
-      referenceImageUrl?: string
       styleIndex?: number
-      styleTransfer?: 'none' | 'wanxiang'
       palettePreset?: string
       removeBackground?: boolean
       ledSize?: number
@@ -69,6 +66,13 @@ export interface PatternState {
       gridHeight?: number
       mode?: 'fixed_grid' | 'pixel_size'
       pixelSize?: number
+      useDithering?: boolean
+      maxColors?: number
+      similarityThreshold?: number
+      contrast?: number
+      saturation?: number
+      sharpness?: number
+      preserveDetail?: boolean
     }
   ) => Promise<GeneratePatternResponse>
 }
@@ -197,13 +201,17 @@ export const usePatternStore = create<PatternState>((set, get) => ({
         gridWidth,
         gridHeight,
         styleIndex: options.styleIndex ?? state.styleIndex,
-        styleTransfer: options.styleTransfer,
-        prompt: options.prompt,
-        referenceImageUrl: options.referenceImageUrl,
         ledSize,
         pixelSize: options.pixelSize ?? 8,
         palettePreset: options.palettePreset ?? state.palettePreset,
-        removeBackground: options.removeBackground ?? state.removeBackground
+        removeBackground: options.removeBackground ?? state.removeBackground,
+        useDithering: options.useDithering,
+        maxColors: options.maxColors,
+        similarityThreshold: options.similarityThreshold,
+        contrast: options.contrast,
+        saturation: options.saturation,
+        sharpness: options.sharpness,
+        preserveDetail: options.preserveDetail
       })
 
       const outcome = await generatePattern(

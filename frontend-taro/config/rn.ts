@@ -4,7 +4,7 @@ const rnConfig = {
   sourceRoot: 'src',
   outputRoot: 'dist-rn',
   rn: {
-    appName: 'PixelDoodle'
+    appName: 'DIY拼豆'
   }
 } satisfies UserConfigExport<'webpack5'>
 
