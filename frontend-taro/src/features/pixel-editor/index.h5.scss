@@ -78,6 +78,10 @@
   background: #0f766e;
 }
 
+.pixel-editor__save-button--device {
+  background: #d97706;
+}
+
 .pixel-editor__save-button:disabled {
   cursor: wait;
   opacity: 0.65;

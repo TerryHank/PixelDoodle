@@ -110,6 +110,10 @@ else {
 }
 $env:JAVA_HOME = Resolve-RequiredDirectory $javaHome $preferredJavaHome 'JAVA_HOME'
 $env:GRADLE_USER_HOME = Resolve-RequiredDirectory $env:GRADLE_USER_HOME 'D:\ProgramData\Gradle' 'GRADLE_USER_HOME'
+$javaTempDir = 'C:\jtmp'
+New-Item -ItemType Directory -Path $javaTempDir -Force | Out-Null
+$env:TEMP = $javaTempDir
+$env:TMP = $javaTempDir
 $env:PATH = "$(Join-Path $env:CARGO_HOME 'bin');$(Join-Path $env:ANDROID_HOME 'platform-tools');$env:PATH"
 
 $cargo = Join-Path $env:CARGO_HOME 'bin\cargo.exe'

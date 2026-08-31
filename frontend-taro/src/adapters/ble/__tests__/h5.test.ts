@@ -158,6 +158,14 @@ describe('h5BleAdapter.readStatus', () => {
 
   it('connects to a real-protocol PDD device and reads V1.4 brightness', async () => {
     let notificationHandler: ((event: Event) => void) | undefined
+    const sentFrames: number[][] = []
+    const pendingBytes: number[] = []
+    let receivedImageBytes = 0
+    const notify = (response: Uint8Array) => {
+      notificationHandler?.({
+        target: { value: new DataView(response.buffer) }
+      } as unknown as Event)
+    }
     const notifyCharacteristic = {
       startNotifications: vi.fn().mockResolvedValue(undefined),
       addEventListener: vi.fn((_name: string, handler: (event: Event) => void) => {
@@ -166,11 +174,34 @@ describe('h5BleAdapter.readStatus', () => {
     }
     const writeCharacteristic = {
       writeValueWithoutResponse: vi.fn().mockImplementation(async (input: Uint8Array) => {
-        if (input[2] === 0x01 && input[3] === 0x80) {
-          const response = Uint8Array.from([8, 0, 1, 128, 3, 0, 0, 25])
-          notificationHandler?.({
-            target: { value: new DataView(response.buffer) }
-          } as unknown as Event)
+        pendingBytes.push(...input)
+        while (pendingBytes.length >= 2) {
+          const frameLength = pendingBytes[0] | (pendingBytes[1] << 8)
+          if (pendingBytes.length < frameLength) {
+            return
+          }
+          const frame = pendingBytes.splice(0, frameLength)
+          sentFrames.push(frame)
+          const command = frame[2] | (frame[3] << 8)
+          if (command === 0x8001) {
+            notify(Uint8Array.from([8, 0, 1, 128, 3, 0, 0, 25]))
+          } else if (command === 0x0107 || command === 0x0104) {
+            notify(Uint8Array.from([5, 0, frame[2], frame[3], 1]))
+          } else if (command === 0x0000) {
+            receivedImageBytes += frame.length - 9
+            const totalImageBytes =
+              frame[5] |
+              (frame[6] << 8) |
+              (frame[7] << 16) |
+              (frame[8] << 24)
+            notify(Uint8Array.from([
+              5,
+              0,
+              0,
+              0,
+              receivedImageBytes >= totalImageBytes ? 1 : 3
+            ]))
+          }
         }
       })
     }
@@ -218,5 +249,16 @@ describe('h5BleAdapter.readStatus', () => {
     expect(writeCharacteristic.writeValueWithoutResponse).toHaveBeenCalledWith(
       expect.objectContaining({ length: 8 })
     )
+
+    sentFrames.length = 0
+    receivedImageBytes = 0
+    await expect(
+      h5BleAdapter.sendImage(new Uint8Array(104 * 104 * 2))
+    ).resolves.toBeUndefined()
+    expect(sentFrames[0]).toEqual([5, 0, 7, 1, 1])
+    expect(sentFrames[1]).toEqual([5, 0, 4, 1, 1])
+    expect(sentFrames.slice(2).every((frame) => frame[2] === 0 && frame[3] === 0))
+      .toBe(true)
+    expect(receivedImageBytes).toBe(104 * 104 * 3)
   })
 })

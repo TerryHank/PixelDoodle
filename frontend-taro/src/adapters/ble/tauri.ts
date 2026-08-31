@@ -46,8 +46,10 @@ import {
 import {
   BEAD_SCREEN_BLE_V1_4,
   BLE_V1_4_COMMAND,
+  buildBleV14BoardModeFrame,
   buildBleV14DiyImageFrames,
   buildBleV14HighlightFrames,
+  buildBleV14ScreenPowerFrame,
   buildBleV14SyncTimeFrame,
   decodeBleV14DeviceInfo,
   decodeBleV14Frame,
@@ -456,6 +458,24 @@ async function readV14DeviceInfo() {
   return v14DeviceInfo
 }
 
+async function prepareV14Display() {
+  const screenResponse = await requestV14Frame(
+    buildBleV14ScreenPowerFrame(true),
+    BLE_V1_4_COMMAND.SCREEN_POWER
+  )
+  if (decodeBleV14Frame(screenResponse).payload[0] !== 1) {
+    throw new Error('PDD 屏幕开启失败')
+  }
+
+  const modeResponse = await requestV14Frame(
+    buildBleV14BoardModeFrame(1),
+    BLE_V1_4_COMMAND.BOARD_MODE
+  )
+  if (decodeBleV14Frame(modeResponse).payload[0] !== 1) {
+    throw new Error('PDD 进入 DIY 显示模式失败')
+  }
+}
+
 export const tauriBleAdapter: BleAdapter = {
   async scanNearbyDevices() {
     return (await scanDevices()).map(serializeDevice)
@@ -567,6 +587,7 @@ export const tauriBleAdapter: BleAdapter = {
     if (isCurrentV14Device()) {
       const info = v14DeviceInfo ?? await readV14DeviceInfo()
       const image = rgb565PayloadToRgb888(payload, info.width, info.height)
+      await prepareV14Display()
       const frames = buildBleV14DiyImageFrames(image)
       for (let index = 0; index < frames.length; index += 1) {
         const response = await requestV14Frame(frames[index], BLE_V1_4_COMMAND.DIY_IMAGE)

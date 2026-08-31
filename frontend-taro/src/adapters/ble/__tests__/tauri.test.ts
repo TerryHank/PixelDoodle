@@ -139,6 +139,9 @@ describe('tauriBleAdapter', () => {
   })
 
   it('connects PDD V1.4 and reads the hardware-info brightness response', async () => {
+    const sentFrames: number[][] = []
+    const pendingBytes: number[] = []
+    let receivedImageBytes = 0
     const pddDevice = {
       ...beadCraftDevice,
       address: 'AD:FF:3D:CB:72:4E',
@@ -151,14 +154,43 @@ describe('tauriBleAdapter', () => {
     mocks.send.mockImplementation(
       async (characteristic: string, data: number[], _mode: string, service: string) => {
         if (
-          characteristic === BEAD_SCREEN_BLE_V1_4.writeUuid &&
-          service === BEAD_SCREEN_BLE_V1_4.serviceUuid &&
-          data[2] === 0x01 &&
-          data[3] === 0x80
+          characteristic !== BEAD_SCREEN_BLE_V1_4.writeUuid ||
+          service !== BEAD_SCREEN_BLE_V1_4.serviceUuid
         ) {
-          mocks.handlers.get(BEAD_SCREEN_BLE_V1_4.notifyUuid)?.([
-            8, 0, 1, 128, 3, 0, 0, 25
-          ])
+          return
+        }
+        pendingBytes.push(...data)
+        while (pendingBytes.length >= 2) {
+          const frameLength = pendingBytes[0] | (pendingBytes[1] << 8)
+          if (pendingBytes.length < frameLength) {
+            return
+          }
+          const frame = pendingBytes.splice(0, frameLength)
+          sentFrames.push(frame)
+          const command = frame[2] | (frame[3] << 8)
+          if (command === 0x8001) {
+            mocks.handlers.get(BEAD_SCREEN_BLE_V1_4.notifyUuid)?.([
+              8, 0, 1, 128, 3, 0, 0, 25
+            ])
+          } else if (command === 0x0107 || command === 0x0104) {
+            mocks.handlers.get(BEAD_SCREEN_BLE_V1_4.notifyUuid)?.([
+              5, 0, frame[2], frame[3], 1
+            ])
+          } else if (command === 0x0000) {
+            receivedImageBytes += frame.length - 9
+            const totalImageBytes =
+              frame[5] |
+              (frame[6] << 8) |
+              (frame[7] << 16) |
+              (frame[8] << 24)
+            mocks.handlers.get(BEAD_SCREEN_BLE_V1_4.notifyUuid)?.([
+              5,
+              0,
+              0,
+              0,
+              receivedImageBytes >= totalImageBytes ? 1 : 3
+            ])
+          }
         }
       }
     )
@@ -182,6 +214,17 @@ describe('tauriBleAdapter', () => {
       BLE_SERVICE_UUID,
       expect.any(Function)
     )
+
+    sentFrames.length = 0
+    receivedImageBytes = 0
+    await expect(
+      tauriBleAdapter.sendImage(new Uint8Array(104 * 104 * 2))
+    ).resolves.toBeUndefined()
+    expect(sentFrames[0]).toEqual([5, 0, 7, 1, 1])
+    expect(sentFrames[1]).toEqual([5, 0, 4, 1, 1])
+    expect(sentFrames.slice(2).every((frame) => frame[2] === 0 && frame[3] === 0))
+      .toBe(true)
+    expect(receivedImageBytes).toBe(104 * 104 * 3)
   })
 
   it('stops before scanning when nearby-device permission is denied', async () => {

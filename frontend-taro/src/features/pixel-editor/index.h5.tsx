@@ -62,6 +62,9 @@ export interface PixelEditorH5Props {
   onChange: (matrix: PixelMatrix) => void
   onPalettePresetChange: (preset: string) => void
   onSave: () => void
+  onSendToDevice?: () => void
+  isSendingToDevice?: boolean
+  deviceReady?: boolean
   onOpenWarehouse?: () => void
   onCloudSave?: () => void
   isCloudSaving?: boolean
@@ -88,6 +91,9 @@ export function PixelEditorH5({
   onChange,
   onPalettePresetChange,
   onSave,
+  onSendToDevice,
+  isSendingToDevice = false,
+  deviceReady = false,
   onOpenWarehouse,
   onCloudSave,
   isCloudSaving = false,
@@ -611,6 +617,20 @@ export function PixelEditorH5({
             <img src={saveIcon} alt='' />
             <span>保存</span>
           </button>
+          {onSendToDevice ? (
+            <button
+              className='pixel-editor__save-button pixel-editor__save-button--device'
+              type='button'
+              disabled={isSendingToDevice}
+              onClick={onSendToDevice}
+            >
+              {isSendingToDevice
+                ? '正在发送...'
+                : deviceReady
+                  ? '发送到设备'
+                  : '连接并发送'}
+            </button>
+          ) : null}
           {onOpenWarehouse ? (
             <button
               className='pixel-editor__save-button pixel-editor__save-button--warehouse'

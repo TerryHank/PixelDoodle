@@ -423,6 +423,7 @@ export default function HomePageH5() {
   const targetDeviceUuid = useDeviceStore((state) => state.targetDeviceUuid)
   const bleConnectionStatus = useDeviceStore((state) => state.bleConnectionStatus)
   const bleCharacteristicStatus = useDeviceStore((state) => state.bleCharacteristicStatus)
+  const isBleSending = useDeviceStore((state) => state.isSending)
   const activeHighlightCodes = useDeviceStore((state) => state.activeHighlightCodes)
   const historyEntries = useHistoryStore((state) => state.entries)
   const monitoredDevices = useDeviceMonitorStore((state) => state.devices)
@@ -1865,6 +1866,60 @@ export default function HomePageH5() {
     await handleOpenPairSheet()
   }
 
+  async function handleSendCurrentPattern() {
+    const patternState = usePatternStore.getState()
+    const deviceState = useDeviceStore.getState()
+    if (patternState.totalBeads === 0) {
+      showToast('请先在画布上完成一些创作')
+      return
+    }
+    if (
+      deviceState.bleConnectionStatus !== 'connected' ||
+      deviceState.bleCharacteristicStatus !== 'ready'
+    ) {
+      showToast('请先连接拼豆板设备')
+      await handleOpenPairSheet()
+      return
+    }
+    if (deviceState.isSending) {
+      return
+    }
+
+    deviceState.setIsSending(true)
+    try {
+      const sent = await autoSendGeneratedPattern({
+        bleConnectionStatus: deviceState.bleConnectionStatus,
+        bleCharacteristicStatus: deviceState.bleCharacteristicStatus,
+        isSending: deviceState.isSending,
+        ledSize: patternState.ledSize,
+        pixelMatrix: patternState.pixelMatrix,
+        palette: patternState.fullPalette,
+        sendImage: (payload) => bleAdapter.sendImage(payload)
+      })
+      if (!sent) {
+        throw new Error('当前图案未能进入发送队列')
+      }
+      const deviceId = bleConnectedUuid || targetDeviceUuid
+      if (deviceId) {
+        reportBleAck({ deviceId, operation: '手动图像发送' })
+      }
+      showToast(`已发送 ${patternState.gridSize.width}×${patternState.gridSize.height} 图案到设备`)
+    } catch (error) {
+      const message = error instanceof Error ? error.message : '蓝牙发送失败'
+      const deviceId = bleConnectedUuid || targetDeviceUuid
+      if (deviceId) {
+        if (message.toLowerCase().includes('rejected')) {
+          reportBleNack({ deviceId, operation: '手动图像发送', message })
+        } else {
+          reportBleTimeout({ deviceId, operation: '手动图像发送', message })
+        }
+      }
+      showToast(`发送失败：${message}`)
+    } finally {
+      useDeviceStore.getState().setIsSending(false)
+    }
+  }
+
   async function handleToggleColor(code: string) {
     const nextCodes = useDeviceStore.getState().toggleHighlightCode(code)
     const highlightRgb = nextCodes
@@ -2212,6 +2267,11 @@ export default function HomePageH5() {
                   )
                 }}
                 onSave={handleSaveEditor}
+                onSendToDevice={() => {
+                  void handleSendCurrentPattern()
+                }}
+                isSendingToDevice={isBleSending}
+                deviceReady={isBleReady}
                 onOpenWarehouse={() => {
                   void Taro.redirectTo({ url: '/pages/warehouse/index' })
                 }}
